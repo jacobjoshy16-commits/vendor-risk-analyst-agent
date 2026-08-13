@@ -7,8 +7,10 @@ against healthcare compliance controls, and drafts the response.
 Runs entirely on your workstation. No vendor risk data leaves the machine by default.
 
 > **Status: draft.** The pipeline works end to end and is validated against a planted-change sandbox.
-> The scored runs used a deterministic offline backend rather than a live model — see
-> [Limitations](#limitations).
+> Vendors are onboarded through `vra.py onboard` or the local web console, and the subprocessor
+> parse that AIV-03 depends on handles real-world artifacts (HTML tables, PDFs, SafeBase/Whistic/
+> Vanta portals) instead of assuming tidy sandbox markup. The scored runs used a deterministic
+> offline backend rather than a live model — see [Limitations](#limitations).
 
 ---
 
@@ -40,8 +42,10 @@ watch → normalize → diff → triage → observe → evaluate → draft → p
 4. **Triage** — a local instruct model reads each diff against the vendor's current AI surface and
    returns forced JSON: is this AI-relevant, what kind of change, which register fields it bears on, a
    proposed update, and a verbatim evidence excerpt.
-5. **Observe** — deterministically parse subprocessor tables and in-tenant API responses into an
-   *observed* state that overlays the register, carrying provenance for every field.
+5. **Observe** — deterministically parse subprocessor tables (HTML tables, PDF text, or pipe
+   rows) and in-tenant API responses into an *observed* state that overlays the register, carrying
+   provenance for every field. A gated/portal/PDF-missing disclosure is recorded as a parse status
+   and becomes an AIV-03 information gap with drafted outreach — never a silent pass.
 6. **Evaluate** — run 15 controls against the merged surface. Deterministic. Config-driven.
 7. **Draft** — for each finding and gap: a narrative, a vendor outreach email, and a POA&M row.
 8. **Persist** — reconcile against prior findings, age them, escalate overdue ones, close resolved ones.
@@ -96,8 +100,12 @@ pip install pyyaml requests
 For model-backed triage, install [Ollama](https://ollama.com) and pull a model:
 
 ```bash
-ollama pull llama3.1:8b
+ollama pull qwen2.5:7b-instruct
 ```
+
+The default is `qwen2.5:7b-instruct` (override with `--model TAG` or `$VRA_MODEL`). Any Ollama
+instruct model that reliably returns the forced JSON shape should work; the model never decides
+findings or severities, so swapping it only changes triage and drafting quality.
 
 Ollama is optional. Without it, run with `--offline` — the tool falls back to a deterministic heuristic
 backend and the report states that no language model was used. If Ollama is configured but unreachable,
@@ -108,7 +116,7 @@ the run falls back automatically with a warning rather than failing.
 ```bash
 python3 vra.py --offline --snapshot v1     # baseline
 python3 vra.py --offline --snapshot v2     # change run -> exit 1
-python3 tests/test_vra.py                  # 46 tests
+python3 tests/test_vra.py                  # 66 tests
 ```
 
 | Flag | Effect |
@@ -116,11 +124,60 @@ python3 tests/test_vra.py                  # 46 tests
 | `--snapshot VERSION` | Sandbox snapshot set to read (substitutes `{version}` in watch paths). Default `v1` |
 | `--vendor SLUG` | Limit the run to one vendor. Repeatable |
 | `--out DIR` | Report output directory. Default `out/` |
-| `--model TAG` | Ollama model tag. Default `$VRA_MODEL` or `llama3.1:8b` |
+| `--model TAG` | Ollama model tag. Default `$VRA_MODEL` or `qwen2.5:7b-instruct` |
 | `--offline` | No network. Deterministic heuristic backend instead of Ollama |
 | `--dry-run` | Assess and print, persist nothing — no snapshots, findings, or report files |
 | `--no-probe` | Skip all in-tenant probes |
 | `--no-fail` | Always exit 0, even with open criticals |
+
+## Onboarding vendors
+
+Phase 1 had one entry point for a new vendor: hand-writing a YAML register and guessing the watch
+URLs. Onboarding closes that gap — give it a vendor name and a trust-center URL (or explicit
+artifact URLs) and it fetches, discovers, parses, and scaffolds the register:
+
+```bash
+python3 vra.py onboard "Acme Corp" \
+  --tier critical --category collaboration \
+  --trust-center https://acme.safebase.io \
+  --offline --assess
+```
+
+What onboarding does, in order:
+
+1. **Fetch** the trust center and detect the platform: SafeBase, Whistic, Vanta, a generic
+   HTML page, or a PDF — including click-through NDA gates.
+2. **Discover** artifact links (changelog / subprocessors / DPA) from the trust-center page.
+3. **Attempt the subprocessor parse on day one.** This is the important part: AIV-03 (your
+   critical control) either has coverage from the first snapshot, or the gate is recorded as a
+   blocker with a drafted outreach email asking for portal access or a copy of the list.
+4. **Scaffold the register** in `vendors/{slug}.yaml` — conservative defaults (contract facts
+   `false`/empty), `ai_surface` seeded only from AI-related subprocessors that actually parsed,
+   everything unknown left `unknown` so the gap machinery drafts the initial vendor questionnaire.
+5. **Cache the artifacts** under `artifacts/vendors/{slug}/` so the first assessment runs
+   offline-reproducibly; watch paths point there. Replace them with live URLs to watch continuously.
+6. **Draft the blocker outreach** to `pending_review/` when the disclosure is gated or missing.
+
+Flags: `--tier critical|high|medium|low`, `--category`, `--description`, `--trust-center`,
+`--changelog`, `--subprocessors`, `--dpa`, `--offline`, `--dry-run`, `--assess`.
+
+### Browser UI
+
+```bash
+python3 vra.py webui --host 0.0.0.0 --port 8765
+```
+
+Opens a zero-dependency local console (no CDNs, works fully offline) for the same flow: vendor
+table with platform and parse status, an onboarding form, and one-click assessment. The UI talks
+only to the local filesystem via a small JSON API under `/api/`.
+
+### If the subprocessor list is gated
+
+Real trust centers often sit behind SafeBase/Whistic/Vanta with a click-through NDA. The tool
+does not pretend to read them: the parse is recorded as `blocked`, the register carries the
+blocker, and both the onboarding step and the assessment draft the outreach asking for guest
+access or a copy of the list. AIV-03 becomes a tracked information gap with a 21-day response
+clock — not a silent pass.
 
 **Exit codes:** `0` clean · `1` at least one open critical finding · `2` run error.
 
@@ -138,6 +195,8 @@ that vendor's findings — other vendors' findings are left alone rather than cl
 | `data/snapshots/{vendor}/{stamp}/` | Normalized artifact snapshots + hashes |
 | `data/llm_audit.jsonl` | Every prompt and response, for audit |
 | `pending_review/{vendor}-{stamp}.json` | Model-proposed register updates awaiting human acceptance |
+| `pending_review/{slug}-onboarding-outreach-{stamp}.txt` | Drafted outreach for gated/missing subprocessor disclosures |
+| `artifacts/vendors/{slug}/` | Onboarding artifact cache (fetched trust-center pages) |
 
 ## Configuration
 
@@ -244,7 +303,8 @@ be shown staying quiet on a real diff.
 Full record with reproduction steps in **[VALIDATION.md](VALIDATION.md)**.
 
 Baseline run: 10 findings, **0 critical**, 12 gaps. Change run: **2 new criticals**, exit 1, Vendor C
-unchanged. All 22 ground-truth assertions met; 46 unit tests pass.
+unchanged. All 22 ground-truth assertions met; 66 unit tests pass (46 original + 20 covering
+real-world artifact parsing and vendor onboarding).
 
 **The clean sheet is not the story.** Validation surfaced four real defects:
 
@@ -274,8 +334,13 @@ vendors.
 
 **Structural blind spots:**
 
-- **Subprocessor parsing expects pipe-delimited tables** after normalisation. A vendor publishing
-  subprocessors as prose, deeply nested HTML, or a PDF is not parsed — and AIV-03 depends on that parse.
+- **Gates stop the parse, loudly.** SafeBase/Whistic/Vanta portals with a click-through NDA are
+  detected and reported as `blocked` with drafted outreach — but the tool cannot read what it is
+  not granted access to. Scanned PDFs and subprocessors rendered as images inside prose still
+  require manual review (flagged as `empty`).
+- **The parse is structural, not semantic.** HTML tables and PDF text extract reliably; a vendor
+  that buries its subprocessor list in a marketing PDF, a spreadsheet attachment, or a login-walled
+  SaaS screen will still produce a gap, not rows.
 - **Diff-blind to unpublished change.** A vendor that swaps model providers without touching a watched
   artifact triggers nothing. The in-tenant probe partially covers this, for one vendor.
 - **Probe coverage is one vendor.** Only the identity provider has a management API modelled, in fixture
@@ -292,30 +357,34 @@ a database — it holds every `accepted_risk` decision a human has made, and los
 
 ## Roadmap (not in v1)
 
-Browser extension for capturing artifacts behind auth · multi-tenant / multi-analyst state · scheduled
-unattended runs · cloud sync of findings · model distillation for faster local triage · custom
-quantization.
+Browser extension for capturing artifacts behind auth (SafeBase/Whistic/Vanta guest sessions) ·
+multi-tenant / multi-analyst state · scheduled unattended runs · cloud sync of findings · model
+distillation for faster local triage · custom quantization · OCR fallback for scanned subprocessor
+PDFs.
 
 ## Repository layout
 
 ```
-vra.py                  entry point
+vra.py                  entry point (legacy flags + subcommands)
 controls.yaml           15 controls — edit without touching code
 vendors/*.yaml          per-vendor AI surface register
 src/vra/
   cli.py                orchestration, console summary, exit codes
-  watch.py              fetch, snapshot, diff
+  onboard.py            vendor onboarding engine + CLI (discovery, parse, scaffold)
+  webui.py              local onboarding console (stdlib HTTP + single-page UI)
+  extract.py            HTML table extraction, portal detection, PDF text, link discovery
+  watch.py              fetch, snapshot, diff (HTML/PDF/gated-aware ingestion)
   normalize.py          HTML->text, volatile stripping
   llm.py                pluggable backends (Ollama / offline), JSON extraction, audit log
   triage.py             AI-relevance triage, forced JSON schema
-  observe.py            deterministic parsing -> observed state overlay
+  observe.py            deterministic parsing -> observed state overlay (+ parse status)
   evaluate.py           control evaluation, findings vs gaps
   probe.py              in-tenant management API probe
   analyst.py            narratives, outreach drafts, POA&M rows
   register.py           register I/O, finding store, lifecycle
   report.py             Markdown + JSON report
 sandbox/                three vendors, v1/v2 snapshots, ground truth
-tests/test_vra.py       46 tests
+tests/test_vra.py       66 tests
 VALIDATION.md           validation record, including every defect found
 DEMO.md                 demo recording notes
 ```

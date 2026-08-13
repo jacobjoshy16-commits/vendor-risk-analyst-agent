@@ -10,7 +10,7 @@ recorded below along with which one was wrong — nothing was silently reconcile
 rm -rf data out pending_review          # clear prior state
 python3 vra.py --offline --snapshot v1  # baseline    -> exit 0
 python3 vra.py --offline --snapshot v2  # change run  -> exit 1
-python3 tests/test_vra.py               # 46 tests    -> OK
+python3 tests/test_vra.py               # 66 tests    -> OK
 ```
 
 Backend for all runs below: `offline-heuristic` (no Ollama runtime in this environment — see
@@ -50,6 +50,45 @@ Backend for all runs below: `offline-heuristic` (no Ollama runtime in this envir
 That clean sheet is the *final* state. It is not the whole story — **four defects were found during
 validation, three of them by these checks**, and one was a false critical on the baseline. They are
 documented in full below, because a validation record that only shows the passing run is worthless.
+
+---
+
+## Phase 9 — real-world artifact parsing and vendor onboarding
+
+Phase 8 (above) validated change detection on tidy sandbox HTML. Two gaps were called out in review:
+subprocessor parsing assumed pipe-delimited text after normalisation (real trust centers publish
+HTML tables, PDFs, or sit behind SafeBase/Whistic/Vanta with a click-through NDA — and AIV-03 depends
+entirely on that parse), and there was no path from "new vendor" to "in the register". Both were
+addressed, and the new behaviours are validated by the 20 tests in `TestRealWorldSubprocessorParsing`,
+`TestOnboarding`, and `TestModelDefaultAndWebUI` (full list in the suite table below).
+
+| # | Expected behaviour | Result |
+| --- | --- | --- |
+| 23 | Real HTML tables with nested markup (links, `<strong>` inside cells) parse into rows | ✅ `test_structured_html_table_with_nested_markup` — 3 rows, OpenAI "Pending" uncovered |
+| 24 | SafeBase portal detected by brand signature + NDA-wall copy | ✅ `test_detect_safebase_portal` — platform `safebase`, click-through True |
+| 25 | Whistic / Vanta portals detected | ✅ `test_detect_whistic_and_vanta` |
+| 26 | Generic NDA wall (no brand) detected | ✅ `test_generic_nda_wall_detected` — platform `generic` |
+| 27 | Gated subprocessor page with no table → parse `blocked`, not silent | ✅ `test_gated_portal_parse_is_blocked` |
+| 28 | Blocked parse produces an AIV-03 information gap with `subprocessor-list-access` outreach, zero findings | ✅ `test_blocked_parse_raises_aiv03_gap_not_silent_pass` |
+| 29 | PDF subprocessor list parses when pypdf is installed | ✅ `test_pdf_parsed_when_pypdf_available` + `test_pdf_ingestion_through_watch_snapshots` (OpenAI row uncovered) |
+| 30 | PDF without pypdf → explicit error → AIV-03 gap, never silent | ✅ `test_pdf_without_pypdf_is_explicit_error_gap` |
+| 31 | Vendor with no subprocessor watch source → parse `missing` → AIV-03 gap | ✅ `test_missing_subprocessor_source_flagged` |
+| 32 | Whitespace-aligned prose does not invent subprocessor rows | ✅ `test_prose_rows_require_header` |
+| 33 | Onboarding from trust center + artifact URLs scaffolds a register with seeded AI features and cached watch paths | ✅ `test_onboard_scaffolds_register_and_parses_day_one` |
+| 34 | Gated onboarding drafts the blocker outreach to `pending_review/` | ✅ `test_onboard_gated_portal_drafts_outreach` |
+| 35 | Onboarding with no subprocessors URL records a blocker | ✅ `test_onboard_no_subprocessors_url_blocked` |
+| 36 | Onboarding `--dry-run` persists nothing; duplicate slug refused | ✅ `test_onboard_dry_run_persists_nothing`, `test_onboard_refuses_duplicate_slug` |
+| 37 | Default model tag is `qwen2.5:7b-instruct` | ✅ `test_default_model_is_qwen25_7b_instruct` |
+
+Manual end-to-end checks (not in the suite): onboarding a fixture vendor with a nested-HTML table
+raised **critical AIV-03 on the first assessment run** (OpenAI row, BAA "Pending"); onboarding a
+SafeBase-gated vendor produced parse `blocked`, the AIV-03 gap in the report, and a drafted
+outreach; the web console (`vra.py webui`) served `/`, `/api/vendors`, `/api/summary`, `/api/controls`
+and completed a `POST /api/onboard` against local fixtures.
+
+The original 22/22 scoreboard still holds — rerunning the Phase 8 reproduction on the current tree
+gives the identical baseline/change-run results (exit 0 / exit 1, same two criticals), so the new
+ingestion paths did not change the sandbox behaviour.
 
 ---
 
@@ -214,7 +253,7 @@ The model's only outputs that survive into the report are prose and a quarantine
 
 ## Test suite
 
-46 tests, all passing (`python3 tests/test_vra.py`).
+66 tests, all passing (`python3 tests/test_vra.py`).
 
 | Group | Tests | What it protects |
 | --- | --- | --- |
@@ -225,6 +264,9 @@ The model's only outputs that survive into the report are prose and a quarantine
 | `TestFindingLifecycle` | 6 | `accepted_risk` survives re-runs; resolved findings close; overdue escalates |
 | `TestAnalystGuardrails` | 3 | POA&M determinism; narrative guardrail |
 | `TestGroundTruthScenario` | 4 | Registers well-formed; baseline has no critical; Vendor C quiet |
+| `TestRealWorldSubprocessorParsing` | 13 | Nested HTML tables; PDF (with/without pypdf); SafeBase/Whistic/Vanta + generic NDA-wall detection; blocked/missing/empty parse → AIV-03 gap, never a silent pass; prose does not invent rows |
+| `TestOnboarding` | 5 | Trust-center → register scaffold; day-one parse; gated portal → drafted outreach; dry-run persists nothing; duplicate slug refused |
+| `TestModelDefaultAndWebUI` | 2 | Default model `qwen2.5:7b-instruct`; web console summary/vendor API |
 
 Two tests are deliberately negative controls at the unit level:
 `test_acting_agent_with_human_review_does_not_fire_aiv07` (autonomy alone is not the failure — the
@@ -258,9 +300,16 @@ real vendors over months.
 
 ### 3. Structural blind spots not exercised
 
-- **Non-pipe-delimited subprocessor tables.** `parse_subprocessor_table` expects pipe-delimited rows after
-  normalisation. A vendor publishing subprocessors as prose, nested HTML, or a PDF is not parsed — and AIV-03
-  detection depends entirely on that parse.
+- **Live portals are not exercised.** SafeBase/Whistic/Vanta detection and the click-through blocker
+  are tested against faithful fixtures (brand signatures, NDA-wall copy, gated subprocessor pages),
+  not against live portal sessions. Portal markup changes over time; the signature lists in
+  `extract.py` are the thing to maintain. A real SafeBase guest session is the natural next step
+  (roadmap: browser-extension capture).
+- **PDFs are tested with a text-based PDF.** A scanned/image-only PDF is detected as unparseable and
+  flagged `empty` with manual-review language, but no OCR fallback exists yet.
+- **The onboarding parse was not measured against a live vendor.** Scaffolding, discovery, caching
+  and the day-one parse are validated with fixture artifacts; discovery rank-order on a real
+  trust-center page is unmeasured.
 - **Diff-blind to unpublished change.** If a vendor swaps model providers without touching any watched
   artifact, nothing fires. The probe partially covers this for the identity provider only.
 - **Probe coverage is one vendor.** Aegis alone has a management API modelled. For the other two, the

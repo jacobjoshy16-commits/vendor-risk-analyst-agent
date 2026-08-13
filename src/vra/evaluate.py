@@ -237,7 +237,54 @@ def evaluate_vendor(
                 )
 
     findings.extend(_evaluate_observed_subprocessors(vendor, controls, observed))
+    gaps.extend(_evaluate_subprocessor_parse_gaps(vendor, controls, observed))
     return findings, gaps
+
+
+def _evaluate_subprocessor_parse_gaps(
+    vendor: dict, controls: list[Control], observed: "ObservedState"
+) -> list[Assessment]:
+    """AIV-03 cannot be *silently* unassessable.
+
+    The critical control depends entirely on the subprocessor parse. When the
+    artifact is a branded portal behind a click-through NDA, an unreadable PDF,
+    or a page with no parseable table, the honest output is an information gap
+    with a drafted outreach asking for the list — not a quiet pass. A quiet pass
+    is how a vendor adds a model provider nobody ever sees.
+    """
+    status = observed.subprocessor_parse
+    if status is None or status.assessable:
+        return []
+    control = next((c for c in controls if c.id == "AIV-03"), None)
+    if control is None:
+        return []
+
+    surface = vendor.get("ai_surface") or []
+    feature_name = surface[0].get("feature", "(vendor AI surface)") if surface else "(vendor AI surface)"
+    platform = status.platform or "unknown"
+    return [
+        Assessment(
+            kind="gap",
+            vendor=vendor["slug"],
+            vendor_name=vendor["vendor"],
+            feature=feature_name,
+            control=control,
+            observed={
+                "subprocessor_parse_status": status.status,
+                "platform": platform,
+                "detail": status.reason,
+            },
+            reason=f"AIV-03 cannot be evaluated: {status.reason}",
+            subject="subprocessor-list-access",
+            provenance={
+                "subprocessor_parse": {
+                    "value": status.status,
+                    "provenance": f"artifact_parse:{status.status}",
+                    "evidence": status.evidence or status.reason,
+                }
+            },
+        )
+    ]
 
 
 def _evaluate_observed_subprocessors(

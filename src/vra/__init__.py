@@ -9,4 +9,4 @@ config. The language model reads unstructured vendor prose and drafts language.
 It never invents, deletes, or re-severities a finding.
 """
 
-__version__ = "1.0.0-draft"
+__version__ = "1.1.0-draft"

@@ -126,6 +126,25 @@ def _fallback_narrative(record: dict) -> str:
 def _fallback_outreach(record: dict) -> dict[str, str]:
     is_gap = record["kind"] == "gap"
     fields = ", ".join(record["observed"].keys())
+    if record.get("subject") == "subprocessor-list-access":
+        return {
+            "subject": f"Vendor AI risk onboarding — {record['vendor_name']} — subprocessor disclosure access",
+            "body": (
+                "Hello,\\n\\n"
+                f"As part of onboarding {record['vendor_name']} as a vendor that processes or may "
+                "process protected health information, we must complete our AI risk assessment, "
+                "including control AIV-03 (every model provider named as a subprocessor and covered "
+                "by an executed BAA).\\n\\n"
+                "We were unable to access your subprocessor disclosure from the public trust portal. "
+                "Please either:\\n"
+                "1. Grant us guest or NDA-gated access to the subprocessor page, or\\n"
+                "2. Send the complete, current subprocessor list with BAA coverage status for each "
+                "entity, including every model or AI service provider.\\n\\n"
+                "We are a HIPAA covered entity and this item affects our assessment of protected "
+                "health information processed by your service. Please respond within 21 days.\\n\\n"
+                "Regards,\\nVendor Risk Management"
+            ),
+        }
     verb = "provide the following information" if is_gap else "confirm your remediation plan"
     return {
         "subject": f"Vendor AI risk review — {record['vendor_name']} — control {record['control_id']}",
@@ -189,11 +208,17 @@ def draft_narrative(record: dict, cfg: RunConfig) -> tuple[str, bool]:
 
 
 def draft_outreach(record: dict, cfg: RunConfig) -> tuple[dict[str, str], bool]:
-    need = (
-        f"written evidence answering the control question, covering: {', '.join(record['observed'].keys())}"
-        if record["kind"] == "gap"
-        else f"a remediation plan and target date for: {record['remediation']}"
-    )
+    if record.get("subject") == "subprocessor-list-access":
+        need = (
+            "guest or NDA-gated access to the subprocessor disclosure (or a copy sent directly), "
+            "plus confirmation of BAA coverage status for every model and AI service provider"
+        )
+    elif record["kind"] == "gap":
+        need = (
+            f"written evidence answering the control question, covering: {', '.join(record['observed'].keys())}"
+        )
+    else:
+        need = f"a remediation plan and target date for: {record['remediation']}"
     prompt = OUTREACH_PROMPT.format(
         vendor=record["vendor_name"],
         feature=record["feature"],
