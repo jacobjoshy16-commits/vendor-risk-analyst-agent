@@ -151,8 +151,8 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 
 function badge(kind, text) {
   const cls = {parsed:"b-ok", ok:"b-ok", covered:"b-ok", blocked:"b-bad", error:"b-bad",
-               empty:"b-warn", missing:"b-warn", critical:"b-bad", high:"b-warn",
-               medium:"b-mut", low:"b-mut", true:"b-ok", false:"b-bad"}[kind] || "b-mut";
+               parse_failed:"b-bad", empty:"b-warn", missing:"b-warn", critical:"b-bad",
+               high:"b-warn", medium:"b-mut", low:"b-mut", true:"b-ok", false:"b-bad"}[kind] || "b-mut";
   return `<span class="badge ${cls}">${esc(text)}</span>`;
 }
 
@@ -406,7 +406,7 @@ def _summary() -> dict:
     for v in vendors:
         onboarding = v.get("onboarding") or {}
         sp = onboarding.get("subprocessor_parse") or {}
-        if sp.get("status") in ("blocked", "error", "empty", "missing"):
+        if sp.get("status") in ("blocked", "error", "empty", "missing", "parse_failed"):
             blocked += 1
         watch_sources += len(v.get("watch") or {})
     return {

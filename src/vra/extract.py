@@ -48,10 +48,12 @@ class _TableExtractor(HTMLParser):
         if tag == "table":
             self._table = []
         elif tag in ("tr", "thead", "tbody", "tfoot"):
-            if self._table is not None:
+            if self._table is not None and self._row is None:
                 self._row = []
         elif tag in ("td", "th"):
             self._cell = []
+        elif tag in ("br", "hr") and self._cell is not None:
+            self._cell.append(" ")
 
     def handle_endtag(self, tag: str) -> None:
         if tag in ("td", "th") and self._cell is not None:
@@ -68,9 +70,8 @@ class _TableExtractor(HTMLParser):
                 self._table.append(self._row)
             self._row = None
         elif tag == "table" and self._table is not None:
-            # Drop tables with zero or one row — usually layout scaffolding,
-            # not data. Keep at least the header row even if cells are empty.
-            if len(self._table) > 1 or (self._table and any(c for row in self._table for c in row)):
+            # Keep tables with content
+            if len(self._table) > 1 or (self._table and any(any(c for c in r) for r in self._table)):
                 self.tables.append(self._table)
             self._table = None
 

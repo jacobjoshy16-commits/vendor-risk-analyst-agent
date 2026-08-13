@@ -199,8 +199,8 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
         a("| --- | --- | --- | --- | --- |")
         for p in parses:
             status = p["status"]
-            mark = {"parsed": "✅ parsed", "blocked": "🚧 blocked", "empty": "⚠️ empty",
-                    "error": "⛔ error", "missing": "⚠️ missing",
+            mark = {"parsed": "✅ parsed", "blocked": "🚧 blocked", "parse_failed": "❌ parse_failed",
+                    "empty": "⚠️ empty", "error": "⛔ error", "missing": "⚠️ missing",
                     "not_attempted": "—"}.get(status, status)
             a(f"| {_esc(p['vendor_name'])} | `{p['source']}` | {mark} | "
               f"{_esc(p.get('platform') or '—')} | {p['rows']} |")
