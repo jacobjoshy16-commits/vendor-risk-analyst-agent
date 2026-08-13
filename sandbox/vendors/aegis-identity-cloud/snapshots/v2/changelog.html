@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Aegis Identity Cloud — Product Changelog</title></head>
+<body>
+<div class="promo-banner">AegisConnect 2026 keynote replay now available.</div>
+<p class="meta">Page generated 2026-03-11T14:02:57Z &middot; session=b21c8d40-77aa-4e19-8c02-3fa9de10b7c5 &middot; build 4977</p>
+
+<h1>Product Changelog</h1>
+
+<h2>2026.03 — March Release</h2>
+<ul>
+  <li><strong>Access Copilot Agent Mode (GA):</strong> Copilot can now complete access tasks end to end.
+      When Agent Mode is enabled, Copilot creates, modifies, and deactivates user accounts, assigns and
+      removes group memberships, and revokes active sessions <em>without requiring administrator approval
+      for each action</em>. Agent Mode is enabled by default for orgs on the Workforce Identity Advanced SKU
+      and can be disabled in Settings &rarr; Copilot &rarr; Autonomy.</li>
+  <li><strong>Agent audit:</strong> Actions taken by Copilot Agent Mode are attributed to the
+      <code>copilot-agent</code> service principal in the System Log.</li>
+  <li><strong>Universal Directory:</strong> Custom attribute limit raised to 200 per profile.</li>
+  <li><strong>Admin Console:</strong> Dark mode.</li>
+</ul>
+
+<h2>2026.01 — January Release</h2>
+<ul>
+  <li><strong>Universal Directory:</strong> Added support for multi-valued custom attributes on user profiles.</li>
+  <li><strong>Access Copilot (GA):</strong> Access Copilot is now generally available to all Workforce Identity customers.
+      Copilot answers natural-language questions about access ("who can approve invoices?") and
+      <em>suggests</em> group membership changes for an administrator to review. Copilot never applies a change
+      directly; every suggestion routes to the standard access-request approval queue. Copilot is off by default
+      and must be enabled per-org by a Super Administrator.</li>
+  <li><strong>Adaptive MFA:</strong> New risk signal for impossible-travel detection on mobile clients.</li>
+  <li><strong>Admin Console:</strong> Bulk CSV export for application assignment reports.</li>
+</ul>
+
+<h2>2025.12 — December Release</h2>
+<ul>
+  <li><strong>Lifecycle Management:</strong> Improved reconciliation performance for orgs above 50,000 users.</li>
+  <li><strong>API:</strong> <code>/api/v1/logs</code> now supports cursor pagination.</li>
+  <li><strong>Access Copilot (Early Access):</strong> Limited early-access program opened for Access Copilot.
+      Copilot reads identity attributes and authentication event history to answer administrator questions.</li>
+  <li><strong>Security:</strong> Deprecated TLS 1.1 on all customer-facing endpoints.</li>
+</ul>
+
+<h2>2025.11 — November Release</h2>
+<ul>
+  <li><strong>SSO:</strong> New SAML attribute transformation expressions.</li>
+  <li><strong>Workflows:</strong> Added a Slack connector for approval notifications.</li>
+  <li><strong>Reports:</strong> Sign-in report retention extended to 90 days on Enterprise plans.</li>
+</ul>
+
+<p class="footer">&copy; 2026 Aegis Identity Cloud, Inc. Rendered in 79ms.</p>
+</body>
+</html>

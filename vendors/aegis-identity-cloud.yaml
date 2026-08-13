@@ -1,0 +1,58 @@
+vendor: Aegis Identity Cloud
+slug: aegis-identity-cloud
+tier: critical
+category: identity_provider
+description: 'Workforce and customer identity provider. Source of truth for clinical
+  staff authentication and application access across the estate.
+
+  '
+contract:
+  baa_on_file: true
+  ai_addendum_signed: false
+  last_review: 2025-11-04
+  baa_covered_subprocessors:
+  - Amazon Web Services, Inc.
+  - Cloudflare, Inc.
+  - Datadog, Inc.
+  - Twilio Inc.
+  - SendGrid (Twilio)
+  - Zendesk, Inc.
+  - Snowflake Inc.
+ai_surface:
+- feature: Access Copilot
+  status: enabled
+  autonomy: suggests
+  data_reach:
+  - identity_attributes
+  - auth_events
+  model_provider: undisclosed
+  training_on_customer_data: unknown
+  human_in_loop: true
+  retention_days: unknown
+  output_logged: true
+  change_notification: release_notes_only
+  error_rate_disclosed: false
+  prompt_injection_tested: unknown
+  data_residency: in_region
+  bias_tested_clinical: not_applicable
+  ai_incident_process: unknown
+watch:
+  changelog: sandbox/vendors/aegis-identity-cloud/snapshots/{version}/changelog.html
+  trust_center: sandbox/vendors/aegis-identity-cloud/snapshots/{version}/trust_center.html
+  subprocessors: sandbox/vendors/aegis-identity-cloud/snapshots/{version}/subprocessors.html
+  dpa: sandbox/vendors/aegis-identity-cloud/snapshots/{version}/dpa.txt
+probe:
+  type: identity_provider_api
+  enabled: true
+  mode: fixture
+  fixture: sandbox/probe/aegis_tenant_{version}.json
+  base_url: https://dev-000000.aegisidentity.example
+  token_env: AEGIS_API_TOKEN
+state:
+  last_assessed: '2026-08-13T15:56:44.654943+00:00'
+  snapshot_hashes:
+    changelog: 6f1f5d34ff8c3c7a93ed69b79dd290a1f5ea2bf3ac330c429b0da33e430817c3
+    trust_center: 1fa68961b7ae2039b4fa44749a6dd2f02e70837f302123966a69bbaebf7f1017
+    subprocessors: 7965f3799d48dba0f26026a40463c7cded3c50f2bac687db5daed1c1a4b7de65
+    dpa: 5519fa3efdbdbdd6989879742924252ba02a3d7dc283ee2c97bc0d839a0b5c7d
+  open_findings: []

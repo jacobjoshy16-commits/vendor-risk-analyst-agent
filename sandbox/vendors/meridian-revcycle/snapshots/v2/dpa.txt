@@ -1,0 +1,33 @@
+MERIDIAN REVCYCLE — BUSINESS ASSOCIATE AGREEMENT AND DATA ADDENDUM
+Version 6.0 — Effective 2025-04-01
+Retrieved 2026-02-03T09:26:22Z
+
+1. DEFINITIONS
+Terms used but not defined have the meaning given in 45 CFR Parts 160 and 164.
+
+2. PERMITTED USES
+2.1 Business Associate may use Protected Health Information (PHI) only as required to perform the Services.
+2.2 Business Associate may de-identify PHI in accordance with 45 CFR 164.514(b) and use the resulting
+    de-identified data for product improvement, including training of machine learning models.
+2.3 Covered Entity may opt out of Section 2.2 by written notice.
+
+3. SUBCONTRACTORS
+3.1 Business Associate obtains written assurances from subcontractors that create, receive, maintain, or
+    transmit PHI on its behalf, consistent with 45 CFR 164.308(b)(2).
+
+4. MACHINE LEARNING FEATURES
+4.1 Coding Assist output constitutes a suggestion only. Covered Entity retains sole responsibility for the
+    codes submitted on a claim.
+4.2 Business Associate maintains an audit trail of Coding Assist suggestions and user decisions for seven
+    years.
+4.3 Business Associate performs internal validation of model accuracy quarterly. Validation covers overall
+    accuracy and specialty-level accuracy. Validation does not currently include subgroup analysis by
+    patient demographic characteristics.
+4.4 Business Associate notifies Covered Entity of material changes to Coding Assist model behavior in the
+    release notes accompanying each version.
+
+5. SECURITY INCIDENTS
+5.1 Business Associate reports Breaches of Unsecured PHI within 48 hours of discovery.
+
+6. TERM AND TERMINATION
+6.1 On termination, Business Associate returns or destroys all PHI within 60 days.
