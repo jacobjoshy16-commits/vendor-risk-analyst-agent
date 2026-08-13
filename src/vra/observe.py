@@ -32,20 +32,60 @@ from typing import Any
 AI_PURPOSE_TERMS = (
     "model", "inference", "llm", "generative", "generation", "ai ", " ai",
     "summariz", "embedding", "vector", "retrieval", "copilot", "assist",
-    "transcription", "speech", "nlp",
+    "transcription", "speech", "nlp", "machine learning", "deep learning",
+    "large language", "intelligence", "synthetic", "rag ",
 )
 
 # Known model/AI providers — a name match alone is enough even if the purpose
 # column is vague, because these companies do exactly one thing for a vendor.
 KNOWN_MODEL_PROVIDERS = (
     "openai", "anthropic", "perplexity", "cohere", "mistral", "hugging face",
-    "stability ai", "aleph alpha", "ai21", "together ai", "replicate",
-    "azure openai", "amazon bedrock", "google vertex", "vertex ai", "xai",
-    "deepseek", "inflection", "runway", "elevenlabs", "assemblyai", "deepgram",
+    "huggingface", "stability ai", "aleph alpha", "ai21", "together ai",
+    "together.ai", "replicate", "azure openai", "amazon bedrock", "bedrock",
+    "google vertex", "vertex ai", "google gemini", "gemini", "xai",
+    "deepseek", "inflection", "runway", "elevenlabs", "eleven labs",
+    "assemblyai", "deepgram", "turbopuffer", "pinecone", "weaviate",
+    "qdrant", "chroma",
 )
 
 # BAA column values that do NOT constitute executed coverage.
-NON_COVERAGE_MARKERS = ("no", "pending", "in progress", "n/a", "not applicable", "tbd", "—", "-")
+NON_COVERAGE_MARKERS = (
+    "no", "pending", "in progress", "n/a", "not applicable", "tbd",
+    "—", "-", "none", "not covered", "unexecuted", "false",
+)
+
+# Header keyword classification
+NAME_HEADER_KEYWORDS = (
+    "subprocessor", "sub-processor", "sub processor", "entity", "legal entity",
+    "company", "vendor", "supplier", "third-party", "third party", "provider",
+    "name", "organization", "partner", "contractor", "subcontractor",
+)
+
+PURPOSE_HEADER_KEYWORDS = (
+    "purpose", "service", "services", "function", "processing", "activity",
+    "activities", "scope", "description", "nature", "role", "use case",
+    "applicable", "feature", "category", "subject matter",
+)
+
+REGION_HEADER_KEYWORDS = (
+    "location", "region", "country", "where", "hosting", "data location",
+    "jurisdiction", "headquarters", "corporate", "geographic", "storage",
+    "place",
+)
+
+BAA_HEADER_KEYWORDS = (
+    "baa", "hipaa", "phi", "coverage", "covered", "agreement", "dpa",
+    "safeguards", "status",
+)
+
+EXCLUDED_NAME_VALUES = {
+    "subprocessor", "subprocessors", "sub-processor", "sub-processors",
+    "sub processor", "sub processors", "entity", "entity name",
+    "legal entity name", "legal entity", "third party", "third-party",
+    "third party subprocessor", "third-party subprocessor", "third-party subprocessors",
+    "vendor", "company", "name", "organization", "partner", "supplier",
+    "provider", "service provider",
+}
 
 
 @dataclass
@@ -58,14 +98,17 @@ class ParseStatus:
     * ``parsed``       — rows extracted; AIV-03 evaluates against them.
     * ``blocked``      — the list is behind a click-through NDA / branded
                          portal / login wall. No parse attempted or no rows.
+    * ``parse_failed`` — subprocessor disclosure was reached but could not be
+                         parsed into valid rows (unrecognized table layout,
+                         malformed markup, or extraction error).
     * ``empty``        — the artifact was readable but contained no parseable
-                         subprocessor table.
+                         subprocessor table or language.
     * ``error``        — the artifact could not be ingested (PDF without pypdf,
                          fetch failure, corrupt file).
     * ``missing``      — no subprocessor watch source is configured at all.
     """
 
-    status: str                       # parsed | blocked | empty | error | missing
+    status: str                       # parsed | blocked | parse_failed | empty | error | missing
     platform: str | None = None       # safebase | whistic | vanta | generic | pdf | None
     reason: str = ""
     evidence: str = ""
@@ -163,20 +206,36 @@ def _rows_from_tables(tables: list[list[list[str]]]) -> list[list[str]]:
     return rows
 
 
-def _parse_rows(
+def _detect_table_header(rows: list[list[str]], max_scan: int = 8) -> tuple[int | None, list[str] | None]:
+    """Find the header row index and column names in a table."""
+    for idx, row in enumerate(rows[:max_scan]):
+        if len(row) < 2:
+            continue
+        row_clean = [re.sub(r"\s+", " ", c).strip().lower() for c in row]
+        joined = " ".join(row_clean)
+
+        has_name = any(k in joined for k in NAME_HEADER_KEYWORDS)
+        has_purpose = any(k in joined for k in PURPOSE_HEADER_KEYWORDS)
+        has_region = any(k in joined for k in REGION_HEADER_KEYWORDS)
+        has_baa = any(k in joined for k in BAA_HEADER_KEYWORDS)
+
+        if has_name and (has_purpose or has_region or has_baa):
+            return idx, row_clean
+        if any("subprocessor" in c or "sub-processor" in c or "sub processor" in c for c in row_clean):
+            return idx, row_clean
+    return None, None
+
+
+def _parse_table_rows(
     rows: list[list[str]], source: str, *, require_header: bool = False
 ) -> list[ObservedSubprocessor]:
-    """Header-guided column mapping over candidate rows. Tolerant by design:
+    """Header-guided column mapping over table rows. Tolerant by design:
     a missed row here is a missed critical finding. With ``require_header``,
-    rows are only accepted when a header row was found (used for whitespace-
-    aligned prose where positional guessing would invent rows)."""
-    header_idx, header = None, None
-    for idx, row in enumerate(rows[:5]):
-        joined = " ".join(row).lower()
-        if any(k in joined for k in ("subprocessor", "entity", "sub-processor", "vendor", "company")):
-            if any(k in joined for k in ("purpose", "service", "function", "processing", "activity")):
-                header_idx, header = idx, [c.lower() for c in row]
-                break
+    rows are only accepted when a header row was found."""
+    header_idx, header = _detect_table_header(rows)
+
+    if require_header and header_idx is None:
+        return []
 
     def col(keys: tuple[str, ...], default: int | None) -> int | None:
         if header:
@@ -185,25 +244,30 @@ def _parse_rows(
                     return i
         return default
 
-    i_name = col(("subprocessor", "entity", "sub-processor", "company", "vendor", "name"), 0)
-    i_purpose = col(("purpose", "service", "function", "processing", "activity", "description"), 1)
-    i_region = col(("location", "region", "country", "where"), 2)
-    i_baa = col(("baa", "hipaa", "phi", "coverage"), 3)
-
-    if require_header and header_idx is None:
-        return []
+    i_name = col(NAME_HEADER_KEYWORDS, 0)
+    i_purpose = col(PURPOSE_HEADER_KEYWORDS, 1)
+    i_region = col(REGION_HEADER_KEYWORDS, 2)
+    i_baa = col(BAA_HEADER_KEYWORDS, 3 if header and len(header) > 3 else None)
 
     out: list[ObservedSubprocessor] = []
+    start_idx = (header_idx + 1) if header_idx is not None else 0
     for idx, row in enumerate(rows):
-        if header_idx is not None and idx <= header_idx:
+        if idx < start_idx:
+            continue
+        if len(row) < 2:
             continue
 
         def get(i: int | None) -> str:
-            return row[i] if i is not None and i < len(row) else ""
+            if i is not None and 0 <= i < len(row):
+                return re.sub(r"\s+", " ", row[i]).strip()
+            return ""
 
         name = get(i_name)
-        if not name or name.lower() in ("subprocessor", "entity", "name"):
+        if not name or name.lower() in EXCLUDED_NAME_VALUES:
             continue
+        if any(name.lower() == k for k in ("subprocessor name", "entity name", "legal entity", "third party")):
+            continue
+
         out.append(
             ObservedSubprocessor(
                 name=name,
@@ -217,6 +281,34 @@ def _parse_rows(
     return out
 
 
+def _parse_rows(
+    rows: list[list[str]], source: str, *, require_header: bool = False
+) -> list[ObservedSubprocessor]:
+    """Backward-compatible alias for table row parsing."""
+    return _parse_table_rows(rows, source, require_header=require_header)
+
+
+def parse_html_tables(
+    tables: list[list[list[str]]], source: str
+) -> list[ObservedSubprocessor]:
+    """Extract subprocessor rows across all HTML tables in a document."""
+    all_rows: list[ObservedSubprocessor] = []
+    seen: set[tuple[str, str]] = set()
+
+    for table in tables:
+        if not table or len(table) < 2:
+            continue
+        parsed = _parse_table_rows(table, source, require_header=True)
+        if not parsed and len(tables) == 1:
+            parsed = _parse_table_rows(table, source, require_header=False)
+        for sp in parsed:
+            key = (sp.name.lower().strip(), sp.purpose.lower().strip())
+            if key not in seen:
+                seen.add(key)
+                all_rows.append(sp)
+    return all_rows
+
+
 def parse_subprocessor_table(text: str, source: str) -> list[ObservedSubprocessor]:
     """Parse subprocessor rows from normalized text (pipe-delimited or aligned).
 
@@ -225,7 +317,7 @@ def parse_subprocessor_table(text: str, source: str) -> list[ObservedSubprocesso
     header keywords, with positional fallback.
     """
     rows, _ = _rows_from_text(text)
-    return _parse_rows(rows, source)
+    return _parse_table_rows(rows, source, require_header=False)
 
 
 def parse_subprocessors(
@@ -245,22 +337,25 @@ def parse_subprocessors(
     1. Structured HTML tables (extracted at ingestion) when present.
     2. Pipe-delimited / aligned text (normalized HTML, PDF extraction).
     3. Explicit verdicts for everything unparseable — a branded portal, a wall,
-       a PDF without pypdf, or a readable page with no table — so AIV-03 is
-       marked not-assessable instead of silently passing.
+       a PDF without pypdf, an unparseable table format (parse_failed), or a
+       readable page with no table — so AIV-03 is marked not-assessable instead
+       of silently passing.
     """
-    if tables:
-        rows = _rows_from_tables(tables)
-        parsed = _parse_rows(rows, source)
-    else:
-        rows, any_pipe = _rows_from_text(text)
-        # Whitespace-aligned rows (PDF extraction, prose pages) are only
-        # trusted with a real header row — positional guessing would invent
-        # subprocessors out of sentence fragments.
-        parsed = _parse_rows(rows, source, require_header=not any_pipe)
-
     def status(kind: str, reason: str, rows: int = 0) -> ParseStatus:
         return ParseStatus(kind, platform=platform, reason=reason,
                            evidence=portal_evidence or reason, rows=rows)
+
+    try:
+        if tables:
+            parsed = parse_html_tables(tables, source)
+        else:
+            rows, any_pipe = _rows_from_text(text)
+            parsed = _parse_table_rows(rows, source, require_header=not any_pipe)
+    except Exception as exc:
+        return [], status(
+            "parse_failed",
+            f"subprocessor extraction failed with an error: {exc}",
+        )
 
     # 1) Portal / click-through gate: even if incidental tables parsed, the
     #    authoritative list is gated — say so. If nothing parsed, hard blocked.
@@ -279,28 +374,32 @@ def parse_subprocessors(
             "parsed without guest access.",
         )
 
-    if raw_kind == "pdf" and not parsed:
+    if parsed:
+        return parsed, status("parsed", f"parsed {len(parsed)} subprocessor row(s).", rows=len(parsed))
+
+    if raw_kind == "pdf":
         return [], status(
             "empty",
             "the PDF was read but no subprocessor table (pipe-delimited or aligned "
             "rows) could be identified; manual review of the extracted text required.",
         )
 
-    if not parsed:
-        has_language = bool(re.search(r"sub-?processor", text, re.IGNORECASE))
-        if has_language:
-            return [], status(
-                "empty",
-                "the page discusses subprocessors but contains no parseable table; "
-                "manual review required before AIV-03 can be assessed.",
-            )
+    # If the page had tables or subprocessor keywords, but failed to parse into valid rows:
+    has_tables = bool(tables and any(len(t) >= 2 for t in tables))
+    has_language = bool(re.search(r"sub-?processor|third[- ]party", text, re.IGNORECASE))
+    if has_tables or has_language:
         return [], status(
-            "empty",
-            "no subprocessor table found in the artifact; AIV-03 cannot be evaluated "
-            "from this source. Confirm the watch URL points at the subprocessor list.",
+            "parse_failed",
+            "subprocessor disclosure page was reachable but could not be parsed into "
+            "valid subprocessor rows; unrecognized table structure or unsupported markup. "
+            "Manual review required.",
         )
 
-    return parsed, status("parsed", f"parsed {len(parsed)} subprocessor row(s).", rows=len(parsed))
+    return [], status(
+        "empty",
+        "no subprocessor table found in the artifact; AIV-03 cannot be evaluated "
+        "from this source. Confirm the watch URL points at the subprocessor list.",
+    )
 
 
 def observe_vendor(vendor: dict, snapshots: list, probe_result) -> ObservedState:

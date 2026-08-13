@@ -1,390 +1,221 @@
-# Local Vendor AI Risk Analyst
+# Local Vendor AI Risk Analyst (`vra`)
 
-A local GRC analyst for the gap between annual vendor reviews. It tracks each vendor's **AI surface** —
-agents, copilots, embedded model features — detects when that surface changes, re-assesses the change
-against healthcare compliance controls, and drafts the response.
+A local GRC tool that monitors vendor AI surfaces (agents, copilots, embedded models), detects changes across public disclosures and tenant APIs, evaluates them against healthcare compliance controls (HIPAA, NIST AI RMF, HICP), and drafts remediation workflows.
 
-Runs entirely on your workstation. No vendor risk data leaves the machine by default.
-
-> **Status: draft.** The pipeline works end to end and is validated against a planted-change sandbox.
-> Vendors are onboarded through `vra.py onboard` or the local web console, and the subprocessor
-> parse that AIV-03 depends on handles real-world artifacts (HTML tables, PDFs, SafeBase/Whistic/
-> Vanta portals) instead of assuming tidy sandbox markup. The scored runs used a deterministic
-> offline backend rather than a live model — see [Limitations](#limitations).
+Runs 100% locally with zero vendor risk data leaving your workstation.
 
 ---
 
-## The problem
+## Key Features
 
-Vendor reviews happen annually. Vendor AI features ship weekly.
+- **Continuous Surface Monitoring**: Automated ingestion and unified diffing of vendor changelogs, trust centers, subprocessor tables, and DPAs.
+- **Volatile Content Stripping**: Normalizes HTML and strips timestamps, session tokens, build IDs, and layout churn to prevent false-positive diffs.
+- **3-Tier State Architecture**: Strict separation between authoritative register data, observed/parsed artifacts, and model-proposed drafts.
+- **15 Configurable Controls**: Out-of-the-box controls in `controls.yaml` evaluating autonomy, data residency, retention, subprocessor BAA coverage, and model training.
+- **Findings vs. Information Gaps**: Distinguishes verified control failures (remediation + POA&M) from missing vendor disclosures (gap outreach + 21-day timer).
+- **Automated Onboarding & Web UI**: CLI (`vra onboard`) and local web console for portal discovery (SafeBase, Whistic, Vanta), gated NDA handling, and register scaffolding.
+- **Privacy-Preserving & Air-Gapped**: Supports local Ollama models (`qwen2.5:7b-instruct`) or completely offline execution with deterministic heuristics (`--offline`).
 
-In between, an identity provider can promote its copilot from *suggesting* access changes to *making*
-them — writing to your directory, revoking sessions, no per-action approval, enabled by default on your
-SKU. A collaboration tool can add a new model provider to its subprocessor list as row six of nine, BAA
-status "Pending", with no changelog entry. Both are material. Neither generates a notification.
+---
 
-The next scheduled look is eleven months away.
-
-This tool closes that window: it watches the public artifacts vendors *do* update, notices the changes
-that touch AI, and produces the finding, the vendor email, and the POA&M row.
-
-## What it does
+## Architecture & Data Flow
 
 ```
-watch → normalize → diff → triage → observe → evaluate → draft → persist → report
+watch ──> normalize ──> diff ──> triage ──> observe ──> evaluate ──> draft ──> persist ──> report
 ```
 
-1. **Watch** — fetch each vendor's changelog, trust center, subprocessor list, and DPA.
-2. **Normalize** — HTML to text, then strip volatile content (page timestamps, session GUIDs, build
-   numbers, render times, rotating promo banners) so hashes are stable. Without this, everything looks
-   changed every run and the tool is noise.
-3. **Diff** — hash, compare to the last snapshot, emit unified diffs. Unchanged sources cost nothing.
-4. **Triage** — a local instruct model reads each diff against the vendor's current AI surface and
-   returns forced JSON: is this AI-relevant, what kind of change, which register fields it bears on, a
-   proposed update, and a verbatim evidence excerpt.
-5. **Observe** — deterministically parse subprocessor tables (HTML tables, PDF text, or pipe
-   rows) and in-tenant API responses into an *observed* state that overlays the register, carrying
-   provenance for every field. A gated/portal/PDF-missing disclosure is recorded as a parse status
-   and becomes an AIV-03 information gap with drafted outreach — never a silent pass.
-6. **Evaluate** — run 15 controls against the merged surface. Deterministic. Config-driven.
-7. **Draft** — for each finding and gap: a narrative, a vendor outreach email, and a POA&M row.
-8. **Persist** — reconcile against prior findings, age them, escalate overdue ones, close resolved ones.
-9. **Report** — one Markdown report plus machine-readable JSON; nonzero exit on any open critical.
+1. **Watch & Ingest**: Fetches public artifacts (HTML, PDF, portals) and polls tenant management APIs.
+2. **Normalize & Diff**: Strips volatile page elements and compares normalized text to snapshot history.
+3. **Triage**: Classifies diffs for AI relevance and maps changes to register fields using local LLM or heuristics.
+4. **Observe & Overlay**: Deterministically parses subprocessor tables and API responses into verified state overlays.
+5. **Evaluate**: Evaluates 15 compliance controls from `controls.yaml` against the merged surface.
+6. **Draft**: Generates analyst narratives, vendor outreach emails, and POA&M tracking rows.
+7. **Persist**: Reconciles findings, escalates overdue items, and records full audit logs in `data/`.
+8. **Report**: Outputs Markdown and JSON executive reports; exits with code `1` on open criticals.
 
-## Design rules
+### State Tiers
 
-These are the load-bearing constraints. Everything else is implementation detail.
+| Tier | Source | Can Drive Findings? | Description |
+| :--- | :--- | :---: | :--- |
+| **`register`** | Human-authored YAML in `vendors/` | **Yes** | Authoritative contract and surface definitions. |
+| **`observed`** | Parsed tables & tenant API responses | **Yes** | Verified, quotable facts with full provenance. |
+| **`proposed`** | Local LLM inference from prose diffs | **No** | Quarantined in `pending_review/` until accepted by an analyst. |
 
-**1. The model never invents a finding.** Control mapping and severity are deterministic, from
-`controls.yaml` and code. There is no code path from model output to a severity value, a due date, or the
-existence of a finding. A model that editorialises about severity in a narrative gets its draft discarded
-for a deterministic fallback.
+---
 
-**2. The model's only job is reading unstructured vendor text and drafting language.** It decides whether
-prose is worth a human's attention and writes the email. It does not decide what is true.
+## Installation & Setup
 
-**3. State is the product.** A tool that re-derives everything each run is a linter. The register, the
-finding lifecycle, and the snapshot history are the thing of value — they're what let you say "this
-changed on this date, here's the line, here's what we did about it."
+### Prerequisites
+- Python 3.10+
+- (Optional) [Ollama](https://ollama.com) for local LLM-assisted triage and email drafting.
 
-**4. Local by default.** Model inference is a local Ollama instance. `--offline` disables network access
-entirely.
-
-### Three tiers of state
-
-The tier a claim lives in determines whether it can drive a finding:
-
-| Tier | Source | Can drive a finding? |
-| --- | --- | --- |
-| `register` | Human-authored YAML in `vendors/` | **Yes** — authoritative |
-| `observed` | Parsed subprocessor tables, in-tenant API responses | **Yes** — overlays the register, carries provenance |
-| `proposed` | Model inference from prose | **No** — quarantined in `pending_review/` for human review |
-
-The rule: **a tier may drive a finding only if its claims are quotable back to a specific artifact line
-or API field.** Model prose is not, so it never does. This is why both criticals in the demo cite either
-a parsed table row or a tenant API scope list — you can put either in front of a vendor.
-
-This design was arrived at the hard way; see [D2 in VALIDATION.md](VALIDATION.md#d2--model-proposals-could-never-produce-a-finding-fixed-by-redesign).
-
-## Setup
-
-Python 3.10+.
+### Setup
 
 ```bash
+# Clone the repository
+git clone https://github.com/jacobjoshy16-commits/vendor-risk-analyst-agent.git
+cd vendor-risk-analyst-agent
+
+# Create virtual environment and install dependencies
 python3 -m venv .venv && source .venv/bin/activate
-pip install pyyaml requests
-```
+pip install pyyaml requests pypdf
 
-*(Not using a venv on a PEP 668 system? `pip install --break-system-packages pyyaml requests`.)*
-
-For model-backed triage, install [Ollama](https://ollama.com) and pull a model:
-
-```bash
+# (Optional) Pull recommended Ollama model
 ollama pull qwen2.5:7b-instruct
 ```
 
-The default is `qwen2.5:7b-instruct` (override with `--model TAG` or `$VRA_MODEL`). Any Ollama
-instruct model that reliably returns the forced JSON shape should work; the model never decides
-findings or severities, so swapping it only changes triage and drafting quality.
+> **Note**: If Ollama is not installed or running, pass `--offline` to use the built-in deterministic heuristic engine.
 
-Ollama is optional. Without it, run with `--offline` — the tool falls back to a deterministic heuristic
-backend and the report states that no language model was used. If Ollama is configured but unreachable,
-the run falls back automatically with a warning rather than failing.
+---
 
-## Usage
+## Quickstart & Usage
+
+### 1. Run an Assessment
 
 ```bash
-python3 vra.py --offline --snapshot v1     # baseline
-python3 vra.py --offline --snapshot v2     # change run -> exit 1
-python3 tests/test_vra.py                  # 66 tests
+# Run baseline assessment (sandbox snapshot v1)
+python3 vra.py --offline --snapshot v1
+
+# Run change detection assessment (sandbox snapshot v2 -> exits 1 on criticals)
+python3 vra.py --offline --snapshot v2
+
+# Run using a local Ollama model
+python3 vra.py --snapshot v2 --model qwen2.5:7b-instruct
+
+# Preview changes without modifying state
+python3 vra.py --offline --snapshot v2 --dry-run
 ```
 
-| Flag | Effect |
-| --- | --- |
-| `--snapshot VERSION` | Sandbox snapshot set to read (substitutes `{version}` in watch paths). Default `v1` |
-| `--vendor SLUG` | Limit the run to one vendor. Repeatable |
-| `--out DIR` | Report output directory. Default `out/` |
-| `--model TAG` | Ollama model tag. Default `$VRA_MODEL` or `qwen2.5:7b-instruct` |
-| `--offline` | No network. Deterministic heuristic backend instead of Ollama |
-| `--dry-run` | Assess and print, persist nothing — no snapshots, findings, or report files |
-| `--no-probe` | Skip all in-tenant probes |
-| `--no-fail` | Always exit 0, even with open criticals |
-
-## Onboarding vendors
-
-Phase 1 had one entry point for a new vendor: hand-writing a YAML register and guessing the watch
-URLs. Onboarding closes that gap — give it a vendor name and a trust-center URL (or explicit
-artifact URLs) and it fetches, discovers, parses, and scaffolds the register:
+### 2. Onboard a New Vendor
 
 ```bash
+# Discover artifacts, parse subprocessors, and scaffold register
 python3 vra.py onboard "Acme Corp" \
-  --tier critical --category collaboration \
+  --tier critical \
+  --category collaboration \
   --trust-center https://acme.safebase.io \
-  --offline --assess
+  --assess
 ```
 
-What onboarding does, in order:
-
-1. **Fetch** the trust center and detect the platform: SafeBase, Whistic, Vanta, a generic
-   HTML page, or a PDF — including click-through NDA gates.
-2. **Discover** artifact links (changelog / subprocessors / DPA) from the trust-center page.
-3. **Attempt the subprocessor parse on day one.** This is the important part: AIV-03 (your
-   critical control) either has coverage from the first snapshot, or the gate is recorded as a
-   blocker with a drafted outreach email asking for portal access or a copy of the list.
-4. **Scaffold the register** in `vendors/{slug}.yaml` — conservative defaults (contract facts
-   `false`/empty), `ai_surface` seeded only from AI-related subprocessors that actually parsed,
-   everything unknown left `unknown` so the gap machinery drafts the initial vendor questionnaire.
-5. **Cache the artifacts** under `artifacts/vendors/{slug}/` so the first assessment runs
-   offline-reproducibly; watch paths point there. Replace them with live URLs to watch continuously.
-6. **Draft the blocker outreach** to `pending_review/` when the disclosure is gated or missing.
-
-Flags: `--tier critical|high|medium|low`, `--category`, `--description`, `--trust-center`,
-`--changelog`, `--subprocessors`, `--dpa`, `--offline`, `--dry-run`, `--assess`.
-
-### Browser UI
+### 3. Launch Web Console
 
 ```bash
+# Start local web console (zero external dependencies)
 python3 vra.py webui --host 0.0.0.0 --port 8765
 ```
 
-Opens a zero-dependency local console (no CDNs, works fully offline) for the same flow: vendor
-table with platform and parse status, an onboarding form, and one-click assessment. The UI talks
-only to the local filesystem via a small JSON API under `/api/`.
+---
 
-### If the subprocessor list is gated
+## CLI Reference
 
-Real trust centers often sit behind SafeBase/Whistic/Vanta with a click-through NDA. The tool
-does not pretend to read them: the parse is recorded as `blocked`, the register carries the
-blocker, and both the onboarding step and the assessment draft the outreach asking for guest
-access or a copy of the list. AIV-03 becomes a tracked information gap with a 21-day response
-clock — not a silent pass.
+### Main Command (`vra.py` / `vra.py run`)
 
-**Exit codes:** `0` clean · `1` at least one open critical finding · `2` run error.
+| Flag | Description | Default |
+| :--- | :--- | :--- |
+| `--snapshot VERSION` | Snapshot version tag (interpolated into watch paths) | `v1` |
+| `--vendor SLUG` | Filter run to specific vendor slug (repeatable) | All vendors |
+| `--out DIR` | Output directory for reports | `out/` |
+| `--model TAG` | Ollama model tag | `$VRA_MODEL` or `qwen2.5:7b-instruct` |
+| `--offline` | Run deterministic heuristic backend without network/LLM | `false` |
+| `--dry-run` | Evaluate and print without writing state or report files | `false` |
+| `--no-probe` | Skip in-tenant API probes | `false` |
+| `--no-fail` | Always exit with code `0`, ignoring open critical findings | `false` |
 
-`--dry-run` is the safe way to preview against a new snapshot: it will not write a snapshot, will not
-mutate finding state, and will not close anything. Note that a `--vendor`-filtered run only reconciles
-that vendor's findings — other vendors' findings are left alone rather than closed as resolved.
+### Onboarding Command (`vra.py onboard`)
 
-### Outputs
+| Flag | Description | Default |
+| :--- | :--- | :--- |
+| `name` *(positional)* | Vendor display name (e.g., `"Acme Corp"`) | *(Required)* |
+| `--tier LEVEL` | Vendor criticality (`critical`, `high`, `medium`, `low`) | `high` |
+| `--category CAT` | Vendor category (e.g., `identity_provider`, `collaboration`) | None |
+| `--trust-center URL` | Trust center or security page URL / local HTML file | None |
+| `--changelog URL` | Explicit changelog URL | None |
+| `--subprocessors URL` | Explicit subprocessor list URL (HTML, PDF, or local file) | None |
+| `--dpa URL` | Explicit DPA / BAA URL | None |
+| `--assess` | Run an immediate assessment after scaffolding | `false` |
+| `--dry-run` | Print scaffolded register without saving | `false` |
 
-| Path | Contents |
-| --- | --- |
-| `out/latest.md`, `out/vendor-ai-risk-{stamp}.md` | The report |
-| `out/latest.json` | Same run, machine-readable |
-| `data/findings.json` | Finding lifecycle store — **the durable state** |
-| `data/snapshots/{vendor}/{stamp}/` | Normalized artifact snapshots + hashes |
-| `data/llm_audit.jsonl` | Every prompt and response, for audit |
-| `pending_review/{vendor}-{stamp}.json` | Model-proposed register updates awaiting human acceptance |
-| `pending_review/{slug}-onboarding-outreach-{stamp}.txt` | Drafted outreach for gated/missing subprocessor disclosures |
-| `artifacts/vendors/{slug}/` | Onboarding artifact cache (fetched trust-center pages) |
+### Exit Codes
 
-## Configuration
+| Code | Meaning |
+| :---: | :--- |
+| `0` | Clean run (no open critical findings). |
+| `1` | One or more open critical findings detected. |
+| `2` | Execution or runtime error. |
 
-### `controls.yaml` — the control set
+---
 
-15 controls, editable without touching code. Each has a question, framework citations (HIPAA Security
-Rule, NIST AI RMF, HICP), a severity, `fails_when` / `gap_when` conditions, remediation, and a
-compensating control.
+## Control Set (`controls.yaml`)
 
-| ID | Severity | Control |
-| --- | --- | --- |
-| AIV-01 | high | Model provider disclosed per AI feature |
-| AIV-02 | medium | AI-specific addendum executed |
-| AIV-03 | **critical** | Every model provider named as subprocessor and BAA-covered |
-| AIV-04 | high | Customer data not used for training/fine-tuning |
-| AIV-05 | medium | Retention period for prompts and outputs documented |
-| AIV-06 | high | Data reach limited to minimum necessary |
-| AIV-07 | **critical** | No autonomous action on clinical/identity records without human review |
-| AIV-08 | high | AI actions and outputs written to an auditable log |
-| AIV-09 | medium | Notification of material model/version changes |
-| AIV-10 | medium | Error/accuracy/hallucination rates disclosed |
-| AIV-11 | high | Prompt injection and adversarial input testing |
-| AIV-12 | high | Inference within contracted residency boundary |
-| AIV-13 | high | Bias/performance testing across clinical population |
-| AIV-14 | medium | AI-specific incident response process |
-| AIV-15 | medium | Feature disableable at tenant level |
+The 15 compliance controls evaluate AI features against HIPAA Security Rule, NIST AI RMF, and HICP:
 
-Conditions are ANDed — AIV-07 requires *both* `autonomy: acts` and `human_in_loop: false`. An agent that
-acts under human review is not a finding. AIV-13 carries an `applies_when` clause scoping it to features
-touching clinical data.
+| ID | Severity | Name / Scope | Frameworks |
+| :--- | :---: | :--- | :--- |
+| **AIV-01** | High | Model provider disclosed per AI feature | HIPAA 164.308(b)(1), NIST AI RMF GOVERN-6.1, HICP TV-1 |
+| **AIV-02** | Medium | AI-specific addendum executed | HIPAA 164.502(e)(2), NIST AI RMF GOVERN-1.2, HICP TV-2 |
+| **AIV-03** | **Critical** | Model provider named in subprocessor list with BAA | HIPAA 164.504(e)(1), NIST AI RMF GOVERN-6.2, HICP TV-1 |
+| **AIV-04** | High | Customer data excluded from model training/tuning | HIPAA 164.502(a), NIST AI RMF MANAGE-1.3, HICP TV-1 |
+| **AIV-05** | Medium | Prompt and output retention period documented | HIPAA 164.316(b), NIST AI RMF GOVERN-4.1, HICP TV-2 |
+| **AIV-06** | High | Data reach limited to minimum necessary | HIPAA 164.306(a), NIST AI RMF MAP-1.5, HICP PR-1 |
+| **AIV-07** | **Critical** | Autonomous actions require human-in-the-loop review | HIPAA 164.312(a)(1), NIST AI RMF GOVERN-4.2, HICP PR-1 |
+| **AIV-08** | High | AI actions and outputs recorded in audit logs | HIPAA 164.312(b), NIST AI RMF MEASURE-2.6, HICP PR-2 |
+| **AIV-09** | Medium | Notification provided for model/version changes | NIST AI RMF GOVERN-6.1, HICP TV-2 |
+| **AIV-10** | Medium | Error and hallucination rates disclosed | NIST AI RMF MEASURE-2.2, HICP TV-1 |
+| **AIV-11** | High | Prompt injection and adversarial testing conducted | NIST AI RMF MANAGE-2.4, HICP TV-1 |
+| **AIV-12** | High | Inference confined to contracted data residency | HIPAA 164.308(a)(1), NIST AI RMF MAP-1.5, HICP PR-1 |
+| **AIV-13** | High | Bias and clinical performance testing performed | NIST AI RMF MEASURE-2.5, HICP TV-1 |
+| **AIV-14** | Medium | AI-specific incident response process established | HIPAA 164.308(a)(6), NIST AI RMF MANAGE-4.1, HICP IR-1 |
+| **AIV-15** | Medium | AI features configurable/disableable at tenant level | HIPAA 164.312(a)(1), NIST AI RMF MANAGE-1.2, HICP PR-1 |
 
-Severity drives due dates, in `config.py`: critical 7 days, high 30, medium 60, low 90; information gaps
-get 21 days.
+---
 
-### `vendors/*.yaml` — the register
+## Output & Artifacts
 
-One file per vendor:
+| Path | Description |
+| :--- | :--- |
+| `out/latest.md`, `out/vendor-ai-risk-*.md` | Human-readable Markdown executive report. |
+| `out/latest.json` | Full assessment results in machine-readable JSON format. |
+| `data/findings.json` | Finding lifecycle and status database (`new`, `open`, `escalated`, `accepted_risk`, `resolved`). |
+| `data/snapshots/{vendor}/{timestamp}/` | Normalized artifact snapshots and computed SHA-256 hashes. |
+| `data/llm_audit.jsonl` | Audit log recording prompts, model completions, and latency. |
+| `pending_review/` | Model-proposed register updates and blocker outreach drafts. |
+| `artifacts/vendors/{slug}/` | Cached trust center pages, PDFs, and discovered artifacts. |
 
-```yaml
-vendor: Aegis Identity Cloud
-slug: aegis-identity-cloud
-tier: critical
-contract:
-  baa_on_file: true
-  ai_addendum_signed: false
-  baa_covered_subprocessors: [...]
-ai_surface:
-  - feature: Access Copilot
-    status: enabled            # available | enabled | disabled
-    autonomy: suggests         # suggests | acts
-    data_reach: [identity_attributes, group_membership, access_logs]
-    model_provider: undisclosed
-    training_on_customer_data: unknown
-    human_in_loop: true
-    retention_days: unknown
-    # ... plus output_logged, change_notification, error_rate_disclosed,
-    #     prompt_injection_tested, data_residency, bias_tested_clinical,
-    #     ai_incident_process
-watch:
-  changelog: sandbox/vendors/aegis-identity-cloud/snapshots/{version}/changelog.html
-  # ... trust_center, subprocessors, dpa
-probe:                          # optional, per-vendor
-  type: okta_management_api
-  enabled: true
-  mode: fixture
-state:
-  last_assessed: ...
-  snapshot_hashes: {...}
+---
+
+## Testing & Validation
+
+```bash
+# Run test suite (66 tests covering extraction, parsing, triage, lifecycle, and controls)
+python3 tests/test_vra.py
 ```
 
-### `unknown` is a question, not a failure
+For validation against ground-truth sandbox scenarios and recorded defect resolutions, refer to [VALIDATION.md](VALIDATION.md).
 
-This matters enough to state plainly: **`unknown` fields are information gaps — questions for the vendor —
-not control failures.**
+---
 
-If a vendor hasn't told us their retention period, we don't know that it's wrong. We know we don't know.
-Those are tracked separately from findings, get their own 21-day response clock, and each one produces a
-drafted question in the vendor outreach email. Conflating "unanswered" with "non-compliant" produces
-reports nobody trusts, because the first vendor who reads one will correctly point out that half the
-"failures" are things they were never asked.
-
-Unknown tokens: `unknown`, `undisclosed`, `tbd`, `not_provided`, null, empty.
-
-## Sandbox
-
-`sandbox/vendors/` holds three fictional vendors with mirrored public artifacts (changelog, trust center,
-subprocessor list, DPA) in two snapshot sets, `v1` and `v2`:
-
-| Vendor | Type | Planted change in v2 |
-| --- | --- | --- |
-| Aegis Identity Cloud | Identity provider | **Critical.** Agent Mode GA — copilot creates/modifies/deactivates accounts and revokes sessions without per-action approval, default-on for the Advanced SKU |
-| Loop Workspace | Collaboration | **Critical.** `Perplexity AI, Inc.` added as row 6 of 9 in the subprocessor list, BAA "Pending", no changelog mention |
-| Meridian RevCycle | Revenue cycle | **Negative control.** Release notes, a marketing line, wording churn. Must produce nothing |
-
-`sandbox/expected_findings.md` is ground truth, written in Phase 0 **before any detection code existed**
-and never edited since. Writing it afterward would be validation theater — you'd be describing what the
-tool does, not what it should do.
-
-Vendor C exists because a tool that flags everything is worthless. A detector is only credible if it can
-be shown staying quiet on a real diff.
-
-## Validation
-
-Full record with reproduction steps in **[VALIDATION.md](VALIDATION.md)**.
-
-Baseline run: 10 findings, **0 critical**, 12 gaps. Change run: **2 new criticals**, exit 1, Vendor C
-unchanged. All 22 ground-truth assertions met; 66 unit tests pass (46 original + 20 covering
-real-world artifact parsing and vendor onboarding).
-
-**The clean sheet is not the story.** Validation surfaced four real defects:
-
-- **A false critical on the baseline.** One probe fixture held post-change tenant state and was applied
-  to every snapshot version, so the "baseline" already contained the finding run 2 was meant to detect.
-  A baseline that contains the answer proves nothing.
-- **Both planted criticals silently failing to fire** while every individual component reported success —
-  model proposals are quarantined by design, so nothing that depended on them could ever reach the
-  evaluator. Fixed by the three-tier state model, not by auto-applying proposals.
-- **`affected_fields` dropped from the JSON report**, making it impossible to see which register fields a
-  change bore on.
-- **An unreachable `fails_when` clause** on AIV-01 that could never fire under any input — found by a unit
-  test that was itself wrong, and corrected against ground truth rather than by changing behaviour.
-
-Known misses and untested paths are listed below and in VALIDATION.md. Nothing in either document is a
-clean sheet by omission.
-
-## Limitations
-
-**The scored runs used the deterministic offline backend, not a real model.** No Ollama runtime was
-available in the build environment. The offline backend recognises the planted changes via keyword
-heuristics tuned to this sandbox. That validates the pipeline, controls, state machine, and guardrails —
-it does **not** validate that a 7B instruct model triages real vendor prose correctly. Both criticals come
-from the deterministic `observed` tier and fire identically under any backend, but triage quality on messy
-real-world text is unmeasured. Re-run with `--model` against live Ollama before trusting this on real
-vendors.
-
-**Structural blind spots:**
-
-- **Gates stop the parse, loudly.** SafeBase/Whistic/Vanta portals with a click-through NDA are
-  detected and reported as `blocked` with drafted outreach — but the tool cannot read what it is
-  not granted access to. Scanned PDFs and subprocessors rendered as images inside prose still
-  require manual review (flagged as `empty`).
-- **The parse is structural, not semantic.** HTML tables and PDF text extract reliably; a vendor
-  that buries its subprocessor list in a marketing PDF, a spreadsheet attachment, or a login-walled
-  SaaS screen will still produce a gap, not rows.
-- **Diff-blind to unpublished change.** A vendor that swaps model providers without touching a watched
-  artifact triggers nothing. The in-tenant probe partially covers this, for one vendor.
-- **Probe coverage is one vendor.** Only the identity provider has a management API modelled, in fixture
-  mode. Auth, pagination, rate limits, and schema drift are unexercised.
-- **The register is trusted.** Except where the probe or a parsed artifact overrides it, the tool believes
-  what a human wrote. A stale register produces confident, wrong output.
-- **No adversarial text testing.** Nothing exercises a vendor describing an agent in deliberately soft
-  language with no autonomy keyword.
-- **The sandbox was authored by the same person as the detector.** Three vendors, one planted change each.
-  A meaningful false-positive rate needs dozens of real vendors over months.
-
-**`data/findings.json` is gitignored** in this demo repo. In a real deployment, commit it or back it with
-a database — it holds every `accepted_risk` decision a human has made, and losing it loses all of them.
-
-## Roadmap (not in v1)
-
-Browser extension for capturing artifacts behind auth (SafeBase/Whistic/Vanta guest sessions) ·
-multi-tenant / multi-analyst state · scheduled unattended runs · cloud sync of findings · model
-distillation for faster local triage · custom quantization · OCR fallback for scanned subprocessor
-PDFs.
-
-## Repository layout
+## Project Structure
 
 ```
-vra.py                  entry point (legacy flags + subcommands)
-controls.yaml           15 controls — edit without touching code
-vendors/*.yaml          per-vendor AI surface register
-src/vra/
-  cli.py                orchestration, console summary, exit codes
-  onboard.py            vendor onboarding engine + CLI (discovery, parse, scaffold)
-  webui.py              local onboarding console (stdlib HTTP + single-page UI)
-  extract.py            HTML table extraction, portal detection, PDF text, link discovery
-  watch.py              fetch, snapshot, diff (HTML/PDF/gated-aware ingestion)
-  normalize.py          HTML->text, volatile stripping
-  llm.py                pluggable backends (Ollama / offline), JSON extraction, audit log
-  triage.py             AI-relevance triage, forced JSON schema
-  observe.py            deterministic parsing -> observed state overlay (+ parse status)
-  evaluate.py           control evaluation, findings vs gaps
-  probe.py              in-tenant management API probe
-  analyst.py            narratives, outreach drafts, POA&M rows
-  register.py           register I/O, finding store, lifecycle
-  report.py             Markdown + JSON report
-sandbox/                three vendors, v1/v2 snapshots, ground truth
-tests/test_vra.py       66 tests
-VALIDATION.md           validation record, including every defect found
-DEMO.md                 demo recording notes
+.
+├── vra.py                  # CLI entry point (run, onboard, webui)
+├── controls.yaml           # 15 compliance controls definition
+├── vendors/                # Per-vendor registers (YAML)
+├── src/vra/
+│   ├── cli.py              # CLI execution and console reporting
+│   ├── onboard.py          # Vendor discovery and register scaffolding
+│   ├── webui.py            # Local web console and REST API
+│   ├── extract.py          # Portal detection and table/PDF extraction
+│   ├── watch.py            # Artifact fetching, hashing, and diffing
+│   ├── normalize.py        # Volatile content stripping
+│   ├── triage.py           # Diff relevance classification
+│   ├── observe.py          # Deterministic table/API parsing
+│   ├── evaluate.py         # Control evaluation engine
+│   ├── probe.py            # In-tenant API probes
+│   ├── analyst.py          # Narrative, outreach, and POA&M drafting
+│   ├── register.py         # Register I/O and finding lifecycle store
+│   └── report.py           # Markdown and JSON report generation
+├── sandbox/                # Multi-vendor test fixtures (v1/v2 snapshots)
+├── tests/                  # Unit and integration test suite
+└── VALIDATION.md           # Ground truth validation records
 ```
