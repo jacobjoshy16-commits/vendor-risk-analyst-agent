@@ -1,0 +1,35 @@
+AEGIS IDENTITY CLOUD — DATA PROCESSING ADDENDUM (DPA)
+Version 4.2 — Effective 2025-09-01
+Retrieved 2026-02-03T09:16:10Z
+
+1. DEFINITIONS
+"Customer Data" means data submitted to the Services by or on behalf of Customer.
+"Subprocessor" means a third party engaged by Aegis to process Customer Data.
+
+2. PROCESSING
+2.1 Aegis processes Customer Data only on documented instructions from Customer.
+2.2 Aegis maintains a public list of Subprocessors and provides 30 days' notice of additions.
+
+3. SECURITY
+3.1 Aegis maintains administrative, physical, and technical safeguards aligned to ISO/IEC 27001:2022.
+3.2 Aegis notifies Customer of a Personal Data Breach without undue delay and no later than 72 hours
+    after confirmation.
+
+4. HEALTHCARE
+4.1 Where Customer is a Covered Entity or Business Associate under HIPAA, the Aegis Business Associate
+    Agreement is incorporated by reference and controls with respect to Protected Health Information.
+4.2 The BAA applies to the Services and to Subprocessors identified as BAA-covered on the Subprocessor page.
+
+5. ARTIFICIAL INTELLIGENCE FEATURES
+5.1 Certain Services include AI-assisted features ("AI Features"). AI Features process Customer Data to
+    generate suggestions for Customer's administrators.
+5.2 Aegis does not use Customer Data to train foundation models made available to other customers.
+5.3 AI Features are provided on an "as-is" basis with respect to output accuracy. Aegis does not warrant
+    the accuracy of AI-generated suggestions and publishes no error-rate or accuracy metrics.
+5.4 Customer is responsible for reviewing AI-generated suggestions prior to acting on them.
+
+6. AUDIT
+6.1 Aegis makes SOC 2 Type II reports available annually under NDA.
+
+7. RETURN AND DELETION
+7.1 Aegis deletes Customer Data within 90 days of termination.

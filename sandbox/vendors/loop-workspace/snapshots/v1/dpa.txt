@@ -1,0 +1,31 @@
+LOOP WORKSPACE — DATA PROCESSING ADDENDUM
+Version 3.1 — Effective 2025-07-15
+Retrieved 2026-02-03T09:21:30Z
+
+1. SCOPE
+This DPA applies to Loop's processing of Customer Content in the Loop Workspace service.
+
+2. SUBPROCESSORS
+2.1 Customer authorizes Loop to engage the Subprocessors listed at loopworkspace.example/subprocessors.
+2.2 Loop gives 30 days' notice of new Subprocessors and Customer may object in writing.
+2.3 Subprocessors that process Protected Health Information are bound by written agreements no less
+    protective than this DPA and, where applicable, by a Business Associate Agreement.
+
+3. AI FEATURES
+3.1 "AI Features" means Loop Assist and any successor generative capability.
+3.2 Loop does not use Customer Content to train, retrain, or fine-tune generative models.
+3.3 Prompts and outputs are retained for thirty (30) days for safety and abuse monitoring and are then
+    deleted. Customer may not opt out of abuse-monitoring retention.
+3.4 Loop does not publish accuracy, error-rate, or hallucination-rate metrics for AI Features.
+3.5 Loop conducts internal adversarial testing of AI Features. Results are not shared with customers.
+
+4. SECURITY
+4.1 Loop maintains an information security program aligned to ISO/IEC 27001.
+4.2 Breach notification within 72 hours of confirmation.
+
+5. HEALTHCARE
+5.1 The Loop BAA is available to Enterprise Grid customers and covers Customer Content processed by
+    the Services, including AI Features, and by Subprocessors marked as BAA-covered.
+
+6. DELETION
+6.1 Customer Content is deleted within 30 days of workspace termination.

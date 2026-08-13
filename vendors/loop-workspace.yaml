@@ -1,0 +1,51 @@
+vendor: Loop Workspace
+slug: loop-workspace
+tier: high
+category: collaboration
+description: 'Clinical and administrative team messaging. Carries PHI in channels
+  and direct messages despite policy discouraging it.
+
+  '
+contract:
+  baa_on_file: true
+  ai_addendum_signed: true
+  last_review: 2025-09-22
+  baa_covered_subprocessors:
+  - Google Cloud Platform
+  - Akamai Technologies
+  - Twilio Inc.
+  - Anthropic PBC
+  - Intercom, Inc.
+  - Looker (Google LLC)
+ai_surface:
+- feature: Loop Assist
+  status: enabled
+  autonomy: suggests
+  data_reach:
+  - messages
+  - files
+  - channel_metadata
+  model_provider: Anthropic PBC
+  training_on_customer_data: false
+  human_in_loop: true
+  retention_days: 30
+  output_logged: true
+  change_notification: release_notes_only
+  error_rate_disclosed: false
+  prompt_injection_tested: unknown
+  data_residency: in_region
+  bias_tested_clinical: not_applicable
+  ai_incident_process: unknown
+watch:
+  changelog: sandbox/vendors/loop-workspace/snapshots/{version}/changelog.html
+  trust_center: sandbox/vendors/loop-workspace/snapshots/{version}/trust_center.html
+  subprocessors: sandbox/vendors/loop-workspace/snapshots/{version}/subprocessors.html
+  dpa: sandbox/vendors/loop-workspace/snapshots/{version}/dpa.txt
+state:
+  last_assessed: '2026-08-13T15:56:44.665303+00:00'
+  snapshot_hashes:
+    changelog: 44bc1d6c8be7af08fbe4e5367e89dd196c94ec241bebf1ee3d1432731a6dc053
+    trust_center: af4c578463379776d30010a4161dd73ebdc03da6c8b9490410cdb5620a7244e8
+    subprocessors: de16985ab411c000832dd391b37baa184113904968cb4d07bfa25ff89234bf5d
+    dpa: 74154cfe7aef94365038324a284ec07d6c956b9e4c8c63d4dc67ea78cb33dc30
+  open_findings: []

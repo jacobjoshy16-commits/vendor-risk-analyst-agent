@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Aegis Identity Cloud — Trust Center</title></head>
+<body>
+<p class="meta">Last refreshed 2026-03-11T14:03:20Z &middot; request-id=f0b7c214</p>
+<h1>Trust Center</h1>
+
+<h2>Certifications</h2>
+<ul>
+  <li>SOC 2 Type II (audit period 2025-01-01 to 2025-12-31)</li>
+  <li>ISO/IEC 27001:2022</li>
+  <li>HITRUST CSF v11 certified</li>
+</ul>
+
+<h2>Healthcare Customers</h2>
+<p>Aegis Identity Cloud executes a Business Associate Agreement (BAA) with covered entities and business
+associates on Enterprise and Healthcare plans. The BAA covers the Workforce Identity and Customer Identity
+services and the subprocessors listed on our subprocessor page.</p>
+
+<h2>Artificial Intelligence</h2>
+<p><strong>Access Copilot.</strong> Access Copilot is powered by a large language model hosted by Aegis in our own
+cloud environment. Prompts and responses are processed in the customer's assigned region.</p>
+<ul>
+  <li><strong>Agent Mode:</strong> With Agent Mode enabled, Copilot executes directory and session actions
+      directly under the <code>copilot-agent</code> service principal. Administrators may scope Agent Mode to
+      selected groups but per-action approval is not available in this release.</li>
+  <li><strong>Training:</strong> Customer data is not used to train foundation models. We do not currently publish
+      a statement covering fine-tuning on aggregated telemetry.</li>
+  <li><strong>Model provider:</strong> Aegis does not disclose the underlying model vendor for Access Copilot.</li>
+  <li><strong>Human review:</strong> Copilot suggestions in Assist Mode require administrator approval.
+      Agent Mode actions are logged post-hoc rather than approved in advance.</li>
+  <li><strong>Logging:</strong> Copilot interactions appear in the System Log as <code>copilot.query</code> and
+      <code>copilot.action</code> events.</li>
+  <li><strong>Retention:</strong> Prompt retention period is under review; contact your account team for specifics.</li>
+</ul>
+
+<h2>Data Residency</h2>
+<p>Customer data is stored in the region selected at org creation: US, EU, or APAC. Copilot inference runs in-region.</p>
+
+<h2>Incident Response</h2>
+<p>Security incidents are reported to affected customers within 72 hours of confirmation, per the DPA.
+Our incident response plan is available under NDA.</p>
+
+<p class="footer">Trust Center &middot; page render 66ms</p>
+</body>
+</html>

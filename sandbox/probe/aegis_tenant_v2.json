@@ -1,0 +1,75 @@
+{
+  "_comment": "Fixture standing in for an Aegis Identity Cloud management API response set, AFTER the vendor shipped Agent Mode. Shape mirrors a real IdP management API.",
+  "org": {
+    "id": "00o1a2b3c4AEGISx7",
+    "subdomain": "dev-000000",
+    "plan": "workforce_identity_advanced",
+    "retrieved_at": "2026-03-11T15:04:00Z"
+  },
+  "settings": {
+    "copilot": {
+      "enabled": true,
+      "agent_mode": {
+        "enabled": true,
+        "enabled_by": "system_default_advanced_sku",
+        "enabled_at": "2026-03-02T00:00:00Z",
+        "per_action_approval": false,
+        "scoped_groups": []
+      },
+      "prompt_logging": true,
+      "prompt_retention_days": null
+    }
+  },
+  "applications": [
+    {
+      "id": "0oa1copilotagent01",
+      "label": "Access Copilot Agent",
+      "status": "ACTIVE",
+      "signOnMode": "OPENID_CONNECT",
+      "ai_component": true,
+      "created": "2026-03-02T00:00:00Z"
+    },
+    {
+      "id": "0oa2loopworkspace2",
+      "label": "Loop Workspace SSO",
+      "status": "ACTIVE",
+      "signOnMode": "SAML_2_0",
+      "ai_component": false,
+      "created": "2024-06-11T00:00:00Z"
+    },
+    {
+      "id": "0oa3meridianrev33",
+      "label": "Meridian RevCycle SSO",
+      "status": "ACTIVE",
+      "signOnMode": "SAML_2_0",
+      "ai_component": false,
+      "created": "2023-02-20T00:00:00Z"
+    }
+  ],
+  "oauth_grants": [
+    {
+      "app_id": "0oa1copilotagent01",
+      "client_name": "copilot-agent",
+      "principal": "service_principal",
+      "scopes": [
+        "okta.users.read",
+        "okta.users.manage",
+        "okta.groups.read",
+        "okta.groups.manage",
+        "okta.sessions.revoke",
+        "okta.logs.read"
+      ],
+      "issued": "2026-03-02T00:00:00Z"
+    },
+    {
+      "app_id": "0oa2loopworkspace2",
+      "client_name": "loop-provisioning",
+      "principal": "service_principal",
+      "scopes": [
+        "okta.users.read",
+        "okta.groups.read"
+      ],
+      "issued": "2024-06-11T00:00:00Z"
+    }
+  ]
+}
