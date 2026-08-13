@@ -20,9 +20,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import REPO_ROOT, SNAPSHOT_DIR, RunConfig
+from .extract import (
+    decode_bytes,
+    detect_trust_platform,
+    extract_html_tables,
+    extract_pdf_text,
+    looks_like_html,
+    looks_like_pdf,
+)
 from .normalize import normalize
 
 SOURCE_KINDS = ("changelog", "trust_center", "subprocessors", "dpa")
+
+# How the raw artifact was ingested. Determines which extraction path applies.
+RAW_KINDS = ("html", "pdf", "text")
 
 
 @dataclass
@@ -33,6 +44,11 @@ class SourceSnapshot:
     text: str
     sha256: str
     fetched_at: str
+    raw_kind: str = "text"          # html | pdf | text
+    tables: list = field(default_factory=list)      # extracted HTML tables
+    platform: str | None = None     # safebase | whistic | vanta | generic | None
+    portal_blocked: bool = False    # click-through / access gate detected
+    portal_evidence: str = ""       # verbatim trigger for the audit trail
     volatile_rules_fired: list[str] = field(default_factory=list)
     error: str | None = None
 
@@ -63,26 +79,67 @@ def _resolve(origin: str, version: str) -> str:
     return origin.replace("{version}", version)
 
 
-def fetch(origin: str, cfg: RunConfig) -> tuple[str, str | None]:
-    """Return (raw_text, error). Local paths in sandbox mode; HTTP otherwise."""
+def fetch(origin: str, cfg: RunConfig) -> tuple[bytes, str | None, str | None]:
+    """Return (raw_bytes, content_type, error). Local paths in sandbox mode; HTTP otherwise."""
     if re.match(r"^https?://", origin):
         if cfg.offline:
-            return "", f"offline mode: refused network fetch of {origin}"
+            return b"", None, f"offline mode: refused network fetch of {origin}"
         try:
             import requests  # imported lazily so --offline needs no network stack
 
             resp = requests.get(origin, timeout=30, headers={"User-Agent": "vra/1.0 (vendor-risk-analyst)"})
             resp.raise_for_status()
-            return resp.text, None
+            return resp.content, resp.headers.get("Content-Type"), None
         except Exception as exc:  # pragma: no cover - network path
-            return "", f"fetch failed: {exc}"
+            return b"", None, f"fetch failed: {exc}"
 
     path = Path(origin)
     if not path.is_absolute():
         path = REPO_ROOT / path
     if not path.exists():
-        return "", f"missing local artifact: {path}"
-    return path.read_text(encoding="utf-8"), None
+        return b"", None, f"missing local artifact: {path}"
+    return path.read_bytes(), None, None
+
+
+def _ingest(raw: bytes, origin: str, content_type: str | None) -> tuple[SourceSnapshot, ...]:
+    """Classify, decode, normalize and structurally extract one fetched artifact.
+
+    Real-world trust centers publish HTML tables, PDFs, or sit behind branded
+    portals. AIV-03 depends on the subprocessor parse, so ingestion must not
+    silently degrade: PDFs without pypdf produce an explicit error snapshot, and
+    portal-hosted pages are tagged ``portal_blocked`` with the platform name so
+    the observation layer can raise a gap instead of passing quietly.
+    """
+    kind = "pdf" if looks_like_pdf(raw, origin, content_type) else \
+        "html" if looks_like_html(raw) else "text"
+    text, fired = "", []
+    tables, platform, portal_blocked, portal_evidence = [], None, False, ""
+
+    if kind == "pdf":
+        text, pdf_err = extract_pdf_text(raw)
+        if pdf_err:
+            return (SourceSnapshot(
+                vendor="", source="", origin=origin, text="", sha256="",
+                fetched_at=datetime.now(timezone.utc).isoformat(),
+                raw_kind="pdf", error=pdf_err,
+            ),)
+    else:
+        decoded = decode_bytes(raw)
+        if kind == "html":
+            platform, portal_blocked, portal_evidence = detect_trust_platform(
+                decoded, page_url=origin if origin.startswith(("http://", "https://")) else None
+            )
+            tables = extract_html_tables(decoded)
+        text, fired = normalize(decoded, is_html=(kind == "html"))
+
+    return (SourceSnapshot(
+        vendor="", source="", origin=origin, text=text,
+        sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        fetched_at=datetime.now(timezone.utc).isoformat(),
+        raw_kind=kind, tables=tables, platform=platform,
+        portal_blocked=portal_blocked, portal_evidence=portal_evidence,
+        volatile_rules_fired=fired,
+    ),)
 
 
 def snapshot_vendor(vendor: dict, cfg: RunConfig) -> list[SourceSnapshot]:
@@ -91,24 +148,15 @@ def snapshot_vendor(vendor: dict, cfg: RunConfig) -> list[SourceSnapshot]:
     snaps: list[SourceSnapshot] = []
     for source, origin_tpl in (vendor.get("watch") or {}).items():
         origin = _resolve(str(origin_tpl), cfg.snapshot_version)
-        raw, err = fetch(origin, cfg)
+        raw, ctype, err = fetch(origin, cfg)
         if err:
             snaps.append(
                 SourceSnapshot(slug, source, origin, "", "", datetime.now(timezone.utc).isoformat(), error=err)
             )
             continue
-        text, fired = normalize(raw)
-        snaps.append(
-            SourceSnapshot(
-                vendor=slug,
-                source=source,
-                origin=origin,
-                text=text,
-                sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                fetched_at=datetime.now(timezone.utc).isoformat(),
-                volatile_rules_fired=fired,
-            )
-        )
+        (ingested,) = _ingest(raw, origin, ctype)
+        ingested.vendor, ingested.source = slug, source
+        snaps.append(ingested)
     return snaps
 
 
@@ -136,12 +184,22 @@ def store_snapshot(slug: str, snaps: list[SourceSnapshot], cfg: RunConfig) -> Pa
             manifest[snap.source] = {"error": snap.error, "origin": snap.origin}
             continue
         (run_dir / f"{snap.source}.txt").write_text(snap.text, encoding="utf-8")
-        manifest[snap.source] = {
+        entry = {
             "sha256": snap.sha256,
             "origin": snap.origin,
             "fetched_at": snap.fetched_at,
+            "raw_kind": snap.raw_kind,
+            "platform": snap.platform,
+            "portal_blocked": snap.portal_blocked,
+            "portal_evidence": snap.portal_evidence,
             "volatile_rules_fired": snap.volatile_rules_fired,
         }
+        if snap.tables:
+            (run_dir / f"{snap.source}.tables.json").write_text(
+                json.dumps(snap.tables, ensure_ascii=False), encoding="utf-8"
+            )
+            entry["tables_file"] = f"{snap.source}.tables.json"
+        manifest[snap.source] = entry
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return run_dir
 

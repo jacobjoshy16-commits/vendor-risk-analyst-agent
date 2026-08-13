@@ -100,6 +100,22 @@ Open `pending_review/loop-workspace-*.json`.
 > text and drafts language. It never decides whether something is a finding or how bad it is. Both
 > criticals came from parsed artifacts and a tenant API probe — facts you can quote back to the vendor."
 
+## Beat 7b — onboarding (30s, optional if time allows)
+
+Show `python3 vra.py webui`, or the CLI:
+
+```bash
+python3 vra.py onboard "Acme Corp" --trust-center https://acme.safebase.io --offline
+```
+
+> "How does a new vendor get in? Before this it was hand-writing YAML and guessing URLs. Now you give
+> it a name and a trust-center link, it detects the platform — SafeBase, Whistic, Vanta, a PDF —
+> tries the subprocessor parse on day one, and either AIV-03 has coverage immediately or the
+> click-through NDA is recorded as a blocker with the access-request email already drafted."
+
+Land the point from review: *"the parser that AIV-03 depends on must survive real trust centers,
+not pipe-delimited sandbox fixtures."*
+
 ## Beat 8 — honesty close (20s)
 
 Open `VALIDATION.md`, show the scoreboard, then scroll straight to Defects.

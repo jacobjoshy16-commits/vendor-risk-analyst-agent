@@ -59,12 +59,16 @@ class RunConfig:
     dry_run: bool = False
     out_dir: Path = field(default_factory=lambda: DEFAULT_OUT_DIR)
     vendors: list[str] = field(default_factory=list)  # empty = all
-    model: str = field(default_factory=lambda: os.environ.get("VRA_MODEL", "llama3.1:8b"))
+    model: str = field(default_factory=lambda: os.environ.get("VRA_MODEL", "qwen2.5:7b-instruct"))
     ollama_host: str = field(
         default_factory=lambda: os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     )
     no_probe: bool = False
     fail_on_critical: bool = True
+    webui_host: str = field(default_factory=lambda: os.environ.get("VRA_WEBUI_HOST", "0.0.0.0"))
+    webui_port: int = field(
+        default_factory=lambda: int(os.environ.get("VRA_WEBUI_PORT", "8765"))
+    )
 
     @property
     def llm_enabled(self) -> bool:

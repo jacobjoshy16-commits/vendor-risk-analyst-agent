@@ -5,7 +5,7 @@ Two backends, one interface:
 * ``OllamaBackend``  — talks to a local Ollama daemon. The intended production
   path. No vendor risk data leaves the workstation.
 * ``OfflineBackend`` — a deterministic rule-based stand-in used by ``--offline``,
-  by CI, and by anyone evaluating the repo without pulling an 8B model. It is
+  by CI, and by anyone evaluating the repo without pulling a 7B model. It is
   NOT a model: it is a small heuristic that returns the same JSON shape so the
   pipeline and the tests are runnable end to end. Output is labelled
   ``backend: offline-heuristic`` everywhere it appears, including the report,
@@ -296,11 +296,18 @@ class OfflineBackend(Backend):
         question = self._field(prompt, "control_question")
         feature = self._field(prompt, "feature")
         kind = self._field(prompt, "kind")
-        ask = (
-            "Please provide the evidence described below"
-            if kind == "gap"
-            else "Please confirm your remediation plan and target date"
-        )
+        need = self._field(prompt, "need")
+        if need:
+            # The caller (analyst.draft_outreach) supplies a precise ask — e.g.
+            # portal access for a blocked subprocessor parse. Honour it rather
+            # than regenerating a generic request.
+            ask = f"Please provide the following: {need}"
+        else:
+            ask = (
+                "Please provide the evidence described below"
+                if kind == "gap"
+                else "Please confirm your remediation plan and target date"
+            )
         return {
             "subject": f"Vendor AI risk review — {vendor} ({feature}) — control {control}",
             "body": (

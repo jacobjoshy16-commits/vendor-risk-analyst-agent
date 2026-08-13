@@ -7,6 +7,9 @@ data/
 out/
 pending_review/
 
+# Onboarding artifact cache (fetched copies of vendor trust-center pages).
+artifacts/
+
 # Python
 __pycache__/
 *.py[cod]

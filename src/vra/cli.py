@@ -37,7 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--vendor", action="append", default=[], dest="vendors",
                    help="limit the run to a vendor slug (repeatable)")
     p.add_argument("--out", type=Path, default=DEFAULT_OUT_DIR, help="report output directory")
-    p.add_argument("--model", default=None, help="Ollama model tag (default: $VRA_MODEL or llama3.1:8b)")
+    p.add_argument("--model", default=None,
+                   help="Ollama model tag (default: $VRA_MODEL or qwen2.5:7b-instruct)")
     p.add_argument("--offline", action="store_true",
                    help="no network at all: use the deterministic heuristic backend instead of Ollama")
     p.add_argument("--dry-run", action="store_true",
@@ -76,6 +77,7 @@ def run(cfg: RunConfig) -> int:
     all_gaps: list[dict] = []
     all_triages: list[dict] = []
     all_probes: list[dict] = []
+    all_parses: list[dict] = []
     new_ids: set[str] = set()
     seen_ids: set[str] = set()
 
@@ -143,6 +145,18 @@ def run(cfg: RunConfig) -> int:
         # Structured fact parsed from artifacts and the tenant API. Unlike model
         # proposals, these can drive findings because they are quotable.
         observed = observe_vendor(vendor, snaps, pres)
+        ps = observed.subprocessor_parse
+        all_parses.append({
+            "vendor": slug, "vendor_name": vendor["vendor"],
+            "source": "subprocessors",
+            "status": ps.status if ps is not None else "not_attempted",
+            "platform": ps.platform if ps is not None else None,
+            "rows": ps.rows if ps is not None else 0,
+            "reason": ps.reason if ps is not None else "",
+        })
+        if ps is not None and not ps.assessable:
+            print(f"\n      ! AIV-03 not assessable for {slug}: "
+                  f"subprocessor parse [{ps.status}] — {ps.reason}", file=sys.stderr)
         for sp in observed.uncovered_ai_subprocessors:
             evidence_by_field.setdefault("subprocessor", []).append(
                 {"source": "subprocessors", "excerpt": sp.raw_line,
@@ -191,8 +205,9 @@ def run(cfg: RunConfig) -> int:
 
     ctx = {
         "vendors": vendors, "findings": all_findings, "gaps": all_gaps,
-        "triages": all_triages, "probes": all_probes, "new_ids": new_ids,
-        "closed": closed, "store": store, "backend": backend_name,
+        "triages": all_triages, "probes": all_probes, "parses": all_parses,
+        "new_ids": new_ids, "closed": closed, "store": store,
+        "backend": backend_name,
     }
 
     text = rp.build_report(ctx, cfg)

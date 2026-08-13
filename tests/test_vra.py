@@ -11,10 +11,14 @@ can create or re-severity a finding.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+
+import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
@@ -23,7 +27,7 @@ from vra import evaluate as ev  # noqa: E402
 from vra.config import RunConfig  # noqa: E402
 from vra.llm import OfflineBackend, extract_json  # noqa: E402
 from vra.normalize import normalize, strip_volatile  # noqa: E402
-from vra.observe import parse_subprocessor_table  # noqa: E402
+from vra.observe import parse_subprocessor_table, parse_subprocessors  # noqa: E402
 from vra.triage import CHANGE_TYPES, _schema_check  # noqa: E402
 
 
@@ -418,6 +422,366 @@ class TestGroundTruthScenario(unittest.TestCase):
             data = json.loads(backend.generate("sys", prompt, RunConfig())[0])
             self.assertFalse(data["ai_relevant"],
                              f"negative control fired on {source}: {data}")
+
+
+class TestRealWorldSubprocessorParsing(unittest.TestCase):
+    """AIV-03 depends on this parse, so it must survive real trust centers:
+    nested HTML tables, PDFs, and SafeBase/Whistic/Vanta portals with a
+    click-through NDA. A failed parse is a gap with drafted outreach — never a
+    silent pass.
+    """
+
+    NESTED_HTML = """<!DOCTYPE html><html><body>
+    <h1>Subprocessors</h1>
+    <p>Effective 2026-07-01.</p>
+    <table>
+      <thead><tr><th>Subprocessor</th><th>Service provided</th><th>Location</th><th>BAA coverage</th></tr></thead>
+      <tbody>
+        <tr><td><a href="https://openai.com">OpenAI, L.L.C.</a></td><td>Inference for <strong>Copilot</strong> summarization</td><td>United States</td><td><strong>Pending</strong></td></tr>
+        <tr><td>AWS</td><td>Cloud hosting</td><td>US, EU</td><td>Yes</td></tr>
+        <tr><td>Twilio Inc.</td><td>SMS delivery</td><td>US</td><td>Yes</td></tr>
+      </tbody>
+    </table>
+    </body></html>"""
+
+    GATED_HTML = """<!DOCTYPE html><html><body>
+    <p>You're about to be redirected to continue to SafeBase.</p>
+    <p>This content is available under a non-disclosure agreement. Click to accept and continue.</p>
+    <button>I agree — request access to the subprocessor list</button>
+    </body></html>"""
+
+    @staticmethod
+    def pdf_bytes() -> bytes:
+        content = (
+            b"BT /F1 12 Tf 72 740 Td 14 TL\n"
+            b"(Entity | Purpose | Region | BAA) Tj T*\n"
+            b"(Anthropic PBC | Claude inference for Copilot | US | Yes) Tj T*\n"
+            b"(OpenAI L.L.C. | Answer generation | US | Pending) Tj T*\n"
+            b"ET"
+        )
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+            b"/Resources << /Font << /F1 5 0 R >> >> >>",
+            b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ]
+        out = bytearray(b"%PDF-1.4\n")
+        offsets = [0]
+        for i, obj in enumerate(objects, start=1):
+            offsets.append(len(out))
+            out += b"%d 0 obj\n" % i + obj + b"\nendobj\n"
+        xref = len(out)
+        out += b"xref\n0 %d\n" % (len(objects) + 1)
+        out += b"0000000000 65535 f \n"
+        for off in offsets[1:]:
+            out += b"%010d 00000 n \n" % off
+        out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+            len(objects) + 1, xref)
+        return bytes(out)
+
+    def test_structured_html_table_with_nested_markup(self):
+        """Real HTML tables: links and bold inside cells must flatten, not break."""
+        from vra.extract import extract_html_tables
+
+        tables = extract_html_tables(self.NESTED_HTML)
+        rows, status = parse_subprocessors("", source="subprocessors", tables=tables)
+        names = [r.name for r in rows]
+        self.assertIn("OpenAI, L.L.C.", names, f"nested cell lost; parsed: {names}")
+        self.assertIn("AWS", names)
+        self.assertEqual(status.status, "parsed")
+        self.assertEqual(status.rows, 3)
+        openai = next(r for r in rows if r.name == "OpenAI, L.L.C.")
+        self.assertTrue(openai.is_ai_related)
+        self.assertFalse(openai.baa_covered, "'Pending' must not count as coverage")
+
+    def test_pipe_table_without_header_still_parses(self):
+        """Backward compat: positional fallback when a pipe table has no header."""
+        rows = parse_subprocessor_table("AWS | Hosting | US | Yes", "subprocessors")
+        self.assertEqual([r.name for r in rows], ["AWS"])
+
+    def test_prose_rows_require_header(self):
+        """Whitespace-aligned prose must not invent subprocessors."""
+        prose = ("Last updated 2026-07-01   Contact privacy@acme.example   "
+                 "We engage subprocessors in the ordinary course of business")
+        rows, status = parse_subprocessors(prose, source="subprocessors", raw_kind="pdf")
+        self.assertEqual(rows, [], f"prose invented rows: {rows}")
+        self.assertEqual(status.status, "empty")
+
+    # -- portals ----------------------------------------------------------
+    def test_detect_safebase_portal(self):
+        from vra.extract import detect_trust_platform
+
+        platform, blocked, evidence = detect_trust_platform(
+            "<html><script src='https://app.safebase.io/sb-assets/embed.js'></script>"
+            "<p>continue to safebase</p></html>",
+            page_url="https://acme.safebase.io/security",
+        )
+        self.assertEqual(platform, "safebase")
+        self.assertTrue(blocked)
+        self.assertTrue(evidence)
+
+    def test_detect_whistic_and_vanta(self):
+        from vra.extract import detect_trust_platform
+
+        w = detect_trust_platform("<html>whistic-profile</html>", page_url="https://profile.whistic.com/x")
+        self.assertEqual(w[0], "whistic")
+        self.assertTrue(w[1])
+        v = detect_trust_platform("<html>vanta-portal</html>", page_url="https://trust.vanta.com/acme")
+        self.assertEqual(v[0], "vanta")
+        self.assertTrue(v[1])
+
+    def test_generic_nda_wall_detected(self):
+        from vra.extract import detect_trust_platform
+
+        platform, blocked, _ = detect_trust_platform(
+            "<html><p>This content is available under a non-disclosure agreement.</p></html>"
+        )
+        self.assertEqual(platform, "generic")
+        self.assertTrue(blocked)
+
+    def test_gated_portal_parse_is_blocked(self):
+        rows, status = parse_subprocessors(
+            self.GATED_HTML, source="subprocessors",
+            platform="safebase", portal_blocked=True,
+        )
+        self.assertEqual(rows, [])
+        self.assertEqual(status.status, "blocked")
+        self.assertIn("safebase", status.reason)
+        self.assertIn("NDA", status.reason)
+
+    def test_portal_page_with_table_parses_but_notes_verification(self):
+        from vra.extract import extract_html_tables
+
+        tables = extract_html_tables(self.NESTED_HTML)
+        rows, status = parse_subprocessors(
+            "", source="subprocessors", tables=tables,
+            platform="safebase", portal_blocked=True,
+        )
+        self.assertEqual(status.status, "parsed")
+        self.assertEqual(len(rows), 3)
+        self.assertIn("verify", status.reason)
+
+    def test_blocked_parse_raises_aiv03_gap_not_silent_pass(self):
+        """The reviewer's core complaint: a gate must produce a gap + outreach,
+        never a quiet pass that lets a provider slide in unseen."""
+        vendor = {"vendor": "Gated Co", "slug": "gated-co", "tier": "high", "ai_surface": []}
+        from vra.observe import ObservedState, ParseStatus
+
+        observed = ObservedState(vendor="gated-co")
+        observed.subprocessor_parse = ParseStatus(
+            "blocked", platform="safebase",
+            reason="hosted on the safebase portal behind a click-through NDA",
+        )
+        findings, gaps = ev.evaluate_vendor(vendor, ev.load_controls(), observed)
+        self.assertEqual(findings, [], "blocked parse must not invent a finding")
+        aiv03 = [g for g in gaps if g.control.id == "AIV-03"]
+        self.assertEqual(len(aiv03), 1)
+        self.assertEqual(aiv03[0].subject, "subprocessor-list-access")
+
+    def test_missing_subprocessor_source_flagged(self):
+        from vra.observe import observe_vendor
+
+        vendor = {"vendor": "No List Co", "slug": "no-list-co",
+                  "watch": {"changelog": "sandbox/vendors/loop-workspace/snapshots/v1/changelog.html"}}
+        observed = observe_vendor(vendor, snapshots=[], probe_result=None)
+        self.assertEqual(observed.subprocessor_parse.status, "missing")
+
+    # -- PDFs -------------------------------------------------------------
+    def test_pdf_parsed_when_pypdf_available(self):
+        from vra.extract import extract_pdf_text
+
+        text, err = extract_pdf_text(self.pdf_bytes())
+        self.assertIsNone(err)
+        self.assertIn("OpenAI L.L.C.", text)
+
+    def test_pdf_without_pypdf_is_explicit_error_gap(self):
+        """No pypdf installed -> error snapshot -> AIV-03 gap. Never silent."""
+        import builtins
+        from vra.extract import extract_pdf_text
+        from vra.observe import ObservedState, ParseStatus
+
+        real_import = builtins.__import__
+        def blocked(name, *a, **k):
+            if name == "pypdf" or name.startswith("pypdf."):
+                raise ImportError("No module named 'pypdf' (simulated)")
+            return real_import(name, *a, **k)
+
+        builtins.__import__ = blocked
+        try:
+            text, err = extract_pdf_text(self.pdf_bytes())
+        finally:
+            builtins.__import__ = real_import
+        self.assertEqual(text, "")
+        self.assertIn("pypdf", err)
+
+        vendor = {"vendor": "PDF Co", "slug": "pdf-co", "tier": "high", "ai_surface": []}
+        observed = ObservedState(vendor="pdf-co")
+        observed.subprocessor_parse = ParseStatus("error", reason=err)
+        findings, gaps = ev.evaluate_vendor(vendor, ev.load_controls(), observed)
+        self.assertEqual(findings, [])
+        self.assertIn("AIV-03", [g.control.id for g in gaps])
+
+    def test_pdf_ingestion_through_watch_snapshots(self):
+        """Full chain: bytes -> snapshot -> observe -> AIV-03 finding for the
+        uncovered OpenAI row."""
+        from vra.watch import _ingest, snapshot_vendor
+        from vra.observe import observe_vendor
+
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            pdf = tmp / "subprocessors.pdf"
+            pdf.write_bytes(self.pdf_bytes())
+            vendor = {"vendor": "PDF Co", "slug": "pdf-co", "tier": "high",
+                      "ai_surface": [], "watch": {"subprocessors": str(pdf)}}
+            snaps = snapshot_vendor(vendor, RunConfig(offline=True))
+            self.assertIsNone(snaps[0].error)
+            self.assertEqual(snaps[0].raw_kind, "pdf")
+            observed = observe_vendor(vendor, snaps, None)
+            self.assertEqual(observed.subprocessor_parse.status, "parsed")
+            names = [s.name for s in observed.subprocessors]
+            self.assertIn("OpenAI L.L.C.", names)
+            self.assertIn("Anthropic PBC", names)
+            uncovered = [s.name for s in observed.uncovered_ai_subprocessors]
+            self.assertEqual(uncovered, ["OpenAI L.L.C."])
+        finally:
+            shutil.rmtree(tmp)
+
+
+class TestOnboarding(unittest.TestCase):
+    """The real gap the project had: nothing turned a vendor + trust-center URL
+    into a register. Onboarding must scaffold, parse day-one, and flag gates."""
+
+    TRUST_HTML = """<!DOCTYPE html><html><body><h1>Trust Center</h1>
+    <ul>
+      <li><a href="/security/subprocessors">Subprocessors</a></li>
+      <li><a href="/security/release-notes">Release notes</a></li>
+      <li><a href="https://acme.example/legal/dpa.pdf">Data Processing Addendum (PDF)</a></li>
+    </ul></body></html>"""
+
+    SUBPROCESSORS_HTML = """<!DOCTYPE html><html><body><h1>Subprocessors</h1>
+    <table>
+      <tr><th>Entity</th><th>Service provided</th><th>Region</th><th>BAA coverage</th></tr>
+      <tr><td>OpenAI, L.L.C.</td><td>Inference for Copilot</td><td>US</td><td>Pending</td></tr>
+      <tr><td>AWS</td><td>Hosting</td><td>US</td><td>Yes</td></tr>
+    </table></body></html>"""
+
+    GATED_HTML = """<!DOCTYPE html><html><body>
+    <p>You're about to be redirected to continue to SafeBase.</p>
+    <p>This content is available under a non-disclosure agreement.</p>
+    </body></html>"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / "vendors").mkdir()
+        (self.tmp / "fixtures").mkdir()
+        (self.tmp / "fixtures" / "trust_center.html").write_text(self.TRUST_HTML)
+        (self.tmp / "fixtures" / "subprocessors.html").write_text(self.SUBPROCESSORS_HTML)
+        (self.tmp / "fixtures" / "gated.html").write_text(self.GATED_HTML)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_onboard_scaffolds_register_and_parses_day_one(self):
+        from vra.onboard import onboard_vendor
+
+        res = onboard_vendor(
+            "Acme Corp", tier="critical", category="collaboration",
+            trust_center_url=str(self.tmp / "fixtures" / "trust_center.html"),
+            urls={"subprocessors": str(self.tmp / "fixtures" / "subprocessors.html")},
+            cfg=RunConfig(offline=True),
+            _root=self.tmp,
+        )
+        self.assertEqual(res.parse_status.status, "parsed")
+        self.assertEqual(res.parse_status.rows, 2)
+        self.assertEqual(res.platform, None)  # not a portal
+        names = [r.name for r in res.parsed_rows]
+        self.assertIn("OpenAI, L.L.C.", names)
+        self.assertTrue(any(r.name == "OpenAI, L.L.C." and not r.baa_covered
+                            for r in res.parsed_rows))
+
+        # Register file written with a seeded AI feature and cached watch paths.
+        register = yaml.safe_load((self.tmp / "vendors" / "acme-corp.yaml").read_text())
+        self.assertEqual(register["slug"], "acme-corp")
+        self.assertEqual(register["tier"], "critical")
+        self.assertEqual(register["contract"]["baa_on_file"], False)
+        self.assertTrue(register["ai_surface"], "expected a seeded AI feature")
+        self.assertEqual(register["ai_surface"][0]["model_provider"], "OpenAI, L.L.C.")
+        self.assertIn("onboarding", register)
+        self.assertEqual(register["onboarding"]["subprocessor_parse"]["status"], "parsed")
+        sp_watch = register["watch"]["subprocessors"]
+        self.assertIn("artifacts/vendors/acme-corp/snapshots/{version}/subprocessors", sp_watch)
+        self.assertTrue((self.tmp / "artifacts/vendors/acme-corp/snapshots/v1").exists())
+
+    def test_onboard_gated_portal_drafts_outreach(self):
+        from vra.onboard import onboard_vendor
+
+        res = onboard_vendor(
+            "Gated Co", tier="high",
+            urls={"subprocessors": str(self.tmp / "fixtures" / "gated.html")},
+            cfg=RunConfig(offline=True),
+            _root=self.tmp,
+        )
+        self.assertEqual(res.parse_status.status, "blocked")
+        self.assertTrue(res.blockers)
+        self.assertIsNotNone(res.outreach_path)
+        self.assertTrue(res.outreach_path.exists())
+        body = res.outreach_path.read_text()
+        self.assertIn("subprocessor", body.lower())
+        self.assertIn("guest or NDA-gated access", body)
+
+    def test_onboard_no_subprocessors_url_blocked(self):
+        from vra.onboard import onboard_vendor
+
+        res = onboard_vendor(
+            "NoList Co", tier="medium",
+            trust_center_url=str(self.tmp / "fixtures" / "trust_center.html"),
+            cfg=RunConfig(offline=True),
+            _root=self.tmp,
+        )
+        self.assertEqual(res.parse_status.status, "missing")
+        self.assertTrue(res.blockers)
+
+    def test_onboard_dry_run_persists_nothing(self):
+        from vra.onboard import onboard_vendor
+
+        res = onboard_vendor(
+            "Dry Co", tier="high",
+            urls={"subprocessors": str(self.tmp / "fixtures" / "subprocessors.html")},
+            cfg=RunConfig(offline=True, dry_run=True),
+            _root=self.tmp,
+        )
+        self.assertIsNone(res.register_path)
+        self.assertIsNone(res.outreach_path)
+        self.assertFalse((self.tmp / "vendors" / "dry-co.yaml").exists())
+
+    def test_onboard_refuses_duplicate_slug(self):
+        from vra.onboard import onboard_vendor
+
+        onboard_vendor("Acme Corp", tier="high",
+                       urls={"subprocessors": str(self.tmp / "fixtures" / "subprocessors.html")},
+                       cfg=RunConfig(offline=True), _root=self.tmp)
+        with self.assertRaises(ValueError):
+            onboard_vendor("Acme Corp", tier="high",
+                           urls={"subprocessors": str(self.tmp / "fixtures" / "subprocessors.html")},
+                           cfg=RunConfig(offline=True), _root=self.tmp)
+
+
+class TestModelDefaultAndWebUI(unittest.TestCase):
+    def test_default_model_is_qwen25_7b_instruct(self):
+        self.assertEqual(RunConfig().model, "qwen2.5:7b-instruct")
+
+    def test_webui_summary_and_vendors(self):
+        from vra.webui import _list_vendors, _summary
+
+        s = _summary()
+        self.assertIn("vendors", s)
+        self.assertIn("blocked_parses", s)
+        self.assertIn("model", s)
+        v = _list_vendors()
+        self.assertGreaterEqual(len(v), 3)
+        self.assertTrue(all("slug" in x and "parse" in x for x in v))
 
 
 if __name__ == "__main__":

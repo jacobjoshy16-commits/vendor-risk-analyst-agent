@@ -184,8 +184,39 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
         a("")
 
     # ---------------------------------------------------------------- 4b
+    a("## 5. Subprocessor parse coverage (AIV-03)")
+    a("")
+    a("_AIV-03 — every model provider named as a subprocessor and BAA-covered — can only be "
+      "assessed if the subprocessor disclosure can actually be read. This table records what the "
+      "tool saw, not just what it parsed._")
+    a("")
+    parses = ctx.get("parses") or []
+    if not parses:
+        a("_No vendor in scope publishes a subprocessor disclosure through a watch source._")
+        a("")
+    else:
+        a("| Vendor | Source | Status | Platform | Rows |")
+        a("| --- | --- | --- | --- | --- |")
+        for p in parses:
+            status = p["status"]
+            mark = {"parsed": "✅ parsed", "blocked": "🚧 blocked", "empty": "⚠️ empty",
+                    "error": "⛔ error", "missing": "⚠️ missing",
+                    "not_attempted": "—"}.get(status, status)
+            a(f"| {_esc(p['vendor_name'])} | `{p['source']}` | {mark} | "
+              f"{_esc(p.get('platform') or '—')} | {p['rows']} |")
+        a("")
+        unparsed = [p for p in parses if p["status"] not in ("parsed", "not_attempted")]
+        if unparsed:
+            a("**Not assessable this run** — an AIV-03 information gap (with a drafted outreach "
+              "requesting the subprocessor list or portal access) has been raised for each of these:")
+            a("")
+            for p in unparsed:
+                a(f"- `{p['vendor_name']}` — **{p['status']}**: {p['reason']}")
+            a("")
+
+    # ---------------------------------------------------------------- 5
     probe_ran = [p for p in probes if p["ran"]]
-    a("## 5. In-tenant probe")
+    a("## 6. In-tenant probe")
     a("")
     if not probe_ran:
         skipped = [p for p in probes if p.get("error")]
@@ -223,7 +254,7 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
                 a("")
 
     # ---------------------------------------------------------------- 5
-    a("## 6. POA&M")
+    a("## 7. POA&M")
     a("")
     poam_rows = sorted(
         [f for f in open_findings] + [g for g in gaps],
@@ -244,7 +275,7 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
         a("")
 
     # ---------------------------------------------------------------- 6
-    a("## 7. Limitations")
+    a("## 8. Limitations")
     a("")
     a("What this report is, and what it is not:")
     a("")
@@ -269,6 +300,12 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
       "A vendor with many gaps is not low risk — it is unassessed.")
     a("- **Diff-blind to unpublished change.** If a vendor changes model providers without updating any "
       "watched page, this tool will not see it.")
+    a("- **Gated disclosures stop at the gate.** Subprocessor lists behind SafeBase/Whistic/Vanta "
+      "click-through NDAs or login walls are reported as blocked (section 5) with a drafted outreach, "
+      "not silently skipped — but the tool cannot read what it is not granted access to.")
+    a("- **PDF and portal parsing are best-effort.** HTML tables and PDFs are parsed structurally; "
+      "scanned PDFs, images, or tables nested inside prose still require manual review (flagged as "
+      "`empty` in section 5).")
     a("- **Volatile-content stripping is heuristic.** Timestamps, session tokens, build numbers, render "
       "times and rotating banners are normalized away before hashing. A novel volatile element could "
       "still produce a false change on first encounter.")
@@ -330,6 +367,7 @@ def write_report(text: str, ctx: dict, cfg: RunConfig) -> Path | None:
                 "gaps": ctx["gaps"],
                 "changes": ctx["triages"],
                 "probes": ctx["probes"],
+                "subprocessor_parses": ctx.get("parses", []),
             },
             indent=2,
             default=str,
