@@ -166,7 +166,12 @@ PAGE = """<!DOCTYPE html>
       <p class="muted">Pulled from the IdP API (Okta / Auth0), not typed into YAML. Token stays in an environment variable — never paste it here.</p>
       <form id="disc-form" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end;margin:10px 0 16px">
         <div><label>Provider</label>
-          <select id="d-provider"><option value="okta">Okta</option><option value="auth0">Auth0</option></select>
+          <select id="d-provider">
+            <option value="okta">Okta (your IdP)</option>
+            <option value="auth0">Auth0 (your IdP)</option>
+            <option value="atlassian">Atlassian (Rovo / tokens)</option>
+            <option value="slack">Slack (bots)</option>
+          </select>
         </div>
         <div><label>Org URL / domain</label>
           <input id="d-base" placeholder="https://your-org.okta.com">

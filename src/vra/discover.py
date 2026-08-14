@@ -36,12 +36,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vra discover",
         description=(
-            "Pull every non-human identity from an Okta or Auth0 tenant. "
-            "Paginates the management API. Does not invent identities."
+            "Pull every non-human identity from a vendor API "
+            "(Okta, Auth0, Atlassian, Slack). Paginates. Does not invent identities."
         ),
     )
-    p.add_argument("--provider", choices=("okta", "auth0"), default=None,
-                   help="IdP type. Inferred from --base-url / --domain if omitted.")
+    p.add_argument("--provider", choices=("okta", "auth0", "atlassian", "slack"), default=None,
+                   help="Vendor API: okta, auth0, atlassian, slack. Inferred from --base-url if omitted.")
     p.add_argument("--base-url", default=None,
                    help="Okta org URL (https://org.okta.com) or Auth0 issuer")
     p.add_argument("--domain", default=None,
@@ -92,7 +92,7 @@ def _print_estate(estate: IdPEstate, nhis: list[dict]) -> None:
             f"{writes[:28]:<28} "
             f"{nhi.get('discovered_via') or nhi.get('source') or ''}"
         )
-    print(f"\n{len(nhis)} identit{'y' if len(nhis) == 1 else 'ies'} discovered from the IdP API")
+    print(f"\n{len(nhis)} identit{'y' if len(nhis) == 1 else 'ies'} discovered from the {estate.provider} API")
 
 
 def _estate_to_nhis(estate: IdPEstate) -> list[dict]:
@@ -132,7 +132,11 @@ def _discover_raw(args: argparse.Namespace, cfg: RunConfig) -> tuple[IdPEstate |
         "provider": provider,
         "base_url": base,
         "domain": args.domain or base,
-        "token_env": args.token_env or ("AUTH0_MGMT_TOKEN" if provider == "auth0" else "OKTA_API_TOKEN"),
+        "token_env": args.token_env or {
+            "auth0": "AUTH0_MGMT_TOKEN",
+            "atlassian": "ATLASSIAN_API_TOKEN",
+            "slack": "SLACK_BOT_TOKEN",
+        }.get(provider or "", "OKTA_API_TOKEN"),
         "client_id_env": args.client_id_env,
         "client_secret_env": args.client_secret_env,
         "audience": args.audience,

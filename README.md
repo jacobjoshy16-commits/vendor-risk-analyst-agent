@@ -23,7 +23,7 @@ This tool is the independent monitor for that gap.
 
 | You get | What that is |
 | --- | --- |
-| **A multi-vendor NHI inventory** | Every service account / OAuth app / agent principal **pulled from Auth0 or Okta** (paginated — the full list, not a hand-copied curl). Cross-tenant ones (vendor A’s client living in vendor B’s IdP) included. You do not type them into YAML. |
+| **A multi-vendor NHI inventory** | Every service account / OAuth app / agent / bot pulled from **that vendor’s API** — Atlassian, Slack, Okta, Auth0, … — paginated, not typed into YAML. Two planes: identities inside the vendor product, and vendor apps that landed in your IdP. |
 | **A daemon** | `vra.py monitor` — the same assess, on a timer, while the PC is on. A critical is a finding, not a crash. |
 | **A NIST 800-53 / SOC 2 score** | 8 identity controls (`NHI-*`) + 15 feature controls (`AIV-*`). Severity and whether something is a finding come from YAML + code. **The language model cannot create or re-severity a finding.** |
 | **A draft pack** | Narrative, vendor email, POA&M row — citing 800-53 and SOC 2, not a chatbot opinion. |
@@ -47,8 +47,8 @@ This tool is the independent monitor for that gap.
 ```
 1. Bootstrap each vendor     python3 vra.py bootstrap Slack --offline
 2. Accept the proposal       edit vendors/{slug}.yaml  (model never writes it)
-3. Point probe: at the IdP   Okta org URL or Auth0 domain + token env
-4. Discover the identities   python3 vra.py discover --provider okta --base-url https://org.okta.com
+3. Point probe: at each vendor API   Atlassian / Slack / Okta / Auth0 + token env
+4. Discover the identities           python3 vra.py discover --provider atlassian --base-url https://api.atlassian.com
 5. Leave the monitor up      python3 vra.py monitor --offline --webui --interval 15m
 6. Read the pack             out/latest.md
 7. List the identities       python3 vra.py nhis
@@ -235,7 +235,8 @@ vra.py                  entry point
 nhi_controls.yaml       8 NHI-* controls — the identity set (800-53 + SOC 2)
 controls.yaml           15 AIV-* controls — the feature set (800-53 + SOC 2)
 vendors/*.yaml          per-vendor register; nhis: is overlay, not the list
-src/vra/idp.py          Auth0 / Okta client — paginates the full NHI list
+src/vra/idp.py          IdP connectors (Okta / Auth0) + dispatcher
+src/vra/connectors.py   vendor connectors (Atlassian, Slack, …)
 src/vra/discover.py     `vra.py discover`
 src/vra/monitor.py      the daemon
 src/vra/nhi.py          inventory + NHI-* evaluation

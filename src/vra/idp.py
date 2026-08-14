@@ -278,13 +278,17 @@ def next_link(headers: dict[str, str], *, base: str = "") -> str | None:
 def infer_provider(block: dict[str, Any] | None, *, base_url: str = "") -> str:
     block = block or {}
     explicit = str(block.get("provider") or "").strip().lower()
-    if explicit in {"okta", "auth0"}:
+    if explicit in {"okta", "auth0", "atlassian", "slack"}:
         return explicit
     url = (base_url or block.get("base_url") or block.get("domain") or "").lower()
     if "auth0.com" in url or ".auth0." in url:
         return "auth0"
     if "okta.com" in url or "oktapreview.com" in url or "okta-" in url:
         return "okta"
+    if "atlassian.com" in url or "atlassian.net" in url:
+        return "atlassian"
+    if "slack.com" in url:
+        return "slack"
     kind = str(block.get("type") or "").lower()
     if "identity" in kind:
         return "okta"
@@ -365,6 +369,14 @@ def classify_kind(app: dict[str, Any], provider: str) -> str:
     if provider == "auth0":
         if str(app.get("app_type") or "") == "non_interactive":
             return "service_account"
+        return "oauth_app"
+    if provider == "slack":
+        if app.get("is_bot") or str(app.get("app_type") or "") == "bot":
+            return "bot"
+        return "oauth_app"
+    if provider == "atlassian":
+        if str(app.get("app_type") or "") in {"agent", "rovo"}:
+            return "agent_principal"
         return "oauth_app"
     mode = str(app.get("signOnMode") or "").upper()
     if mode in {"SERVICE", "SERVICE_ACCOUNT", "API_SERVICES"}:
@@ -760,8 +772,38 @@ def discover_estate(
     fetch_tokens: bool = True,
     fetch_users: bool = False,
     user_search: str | None = None,
+    org_id: str | None = None,
 ) -> IdPEstate:
     provider = (provider or "okta").lower()
+    if provider == "atlassian":
+        if not token:
+            estate = IdPEstate(provider="atlassian", base_url=base_url or "https://api.atlassian.com")
+            estate.error = "no Atlassian API token"
+            return estate
+        from .connectors import discover_atlassian
+
+        return discover_atlassian(
+            base_url=base_url or "https://api.atlassian.com",
+            token=token,
+            transport=transport,
+            org_id=org_id,
+            page_limit=page_limit,
+            max_pages=max_pages,
+        )
+    if provider == "slack":
+        if not token:
+            estate = IdPEstate(provider="slack", base_url=base_url or "https://slack.com")
+            estate.error = "no Slack token"
+            return estate
+        from .connectors import discover_slack
+
+        return discover_slack(
+            base_url=base_url or "https://slack.com",
+            token=token,
+            transport=transport,
+            page_limit=min(page_limit, 200),
+            max_pages=max_pages,
+        )
     if provider == "auth0":
         if not token:
             estate = IdPEstate(provider="auth0", base_url=_auth0_base(base_url))
@@ -802,11 +844,24 @@ def _block_options(block: dict[str, Any]) -> dict[str, Any]:
         "fetch_tokens": block.get("fetch_tokens", True),
         "fetch_users": bool(block.get("fetch_users")),
         "user_search": block.get("user_search"),
+        "org_id": block.get("org_id"),
     }
 
 
 def _live_token(block: dict[str, Any], provider: str, transport: Transport, base: str) -> tuple[str | None, str | None]:
     """Resolve a management token from the environment. Never persist it."""
+    if provider == "atlassian":
+        env_name = block.get("token_env") or "ATLASSIAN_API_TOKEN"
+        token = os.environ.get(env_name, "")
+        if not token:
+            return None, f"no API token in ${env_name}; skipping Atlassian discovery"
+        return token, None
+    if provider == "slack":
+        env_name = block.get("token_env") or "SLACK_BOT_TOKEN"
+        token = os.environ.get(env_name, "") or os.environ.get("SLACK_TOKEN", "")
+        if not token:
+            return None, f"no Slack token in ${env_name} (or $SLACK_TOKEN)"
+        return token, None
     if provider == "auth0":
         ready_env = block.get("token_env") or "AUTH0_MGMT_TOKEN"
         ready = os.environ.get(ready_env, "")
@@ -881,7 +936,7 @@ def discover_from_recorded(
     if not base:
         return None, "recorded page set has no base_url"
     options = _block_options(block)
-    for key in ("page_limit", "max_pages", "max_grant_fetches", "fetch_grants", "fetch_tokens", "fetch_users"):
+    for key in ("page_limit", "max_pages", "max_grant_fetches", "fetch_grants", "fetch_tokens", "fetch_users", "org_id"):
         if key in blob:
             options[key] = blob[key]
     # Recorded sets do not need a real token; the walker still sends the header.

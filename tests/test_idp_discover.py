@@ -83,6 +83,8 @@ class TestLinkAndProvider(unittest.TestCase):
         self.assertEqual(infer_provider({}, base_url="https://x.us.auth0.com"), "auth0")
         self.assertEqual(infer_provider({}, base_url="https://org.okta.com"), "okta")
         self.assertEqual(infer_provider({"type": "identity_provider_api"}), "okta")
+        self.assertEqual(infer_provider({}, base_url="https://api.atlassian.com"), "atlassian")
+        self.assertEqual(infer_provider({}, base_url="https://slack.com"), "slack")
 
     def test_slug_from_base(self):
         self.assertEqual(slug_from_base("https://acme.okta.com"), "acme-okta-com")
@@ -356,6 +358,62 @@ class TestSameWalkerLiveAndRecorded(unittest.TestCase):
             [a["id"] for a in live_shaped.applications],
             [a["id"] for a in recorded.applications],
         )
+
+
+class TestVendorConnectors(unittest.TestCase):
+    """NHIs live inside vendor products, not only in Okta."""
+
+    def test_atlassian_pulls_tokens_and_service_accounts_not_humans(self):
+        estate, err = discover_from_recorded(REPO / "sandbox/probe/idp/atlassian_pages.json")
+        self.assertIsNone(err)
+        assert estate is not None
+        self.assertEqual(estate.provider, "atlassian")
+        nhis = _extract_nhis(estate.to_probe_blob())
+        ids = {n["id"] for n in nhis}
+        self.assertIn("tok-rovo-mcp-01", ids)
+        self.assertIn("svc-rovo-writer", ids)
+        self.assertNotIn("aaaaaaaaaaaaaaaaaaaaaaaa", ids)  # Jane Human
+        kinds = {n["id"]: n["kind"] for n in nhis}
+        self.assertEqual(kinds["tok-rovo-mcp-01"], "api_key")
+        self.assertEqual(kinds["svc-rovo-writer"], "service_account")
+        self.assertTrue(any("Rovo" in w and "not published" in w for w in estate.warnings))
+
+    def test_atlassian_does_not_call_invented_rovo_agents_endpoint(self):
+        from vra.idp import load_recorded_transport
+        from vra.connectors import discover_atlassian
+
+        transport, _, base = load_recorded_transport(
+            REPO / "sandbox/probe/idp/atlassian_pages.json"
+        )
+        estate = discover_atlassian(
+            base_url=base, token="recorded", transport=transport, org_id="org-acme-1",
+        )
+        urls = [u for _, u in transport.calls]
+        self.assertFalse(any("/rovo/" in u for u in urls))
+        self.assertTrue(any("api-tokens" in u for u in urls))
+        self.assertIsNone(estate.error)
+
+    def test_slack_lists_bots_skips_humans_and_slackbot(self):
+        estate, err = discover_from_recorded(REPO / "sandbox/probe/idp/slack_pages.json")
+        self.assertIsNone(err)
+        assert estate is not None
+        nhis = _extract_nhis(estate.to_probe_blob())
+        ids = {n["id"] for n in nhis}
+        self.assertEqual(ids, {"B0ROVO1", "B0ASSIST"})
+        self.assertTrue(all(n["kind"] == "bot" for n in nhis))
+        self.assertNotIn("U00HUMAN", ids)
+        self.assertNotIn("USLACKBOT", ids)
+
+    def test_same_pattern_no_yaml_for_atlassian(self):
+        estate, _ = discover_from_recorded(REPO / "sandbox/probe/idp/atlassian_pages.json")
+        assert estate is not None
+        nhis = _extract_nhis(estate.to_probe_blob())
+        vendor = {"vendor": "Atlassian", "slug": "atlassian", "tier": "high", "nhis": []}
+        merged = discover_nhis(
+            vendor, type("P", (), {"ran": True, "nhis": nhis})(), portfolio=[vendor],
+        )
+        self.assertGreaterEqual(len(merged), 2)
+        self.assertTrue(all(n.get("source") == "observed" for n in merged))
 
 
 if __name__ == "__main__":

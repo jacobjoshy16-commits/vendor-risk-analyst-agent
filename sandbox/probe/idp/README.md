@@ -9,6 +9,8 @@ including `Link: rel="next"` (Okta) or `page` / `include_totals` (Auth0).
 ```bash
 python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json --dry-run
 python3 vra.py discover --fixture sandbox/probe/idp/auth0_pages.json --dry-run
+python3 vra.py discover --fixture sandbox/probe/idp/atlassian_pages.json --dry-run
+python3 vra.py discover --fixture sandbox/probe/idp/slack_pages.json --dry-run
 ```
 
 A real tenant is:
