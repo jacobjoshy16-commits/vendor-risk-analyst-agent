@@ -175,6 +175,8 @@ class OfflineBackend(Backend):
             return json.dumps(self._narrative(prompt)), None
         if "TASK: VENDOR_OUTREACH" in prompt:
             return json.dumps(self._outreach(prompt)), None
+        if "TASK: BOOTSTRAP_REGISTER" in prompt:
+            return json.dumps(self._bootstrap(prompt)), None
         return json.dumps({}), "offline backend: unknown task"
 
     # -- triage -----------------------------------------------------------
@@ -274,6 +276,37 @@ class OfflineBackend(Backend):
     def _field(prompt: str, key: str) -> str:
         m = re.search(rf"^{re.escape(key)}:\s*(.+)$", prompt, re.MULTILINE)
         return m.group(1).strip() if m else ""
+
+    def _bootstrap(self, prompt: str) -> dict[str, Any]:
+        """Propose an initial ai_surface from FULL artifact text, not a diff."""
+        low = prompt.lower()
+        features: list[dict[str, Any]] = []
+        for name, keys in (
+            ("OpenAI", ("openai",)),
+            ("Anthropic", ("anthropic",)),
+            ("Perplexity", ("perplexity",)),
+            ("Google", ("vertex ai", "google llc", "google cloud")),
+        ):
+            if any(k in low for k in keys):
+                features.append({
+                    "feature": f"AI service via {name}",
+                    "status": "available",
+                    "autonomy": "unknown",
+                    "model_provider": name,
+                    "human_in_loop": "unknown",
+                    "training_on_customer_data": "unknown",
+                    "evidence_excerpt": name,
+                })
+        if any(t in low for t in self.AGENT_TERMS) and features:
+            features[0]["autonomy"] = "acts"
+            features[0]["human_in_loop"] = False
+        return {
+            "features": features[:5],
+            "notes": (
+                "Offline heuristic proposed features from named model providers "
+                "in the full artifact text. Quarantined for human review."
+            ),
+        }
 
     def _narrative(self, prompt: str) -> dict[str, Any]:
         vendor = self._field(prompt, "vendor")

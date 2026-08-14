@@ -1,0 +1,12 @@
+Salesforce Infrastructure and Sub-processors
+Published: July 29, 2026
+
+Slack (a Salesforce Covered Service) engages the following subprocessors to process Customer Data.
+
+Entity | Purpose of Processing | Location of Processing
+Amazon Web Services, Inc. | Cloud infrastructure hosting for Slack | United States, Germany, Japan, Australia
+Google LLC | Analytics and workspace integrations | United States
+Twilio Inc. | SMS delivery for two-factor authentication | United States
+OpenAI, L.L.C. | Slack AI summarization and search (when enabled) | United States
+Anthropic PBC | Slack AI agent features (when enabled) | United States
+Cloudflare, Inc. | Content delivery and edge security | Global

@@ -205,7 +205,18 @@ python3 vra.py onboard "Acme Corp" \
   --tier critical --category collaboration \
   --trust-center https://acme.safebase.io \
   --offline --assess
+
+# One command for a new vendor. Reads artifacts in FULL (not a diff),
+# scaffolds a conservative register, and drops a model-proposed ai_surface
+# in pending_review/ for you to accept. The model never writes the register.
+python3 vra.py bootstrap Slack --offline
+python3 vra.py bootstrap "Acme Corp" --trust-center https://acme.example/trust --offline
 ```
+
+`bootstrap Slack` (also Atlassian, Zoom, Notion, Datadog) fills the public
+no-auth subprocessor URL from a catalog so you do not have to find it.
+
+What onboarding does, in order:
 
 What onboarding does, in order:
 
@@ -223,7 +234,8 @@ What onboarding does, in order:
 6. **Draft the blocker outreach** to `pending_review/` when the disclosure is gated or missing.
 
 Flags: `--tier critical|high|medium|low`, `--category`, `--description`, `--trust-center`,
-`--changelog`, `--subprocessors`, `--dpa`, `--offline`, `--dry-run`, `--assess`.
+`--changelog`, `--subprocessors`, `--dpa`, `--offline`, `--dry-run`, `--assess`,
+`--bootstrap`.
 
 ### Browser UI
 
@@ -456,6 +468,8 @@ src/vra/
   register.py           register I/O, finding store, lifecycle
   report.py             Markdown + JSON report
 sandbox/                three vendors, v1/v2 snapshots, ground truth
+sandbox/real_world/     Slack / Atlassian / Zoom / Notion / Datadog page fixtures
+tests/test_real_world_vendors.py  parser vs. those five public pages
 tests/test_vra.py       66 tests
 VALIDATION.md           validation record, including every defect found
 DEMO.md                 demo recording notes

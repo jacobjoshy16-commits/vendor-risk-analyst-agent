@@ -5,6 +5,7 @@ Legacy usage (unchanged):      python3 vra.py --offline --snapshot v1
 Subcommands:
   python3 vra.py run ...        same as legacy, explicit
   python3 vra.py onboard ...    onboard a vendor from a trust center URL
+  python3 vra.py bootstrap ...  onboard + propose an initial register from full artifacts
   python3 vra.py webui ...      local onboarding console (browser UI)
   python3 vra.py monitor ...    autonomous daemon — watch vendors + NHIs while the PC is on
   python3 vra.py nhis ...       print the portfolio NHI inventory
@@ -16,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from vra.cli import main as cli_main  # noqa: E402
 
-SUBCOMMANDS = ("run", "onboard", "webui", "monitor", "nhis")
+SUBCOMMANDS = ("run", "onboard", "bootstrap", "webui", "monitor", "nhis")
 
 
 def main(argv: list[str] | None = None) -> int:

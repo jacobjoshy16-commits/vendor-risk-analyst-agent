@@ -513,7 +513,8 @@ class TestRealWorldSubprocessorParsing(unittest.TestCase):
                  "We engage subprocessors in the ordinary course of business")
         rows, status = parse_subprocessors(prose, source="subprocessors", raw_kind="pdf")
         self.assertEqual(rows, [], f"prose invented rows: {rows}")
-        self.assertEqual(status.status, "empty")
+        # Mentions subprocessors but has no table → parse_failed, never a pass.
+        self.assertEqual(status.status, "parse_failed")
 
     # -- portals ----------------------------------------------------------
     def test_detect_safebase_portal(self):
@@ -761,6 +762,28 @@ class TestOnboarding(unittest.TestCase):
         self.assertIsNone(res.register_path)
         self.assertIsNone(res.outreach_path)
         self.assertFalse((self.tmp / "vendors" / "dry-co.yaml").exists())
+
+    def test_bootstrap_proposes_register_into_pending_review(self):
+        """A new vendor has no v1 register. Bootstrap reads artifacts in full
+        (not a diff) and quarantines the proposal — never writes the register."""
+        from vra.onboard import onboard_vendor
+
+        res = onboard_vendor(
+            "Boot Co", tier="high",
+            urls={"subprocessors": str(self.tmp / "fixtures" / "subprocessors.html")},
+            cfg=RunConfig(offline=True),
+            bootstrap=True,
+            _root=self.tmp,
+        )
+        self.assertIsNotNone(res.bootstrap_path)
+        self.assertTrue(res.bootstrap_path.exists())
+        blob = json.loads(res.bootstrap_path.read_text())
+        self.assertIn("BOOTSTRAP PROPOSAL — NOT APPLIED", blob["instructions"])
+        self.assertTrue(any("OpenAI" in (f.get("model_provider") or "")
+                            for f in blob["proposed_ai_surface"]))
+        # The register itself stays conservative — unknowns, not the proposal.
+        register = yaml.safe_load((self.tmp / "vendors" / "boot-co.yaml").read_text())
+        self.assertEqual(register["ai_surface"][0]["autonomy"], "unknown")
 
     def test_onboard_refuses_duplicate_slug(self):
         from vra.onboard import onboard_vendor

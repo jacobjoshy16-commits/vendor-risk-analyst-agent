@@ -42,6 +42,7 @@ KNOWN_MODEL_PROVIDERS = (
     "stability ai", "aleph alpha", "ai21", "together ai", "replicate",
     "azure openai", "amazon bedrock", "google vertex", "vertex ai", "xai",
     "deepseek", "inflection", "runway", "elevenlabs", "assemblyai", "deepgram",
+    "eleven labs", "fireworks",
 )
 
 # BAA column values that do NOT constitute executed coverage.
@@ -58,14 +59,17 @@ class ParseStatus:
     * ``parsed``       — rows extracted; AIV-03 evaluates against them.
     * ``blocked``      — the list is behind a click-through NDA / branded
                          portal / login wall. No parse attempted or no rows.
-    * ``empty``        — the artifact was readable but contained no parseable
-                         subprocessor table.
+    * ``parse_failed`` — the page is about subprocessors (or looks like a
+                         table) but no rows could be extracted. Never a silent
+                         pass; always an AIV-03 gap.
+    * ``empty``        — the artifact was readable but contained no
+                         subprocessor language and no table.
     * ``error``        — the artifact could not be ingested (PDF without pypdf,
                          fetch failure, corrupt file).
     * ``missing``      — no subprocessor watch source is configured at all.
     """
 
-    status: str                       # parsed | blocked | empty | error | missing
+    status: str                       # parsed | blocked | parse_failed | empty | error | missing
     platform: str | None = None       # safebase | whistic | vanta | generic | pdf | None
     reason: str = ""
     evidence: str = ""
@@ -131,9 +135,6 @@ def _rows_from_text(text: str) -> tuple[list[list[str]], bool]:
     Returns ``(rows, any_pipe_rows)``. Prefers pipe-delimited table rows (the
     form the HTML normalizer emits, and the form PDF text extraction tends to
     produce); falls back to whitespace-aligned lines when no pipe row exists.
-    The flag tells the parser whether it may trust positional column mapping
-    without a header row — prose lines split on multiple spaces are far more
-    likely to be junk than pipe rows are.
     """
     rows: list[list[str]] = []
     any_pipe = False
@@ -160,23 +161,107 @@ def _rows_from_tables(tables: list[list[list[str]]]) -> list[list[str]]:
             cells = [c for c in (c.strip() for c in row) if c]
             if len(cells) >= 2:
                 rows.append(cells)
+            elif len(cells) == 1:
+                rows.append(cells)  # keep section headers so we can skip them
     return rows
+
+
+# Real trust-center tables (Atlassian) put the field name inside the cell.
+_LABELED_CELL = (
+    ("purpose", ("nature and purpose of processing", "purpose of processing",
+                 "nature of processing", "type of service", "services provided")),
+    ("region", ("location of processing", "country of location", "processing location")),
+    ("baa", ("baa coverage", "hipaa coverage", "phi coverage")),
+)
+
+_SECTION_NAME = re.compile(
+    r"(providers?|affiliates?|entities|group companies|infrastructure|platform|"
+    r"customer and support|business operations|authorized subprocessors|"
+    r"third-party subprocessors|list of third-party)$",
+    re.I,
+)
+_HEADER_NAME_WORDS = (
+    "subprocessor", "sub-processor", "entity", "company", "vendor", "name",
+    "third party", "third-party",
+)
+_HEADER_PURPOSE_WORDS = (
+    "purpose", "service", "function", "processing", "activity", "description",
+)
+_SKIP_NAMES = {
+    "subprocessor", "subprocessors", "sub-processor", "entity", "name", "vendor",
+    "company", "third party", "third-party", "applicable cloud products",
+}
+
+
+def _split_labeled_cell(cell: str) -> tuple[str | None, str]:
+    """Return (label_role, remainder) when a cell starts with a known label."""
+    low = re.sub(r"\s+", " ", cell).strip().lower()
+    for role, labels in _LABELED_CELL:
+        for lab in labels:
+            if low.startswith(lab):
+                return role, cell[len(lab):].lstrip(" \n\t:-–—")
+            if lab in low[: len(lab) + 8]:
+                parts = re.split(re.escape(lab), cell, maxsplit=1, flags=re.I)
+                if len(parts) == 2:
+                    return role, parts[1].lstrip(" \n\t:-–—")
+    return None, cell
+
+
+def _labeled_fields(row: list[str]) -> dict[str, str] | None:
+    """Atlassian-style rows: first unlabeled cell is the name, others are tagged."""
+    fields: dict[str, str] = {}
+    unlabeled: list[str] = []
+    hits = 0
+    for cell in row:
+        role, rest = _split_labeled_cell(cell)
+        if role:
+            fields[role] = rest
+            hits += 1
+        else:
+            unlabeled.append(cell)
+    if hits < 1:
+        return None
+    if unlabeled:
+        fields.setdefault("name", unlabeled[0])
+    return fields if fields.get("name") else None
+
+
+def _is_section_or_header_name(name: str) -> bool:
+    low = name.strip().lower()
+    if low in _SKIP_NAMES:
+        return True
+    if _SECTION_NAME.search(low):
+        return True
+    return False
+
+
+def _from_fields(fields: dict[str, str], source: str, raw: list[str]) -> ObservedSubprocessor | None:
+    name = (fields.get("name") or "").strip()
+    if not name or _is_section_or_header_name(name):
+        return None
+    return ObservedSubprocessor(
+        name=name,
+        purpose=fields.get("purpose", ""),
+        region=fields.get("region", ""),
+        baa_marker=fields.get("baa", ""),
+        source=source,
+        raw_line=" | ".join(raw),
+    )
 
 
 def _parse_rows(
     rows: list[list[str]], source: str, *, require_header: bool = False
 ) -> list[ObservedSubprocessor]:
-    """Header-guided column mapping over candidate rows. Tolerant by design:
-    a missed row here is a missed critical finding. With ``require_header``,
-    rows are only accepted when a header row was found (used for whitespace-
-    aligned prose where positional guessing would invent rows)."""
+    """Header-guided column mapping, plus Atlassian labeled-cell fallback.
+
+    A missed row here is a missed critical finding.
+    """
     header_idx, header = None, None
-    for idx, row in enumerate(rows[:5]):
+    for idx, row in enumerate(rows[:8]):
         joined = " ".join(row).lower()
-        if any(k in joined for k in ("subprocessor", "entity", "sub-processor", "vendor", "company")):
-            if any(k in joined for k in ("purpose", "service", "function", "processing", "activity")):
-                header_idx, header = idx, [c.lower() for c in row]
-                break
+        if any(k in joined for k in _HEADER_NAME_WORDS) and any(k in joined for k in _HEADER_PURPOSE_WORDS):
+            header_idx, header = idx, [c.lower() for c in row]
+            break
 
     def col(keys: tuple[str, ...], default: int | None) -> int | None:
         if header:
@@ -185,24 +270,41 @@ def _parse_rows(
                     return i
         return default
 
-    i_name = col(("subprocessor", "entity", "sub-processor", "company", "vendor", "name"), 0)
+    i_name = col(("subprocessor", "sub-processor", "entity", "company", "vendor", "name"), 0)
     i_purpose = col(("purpose", "service", "function", "processing", "activity", "description"), 1)
     i_region = col(("location", "region", "country", "where"), 2)
-    i_baa = col(("baa", "hipaa", "phi", "coverage"), 3)
-
-    if require_header and header_idx is None:
-        return []
+    i_baa = col(("baa", "hipaa", "phi", "coverage"), None)
 
     out: list[ObservedSubprocessor] = []
+
+    if require_header and header_idx is None:
+        for row in rows:
+            fields = _labeled_fields(row)
+            if not fields:
+                continue
+            item = _from_fields(fields, source, row)
+            if item:
+                out.append(item)
+        return out
+
     for idx, row in enumerate(rows):
         if header_idx is not None and idx <= header_idx:
+            continue
+        if len(row) == 1 and _is_section_or_header_name(row[0]):
+            continue
+
+        labeled = _labeled_fields(row)
+        if labeled:
+            item = _from_fields(labeled, source, row)
+            if item:
+                out.append(item)
             continue
 
         def get(i: int | None) -> str:
             return row[i] if i is not None and i < len(row) else ""
 
         name = get(i_name)
-        if not name or name.lower() in ("subprocessor", "entity", "name"):
+        if not name or _is_section_or_header_name(name):
             continue
         out.append(
             ObservedSubprocessor(
@@ -218,12 +320,7 @@ def _parse_rows(
 
 
 def parse_subprocessor_table(text: str, source: str) -> list[ObservedSubprocessor]:
-    """Parse subprocessor rows from normalized text (pipe-delimited or aligned).
-
-    Deliberately tolerant: vendors format these tables inconsistently, and a
-    missed row here is a missed critical finding. Column roles are detected by
-    header keywords, with positional fallback.
-    """
+    """Parse subprocessor rows from normalized text (pipe-delimited or aligned)."""
     rows, _ = _rows_from_text(text)
     return _parse_rows(rows, source)
 
@@ -240,30 +337,25 @@ def parse_subprocessors(
 ) -> tuple[list[ObservedSubprocessor], ParseStatus]:
     """Parse a real-world subprocessor artifact into rows plus a parse status.
 
-    This is the AIV-03 entry point. Order of attack:
+    Order of attack:
 
     1. Structured HTML tables (extracted at ingestion) when present.
     2. Pipe-delimited / aligned text (normalized HTML, PDF extraction).
-    3. Explicit verdicts for everything unparseable — a branded portal, a wall,
-       a PDF without pypdf, or a readable page with no table — so AIV-03 is
-       marked not-assessable instead of silently passing.
+    3. Explicit verdicts for everything unparseable — a branded portal, a
+       JS shell, a PDF without rows — so AIV-03 is marked not-assessable
+       instead of silently passing.
     """
     if tables:
         rows = _rows_from_tables(tables)
         parsed = _parse_rows(rows, source)
     else:
         rows, any_pipe = _rows_from_text(text)
-        # Whitespace-aligned rows (PDF extraction, prose pages) are only
-        # trusted with a real header row — positional guessing would invent
-        # subprocessors out of sentence fragments.
         parsed = _parse_rows(rows, source, require_header=not any_pipe)
 
     def status(kind: str, reason: str, rows: int = 0) -> ParseStatus:
         return ParseStatus(kind, platform=platform, reason=reason,
                            evidence=portal_evidence or reason, rows=rows)
 
-    # 1) Portal / click-through gate: even if incidental tables parsed, the
-    #    authoritative list is gated — say so. If nothing parsed, hard blocked.
     if platform in ("safebase", "whistic", "vanta") or portal_blocked:
         if parsed:
             return parsed, status(
@@ -279,20 +371,15 @@ def parse_subprocessors(
             "parsed without guest access.",
         )
 
-    if raw_kind == "pdf" and not parsed:
-        return [], status(
-            "empty",
-            "the PDF was read but no subprocessor table (pipe-delimited or aligned "
-            "rows) could be identified; manual review of the extracted text required.",
-        )
-
     if not parsed:
         has_language = bool(re.search(r"sub-?processor", text, re.IGNORECASE))
-        if has_language:
+        kind_note = "PDF" if raw_kind == "pdf" else "page"
+        if has_language or (tables and any(len(t) > 1 for t in tables)):
             return [], status(
-                "empty",
-                "the page discusses subprocessors but contains no parseable table; "
-                "manual review required before AIV-03 can be assessed.",
+                "parse_failed",
+                f"the {kind_note} discusses subprocessors or contains table markup "
+                "but no entity rows could be extracted; AIV-03 cannot be evaluated. "
+                "This is a parse failure, not a clean list.",
             )
         return [], status(
             "empty",
@@ -307,9 +394,6 @@ def observe_vendor(vendor: dict, snapshots: list, probe_result) -> ObservedState
     """Build the observed overlay from artifacts and the tenant probe."""
     state = ObservedState(vendor=vendor["slug"])
 
-    # --- structured artifact extraction: subprocessor tables --------------
-    # AIV-03 rests on this parse, so a failed or gated parse must be recorded
-    # on the state and surfaced as a gap — never silently treated as "no rows".
     for snap in snapshots:
         if snap.source != "subprocessors":
             continue
@@ -329,31 +413,25 @@ def observe_vendor(vendor: dict, snapshots: list, probe_result) -> ObservedState
             portal_evidence=snap.portal_evidence,
             raw_kind=snap.raw_kind,
         )
-        break  # one subprocessors source per vendor; first non-error wins
+        break
 
     if state.subprocessor_parse is None:
-        # No subprocessor watch source at all: AIV-03 has no observed data and
-        # must be flagged rather than silently skipped.
         state.subprocessor_parse = ParseStatus(
             "missing",
             reason=(
                 "no subprocessor watch source is configured for this vendor; AIV-03 has no "
-                "observed data. Add a `watch: subprocessors:` entry (or run `vra onboard`)."
+                "observed data. Add a `watch: subprocessors:` entry (or run `vra onboard`). "
             ),
         )
 
-    # Cross-check parsed BAA markers against the contract's own covered list.
     covered = {c.strip().lower() for c in (vendor.get("contract") or {}).get("baa_covered_subprocessors", [])}
     for sp in state.subprocessors:
         if sp.baa_covered:
             continue
         low = sp.name.lower()
-        # A vendor page saying "Pending" outranks our stale contract list, but if
-        # the page is silent and our contract covers them, treat as covered.
         if not sp.baa_marker and any(low in c or c in low for c in covered):
             sp.baa_marker = "yes (per contract record)"
 
-    # --- tenant probe: hard facts about what is switched on ---------------
     if probe_result is not None and getattr(probe_result, "ran", False):
         surface = vendor.get("ai_surface") or []
         primary = surface[0].get("feature") if surface else None
@@ -365,7 +443,7 @@ def observe_vendor(vendor: dict, snapshots: list, probe_result) -> ObservedState
             if not target or recon.get("surface_field") is None:
                 continue
             if recon["type"] == "retention_unset":
-                continue  # absence of a value is a gap, not an observed override
+                continue
             state.add_override(
                 feature=target,
                 key=recon["surface_field"],
@@ -378,12 +456,7 @@ def observe_vendor(vendor: dict, snapshots: list, probe_result) -> ObservedState
 
 
 def effective_feature(feature: dict, observed: ObservedState) -> tuple[dict, dict[str, dict]]:
-    """Register values overlaid with deterministically observed ones.
-
-    Returns the effective feature dict and the provenance map for whichever
-    fields were overridden, so the report can show that a finding rests on
-    tenant observation rather than on the register.
-    """
+    """Register values overlaid with deterministically observed ones."""
     name = feature.get("feature")
     overrides = observed.overrides.get(name) or {}
     if not overrides:
