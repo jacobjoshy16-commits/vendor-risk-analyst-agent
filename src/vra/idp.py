@@ -21,11 +21,12 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from .config import REPO_ROOT, RunConfig
@@ -154,7 +155,7 @@ class MemoryTransport(Transport):
     """Exact-URL (then path+query) map. Used by tests and recorded fixtures."""
 
     def __init__(self) -> None:
-        self.routes: dict[str, dict[str, Any]] = {}
+        self.routes: dict[str, list[dict[str, Any]]] = {}
         self.calls: list[tuple[str, str]] = []
 
     def add(
@@ -167,11 +168,12 @@ class MemoryTransport(Transport):
         status: int = 200,
     ) -> None:
         key = _route_key(method, url)
-        self.routes[key] = {
+        item = {
             "body": body,
             "headers": {k: str(v) for k, v in (headers or {}).items()},
             "status": status,
         }
+        self.routes.setdefault(key, []).append(item)
 
     def request(
         self,
@@ -184,20 +186,20 @@ class MemoryTransport(Transport):
     ) -> tuple[int, Any, dict[str, str]]:
         full = _with_params(url, params)
         self.calls.append((method.upper(), full))
-        hit = self.routes.get(_route_key(method, full))
-        if hit is None:
-            # Fall back to path + query against whatever host was recorded.
+        queue = self.routes.get(_route_key(method, full))
+        if queue is None:
             parsed = urlparse(full)
-            for key, route in self.routes.items():
+            for key, stored_queue in self.routes.items():
                 stored_method, stored_url = key.split(" ", 1)
                 if stored_method != method.upper():
                     continue
                 stored = urlparse(stored_url)
                 if stored.path == parsed.path and _query_dict(stored.query) == _query_dict(parsed.query):
-                    hit = route
+                    queue = stored_queue
                     break
-        if hit is None:
+        if not queue:
             return 404, None, {}
+        hit = queue.pop(0) if len(queue) > 1 else queue[0]
         return int(hit["status"]), hit["body"], dict(hit["headers"])
 
 
@@ -330,7 +332,83 @@ def _contains_secret(blob: Any, secret: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# HTTP with 429 retry
+# In-process token cache — never written to disk
+# ---------------------------------------------------------------------------
+AUTH0_SKEW_SECONDS = 60
+
+
+@dataclass
+class CachedToken:
+    access_token: str
+    expires_at: float
+    source: str
+
+
+class TokenVault:
+    """Minted access tokens live only in this process.
+
+    Auth0 M2M tokens expire (typically 86400s). The monitor remints from
+    client credentials before expiry. A static AUTH0_MGMT_TOKEN is used
+    as-is and cannot be refreshed — that is the 24-hour silent-fail case.
+    """
+
+    def __init__(self, clock: Callable[[], float] | None = None) -> None:
+        self._clock = clock or time.time
+        self._items: dict[str, CachedToken] = {}
+
+    def get(self, key: str, *, skew: int = AUTH0_SKEW_SECONDS) -> CachedToken | None:
+        item = self._items.get(key)
+        if item is None:
+            return None
+        if self._clock() + skew >= item.expires_at:
+            return None
+        return item
+
+    def put(self, key: str, token: str, expires_in: int, *, source: str) -> CachedToken:
+        item = CachedToken(
+            access_token=token,
+            expires_at=self._clock() + max(int(expires_in), 1),
+            source=source,
+        )
+        self._items[key] = item
+        return item
+
+    def invalidate(self, key: str) -> None:
+        self._items.pop(key, None)
+
+
+TOKEN_VAULT = TokenVault()
+
+
+def _rate_limit_wait(headers: dict[str, str], fallback: float) -> float:
+    """Honor Retry-After or Okta/Auth0 reset headers. Cap at 30s."""
+    raw = (
+        headers.get("Retry-After")
+        or headers.get("retry-after")
+        or headers.get("X-Rate-Limit-Reset")
+        or headers.get("x-rate-limit-reset")
+        or headers.get("X-RateLimit-Reset")
+        or headers.get("x-ratelimit-reset")
+    )
+    if raw is None:
+        wait = fallback
+    else:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            wait = fallback
+        else:
+            # Unix epoch vs delta. Anything > 1e9 is almost certainly a stamp.
+            if value > 1_000_000_000:
+                wait = max(0.0, value - time.time())
+            else:
+                wait = value
+    jitter = wait * (0.15 * random.random())
+    return min(max(wait + jitter, 0.0), 30.0)
+
+
+# ---------------------------------------------------------------------------
+# HTTP with 429 retry and one 401 remint
 # ---------------------------------------------------------------------------
 def _exchange(
     transport: Transport,
@@ -340,22 +418,25 @@ def _exchange(
     headers: dict[str, str],
     params: dict[str, Any] | None = None,
     json_body: dict[str, Any] | None = None,
-    retries: int = 3,
+    retries: int = 5,
+    on_unauthorized: Callable[[], dict[str, str] | None] | None = None,
 ) -> tuple[int, Any, dict[str, str]]:
     delay = 0.5
     status, body, resp_headers = 0, None, {}
+    refreshed = False
     for attempt in range(retries):
         status, body, resp_headers = transport.request(
             method, url, headers=headers, params=params, json_body=json_body
         )
+        if status == 401 and on_unauthorized and not refreshed:
+            new_headers = on_unauthorized()
+            refreshed = True
+            if new_headers:
+                headers = new_headers
+                continue
         if status != 429 or attempt == retries - 1:
             return status, body, resp_headers
-        raw_wait = resp_headers.get("Retry-After") or resp_headers.get("retry-after") or delay
-        try:
-            wait = float(raw_wait)
-        except (TypeError, ValueError):
-            wait = delay
-        time.sleep(min(max(wait, 0.0), 15.0))
+        time.sleep(_rate_limit_wait(resp_headers, delay))
         delay = min(delay * 2, 8.0)
     return status, body, resp_headers
 
@@ -416,6 +497,7 @@ def _paginate_okta_list(
     page_limit: int,
     max_pages: int,
     params: dict[str, Any] | None = None,
+    on_unauthorized: Callable[[], dict[str, str] | None] | None = None,
 ) -> list[Any]:
     items: list[Any] = []
     url = f"{base}{path}"
@@ -424,10 +506,17 @@ def _paginate_okta_list(
     pages = 0
     while url and pages < max_pages:
         status, body, resp_headers = _exchange(
-            transport, "GET", url, headers=headers, params=query
+            transport, "GET", url, headers=headers, params=query,
+            on_unauthorized=on_unauthorized,
         )
         estate.requests_made += 1
         if status >= 400:
+            if status == 429:
+                estate.truncated = True
+                estate.warnings.append(
+                    f"GET {path} rate-limited after retries; kept {len(items)} row(s)"
+                )
+                return items
             raise RuntimeError(f"GET {path} returned {status}")
         page_items = body if isinstance(body, list) else (body or {}).get("items") or []
         if page_items:
@@ -459,6 +548,7 @@ def discover_okta(
     fetch_tokens: bool = True,
     fetch_users: bool = False,
     user_search: str | None = None,
+    on_unauthorized: Callable[[], dict[str, str] | None] | None = None,
 ) -> IdPEstate:
     base = base_url.rstrip("/")
     estate = IdPEstate(provider="okta", base_url=base, org={"subdomain": urlparse(base).netloc})
@@ -468,6 +558,7 @@ def discover_okta(
         raw_apps = _paginate_okta_list(
             transport, base, "/api/v1/apps", headers, estate,
             page_limit=page_limit, max_pages=max_pages,
+            on_unauthorized=on_unauthorized,
         )
     except RuntimeError as exc:
         estate.error = f"okta apps list failed: {exc}"
@@ -493,6 +584,7 @@ def discover_okta(
                 f"{base}/api/v1/apps/{app_id}/grants",
                 headers=headers,
                 params={"limit": page_limit},
+                on_unauthorized=on_unauthorized,
             )
             estate.requests_made += 1
             fetched += 1
@@ -509,6 +601,7 @@ def discover_okta(
             tokens = _paginate_okta_list(
                 transport, base, "/api/v1/api-tokens", headers, estate,
                 page_limit=page_limit, max_pages=max_pages,
+                on_unauthorized=on_unauthorized,
             )
             estate.api_tokens = [_normalise_okta_token(tok) for tok in tokens]
         except RuntimeError as exc:
@@ -608,7 +701,8 @@ def mint_auth0_token(
     client_id: str,
     client_secret: str,
     audience: str | None = None,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, int, str | None]:
+    """Client-credentials mint. Returns (token, expires_in, error). Never persists."""
     base = _auth0_base(domain)
     aud = audience or f"{base}/api/v2/"
     status, body, _ = _exchange(
@@ -624,8 +718,12 @@ def mint_auth0_token(
         },
     )
     if status >= 400 or not isinstance(body, dict) or not body.get("access_token"):
-        return None, f"auth0 token endpoint returned {status}"
-    return str(body["access_token"]), None
+        return None, 0, f"auth0 token endpoint returned {status}"
+    try:
+        expires_in = int(body.get("expires_in") or 86400)
+    except (TypeError, ValueError):
+        expires_in = 86400
+    return str(body["access_token"]), expires_in, None
 
 
 def _auth0_base(domain: str) -> str:
@@ -645,6 +743,7 @@ def _paginate_auth0(
     *,
     page_limit: int,
     max_pages: int,
+    on_unauthorized: Callable[[], dict[str, str] | None] | None = None,
 ) -> list[Any]:
     items: list[Any] = []
     page = 0
@@ -655,9 +754,16 @@ def _paginate_auth0(
             f"{base}{path}",
             headers=headers,
             params={"page": page, "per_page": page_limit, "include_totals": "true"},
+            on_unauthorized=on_unauthorized,
         )
         estate.requests_made += 1
         if status >= 400:
+            if status == 429:
+                estate.truncated = True
+                estate.warnings.append(
+                    f"GET {path} rate-limited after retries; kept {len(items)} row(s)"
+                )
+                return items
             raise RuntimeError(f"GET {path} returned {status}")
         if isinstance(body, list):
             chunk, total = body, None
@@ -692,6 +798,7 @@ def discover_auth0(
     page_limit: int = 100,
     max_pages: int = DEFAULT_MAX_PAGES,
     fetch_grants: bool = True,
+    on_unauthorized: Callable[[], dict[str, str] | None] | None = None,
 ) -> IdPEstate:
     base = _auth0_base(domain)
     estate = IdPEstate(provider="auth0", base_url=base, org={"domain": urlparse(base).netloc})
@@ -701,6 +808,7 @@ def discover_auth0(
         clients = _paginate_auth0(
             transport, base, "/api/v2/clients", "clients", headers, estate,
             page_limit=page_limit, max_pages=max_pages,
+            on_unauthorized=on_unauthorized,
         )
     except RuntimeError as exc:
         estate.error = f"auth0 clients list failed: {exc}"
@@ -714,6 +822,7 @@ def discover_auth0(
             grants = _paginate_auth0(
                 transport, base, "/api/v2/client-grants", "client_grants", headers, estate,
                 page_limit=page_limit, max_pages=max_pages,
+                on_unauthorized=on_unauthorized,
             )
             estate.oauth_grants = [_normalise_auth0_grant(g, names) for g in grants]
         except RuntimeError as exc:
@@ -773,6 +882,7 @@ def discover_estate(
     fetch_users: bool = False,
     user_search: str | None = None,
     org_id: str | None = None,
+    on_unauthorized: Callable[[], dict[str, str] | None] | None = None,
 ) -> IdPEstate:
     provider = (provider or "okta").lower()
     if provider == "atlassian":
@@ -816,6 +926,7 @@ def discover_estate(
             page_limit=min(page_limit, 100),
             max_pages=max_pages,
             fetch_grants=fetch_grants,
+            on_unauthorized=on_unauthorized,
         )
     if not token:
         estate = IdPEstate(provider="okta", base_url=base_url.rstrip("/"))
@@ -832,6 +943,7 @@ def discover_estate(
         fetch_tokens=fetch_tokens,
         fetch_users=fetch_users,
         user_search=user_search,
+        on_unauthorized=on_unauthorized,
     )
 
 
@@ -848,41 +960,69 @@ def _block_options(block: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _live_token(block: dict[str, Any], provider: str, transport: Transport, base: str) -> tuple[str | None, str | None]:
-    """Resolve a management token from the environment. Never persist it."""
+def _live_token(
+    block: dict[str, Any],
+    provider: str,
+    transport: Transport,
+    base: str,
+    *,
+    vault: TokenVault | None = None,
+    force_refresh: bool = False,
+) -> tuple[str | None, str | None, dict[str, Any]]:
+    """Resolve a management token. Never persist it.
+
+    Auth0: client credentials are reminted into an in-process vault and
+    reused until ``expires_in`` (minus 60s). A static ``AUTH0_MGMT_TOKEN``
+    cannot be refreshed — the monitor will start 401-ing when it expires.
+    """
+    vault = vault or TOKEN_VAULT
+    meta: dict[str, Any] = {"static": False, "remintable": False, "cache_key": ""}
     if provider == "atlassian":
         env_name = block.get("token_env") or "ATLASSIAN_API_TOKEN"
         token = os.environ.get(env_name, "")
         if not token:
-            return None, f"no API token in ${env_name}; skipping Atlassian discovery"
-        return token, None
+            return None, f"no API token in ${env_name}; skipping Atlassian discovery", meta
+        return token, None, meta
     if provider == "slack":
         env_name = block.get("token_env") or "SLACK_BOT_TOKEN"
         token = os.environ.get(env_name, "") or os.environ.get("SLACK_TOKEN", "")
         if not token:
-            return None, f"no Slack token in ${env_name} (or $SLACK_TOKEN)"
-        return token, None
+            return None, f"no Slack token in ${env_name} (or $SLACK_TOKEN)", meta
+        return token, None, meta
     if provider == "auth0":
         ready_env = block.get("token_env") or "AUTH0_MGMT_TOKEN"
-        ready = os.environ.get(ready_env, "")
-        if ready:
-            return ready, None
         cid_env = block.get("client_id_env") or "AUTH0_CLIENT_ID"
         sec_env = block.get("client_secret_env") or "AUTH0_CLIENT_SECRET"
         client_id = os.environ.get(cid_env, "")
         client_secret = os.environ.get(sec_env, "")
-        if not client_id or not client_secret:
-            return None, (
-                f"no Auth0 token in ${ready_env} and no client credentials in "
-                f"${cid_env} / ${sec_env}"
+        if client_id and client_secret:
+            cache_key = f"auth0|{base}|{client_id}"
+            meta.update(remintable=True, cache_key=cache_key)
+            if force_refresh:
+                vault.invalidate(cache_key)
+            cached = vault.get(cache_key)
+            if cached is not None:
+                return cached.access_token, None, meta
+            token, expires_in, err = mint_auth0_token(
+                transport, base, client_id, client_secret, block.get("audience")
             )
-        audience = block.get("audience")
-        return mint_auth0_token(transport, base, client_id, client_secret, audience)
+            if err or not token:
+                return None, err or "auth0 mint failed", meta
+            vault.put(cache_key, token, expires_in, source="client_credentials")
+            return token, None, meta
+        ready = os.environ.get(ready_env, "")
+        if ready:
+            meta["static"] = True
+            return ready, None, meta
+        return None, (
+            f"no Auth0 client credentials in ${cid_env} / ${sec_env} "
+            f"and no static token in ${ready_env}"
+        ), meta
     env_name = block.get("token_env") or "OKTA_API_TOKEN"
     token = os.environ.get(env_name, "")
     if not token:
-        return None, f"no API token in ${env_name}; skipping live IdP discovery"
-    return token, None
+        return None, f"no API token in ${env_name}; skipping live IdP discovery", meta
+    return token, None, meta
 
 
 def discover_from_vendor(
@@ -900,17 +1040,38 @@ def discover_from_vendor(
     if cfg.offline and transport is None:
         return None, "offline mode: skipped live IdP discovery"
     bus = transport or LiveTransport()
-    token, err = _live_token(block, provider, bus, base)
+    vault = TOKEN_VAULT
+    token, err, token_meta = _live_token(block, provider, bus, base, vault=vault)
     if err:
         return None, err
+
+    def _refresh() -> dict[str, str] | None:
+        if not token_meta.get("remintable"):
+            return None
+        new, new_err, _ = _live_token(
+            block, provider, bus, base, vault=vault, force_refresh=True
+        )
+        if new_err or not new:
+            return None
+        if provider == "auth0":
+            return _auth0_headers(new)
+        return None
+
     options = _block_options(block)
     estate = discover_estate(
         provider=provider,
         base_url=base,
         transport=bus,
         token=token,
+        on_unauthorized=_refresh if token_meta.get("remintable") else None,
         **options,
     )
+    if token_meta.get("static"):
+        estate.warnings.append(
+            "Auth0 management token taken from the environment. M2M access "
+            "tokens expire (typically 24h). Set AUTH0_CLIENT_ID and "
+            "AUTH0_CLIENT_SECRET so each monitor cycle remints."
+        )
     if token and _contains_secret(estate.to_probe_blob(), token):
         return None, "refusing to return an estate that echoed the API token"
     if estate.error:
@@ -929,7 +1090,7 @@ def discover_from_recorded(
         blob = recorded
     transport, provider, base = load_recorded_transport(blob)
     block = (vendor or {}).get("probe") or {}
-    if not provider or provider not in {"okta", "auth0"}:
+    if not provider or provider not in {"okta", "auth0", "atlassian", "slack"}:
         provider = infer_provider(block, base_url=base)
     if not base:
         base = (block.get("base_url") or block.get("domain") or "").rstrip("/")

@@ -26,6 +26,7 @@ from .nhi import (
     assessments_to_records,
     discover_nhis,
     evaluate_nhis,
+    link_cross_plane,
     load_nhi_controls,
 )
 from .observe import observe_vendor
@@ -126,6 +127,8 @@ def assess(cfg: RunConfig) -> RunResult:
     seen_ids: set[str] = set()
     nhi_finding_n = 0
     nhi_gap_n = 0
+    discovered_by_vendor: dict[str, list[dict]] = {}
+    probe_failed: set[str] = set()
 
     for vendor in vendors:
         slug = vendor["slug"]
@@ -262,15 +265,6 @@ def assess(cfg: RunConfig) -> RunResult:
                 new_ids.add(stored["id"])
             (all_findings if assessment.kind == "finding" else all_gaps).append(stored)
 
-        for rec in nhi_f_recs + nhi_g_recs:
-            rec = analyst.enrich(rec, cfg)
-            stored, is_new = store.upsert(rec)
-            stored["poam"] = analyst.build_poam(stored)
-            seen_ids.add(stored["id"])
-            if is_new:
-                new_ids.add(stored["id"])
-            (all_findings if rec["kind"] == "finding" else all_gaps).append(stored)
-
         update_vendor_state(vendor, hashes={s.source: s.sha256 for s in snaps if not s.error}, cfg=cfg)
 
         changed_n = len([d for d in diffs if d.changed])
@@ -279,6 +273,43 @@ def assess(cfg: RunConfig) -> RunResult:
               f"{len(findings)} finding(s), {len(gaps)} gap(s), "
               f"{len(discovered)} NHI(s)"
               + (f", proposals -> {pending.name}" if pending else ""))
+
+    # -- NHI evaluate after every plane has been collected ------------------
+    link_cross_plane(discovered_by_vendor)
+    for vendor in vendors:
+        slug = vendor["slug"]
+        discovered = discovered_by_vendor.get(slug) or []
+        if slug not in probe_failed:
+            stored_nhis = inventory.upsert_many(slug, discovered)
+        else:
+            stored_nhis = discovered
+            for rec in store.findings.values():
+                if rec.get("vendor") == slug and rec.get("family") == "nhi" and rec.get("state") != "closed":
+                    seen_ids.add(rec["id"])
+        all_nhis.extend(stored_nhis)
+        nhi_findings_a, nhi_gaps_a = evaluate_nhis(vendor, discovered, nhi_controls)
+        nhi_f_recs, nhi_g_recs = assessments_to_records(
+            nhi_findings_a,
+            nhi_gaps_a,
+            evidence_by_subject={
+                str(n.get("principal") or n.get("id") or ""): (
+                    [{"source": "in_tenant_probe", "excerpt": n.get("evidence") or "",
+                      "change_type": "nhi_observation", "confidence": 1.0}]
+                    if n.get("evidence") else []
+                )
+                for n in discovered
+            },
+        )
+        nhi_finding_n += len(nhi_f_recs)
+        nhi_gap_n += len(nhi_g_recs)
+        for rec in nhi_f_recs + nhi_g_recs:
+            rec = analyst.enrich(rec, cfg)
+            stored, is_new = store.upsert(rec)
+            stored["poam"] = analyst.build_poam(stored)
+            seen_ids.add(stored["id"])
+            if is_new:
+                new_ids.add(stored["id"])
+            (all_findings if rec["kind"] == "finding" else all_gaps).append(stored)
 
     # -- Phase 7: lifecycle reconciliation ---------------------------------
     closed = store.reconcile(seen_ids, {v["slug"] for v in vendors}, cfg)

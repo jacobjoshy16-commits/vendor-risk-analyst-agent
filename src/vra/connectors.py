@@ -173,6 +173,12 @@ def _paginate_atlassian(
         )
         estate.requests_made += 1
         if status >= 400:
+            if status == 429:
+                estate.truncated = True
+                estate.warnings.append(
+                    f"GET {current} rate-limited after retries; kept {len(items)} row(s)"
+                )
+                return items
             raise RuntimeError(f"GET {current} returned {status}")
         chunk = _items(body, *keys)
         items.extend(chunk)

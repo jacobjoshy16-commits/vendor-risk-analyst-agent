@@ -72,6 +72,14 @@ python3 vra.py discover --provider auth0 --domain your-tenant.us.auth0.com
 python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json
 ```
 
+The monitor remints Auth0 from `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` into
+an in-process vault (`expires_in` minus 60s) and retries once on 401. A
+static `AUTH0_MGMT_TOKEN` cannot be refreshed and will 401 after ~24h — the
+cycle then keeps last inventory instead of wiping it. 429s honor
+`Retry-After` / `X-Rate-Limit-Reset` and return a partial list. The same
+principal seen on your IdP and on the vendor API is linked (`also_seen_on`);
+that observation satisfies NHI-06 without a YAML row.
+
 The monitor re-reads `vendors/` every cycle. A vendor you onboard at 2pm is in
 the 2:15 run. Two copies cannot run (`data/monitor.lock`). Identical fetches
 do not write another snapshot.

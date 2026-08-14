@@ -416,5 +416,221 @@ class TestVendorConnectors(unittest.TestCase):
         self.assertTrue(all(n.get("source") == "observed" for n in merged))
 
 
+class TestTokenLifecycle(unittest.TestCase):
+    def test_auth0_client_credentials_cached_then_reminted(self):
+        from vra.idp import TokenVault, _live_token
+
+        clock = {"t": 0.0}
+        vault = TokenVault(clock=lambda: clock["t"])
+        transport = MemoryTransport()
+        transport.add(
+            "POST",
+            f"{AUTH0}/oauth/token",
+            {"access_token": "tok-1", "expires_in": 100},
+        )
+        transport.add(
+            "POST",
+            f"{AUTH0}/oauth/token",
+            {"access_token": "tok-2", "expires_in": 100},
+        )
+        block = {
+            "client_id_env": "TEST_A0_ID",
+            "client_secret_env": "TEST_A0_SEC",
+        }
+        import os
+
+        os.environ["TEST_A0_ID"] = "cid"
+        os.environ["TEST_A0_SEC"] = "csec"
+        try:
+            first, err, meta = _live_token(block, "auth0", transport, AUTH0, vault=vault)
+            self.assertIsNone(err)
+            self.assertEqual(first, "tok-1")
+            self.assertTrue(meta["remintable"])
+            second, _, _ = _live_token(block, "auth0", transport, AUTH0, vault=vault)
+            self.assertEqual(second, "tok-1")  # cache hit
+            clock["t"] = 50  # still inside 100-60 skew? 50+60=110 > 100, expired
+            third, _, _ = _live_token(block, "auth0", transport, AUTH0, vault=vault)
+            self.assertEqual(third, "tok-2")
+        finally:
+            os.environ.pop("TEST_A0_ID", None)
+            os.environ.pop("TEST_A0_SEC", None)
+
+    def test_auth0_401_remints_and_retries(self):
+        from vra.idp import TOKEN_VAULT, discover_from_vendor
+
+        TOKEN_VAULT._items.clear()
+        transport = MemoryTransport()
+        transport.add(
+            "POST",
+            f"{AUTH0}/oauth/token",
+            {"access_token": "stale", "expires_in": 86400},
+        )
+        transport.add(
+            "GET",
+            f"{AUTH0}/api/v2/clients?include_totals=true&page=0&per_page=100",
+            {"error": "expired"},
+            status=401,
+        )
+        transport.add(
+            "POST",
+            f"{AUTH0}/oauth/token",
+            {"access_token": "fresh", "expires_in": 86400},
+        )
+        transport.add(
+            "GET",
+            f"{AUTH0}/api/v2/clients?include_totals=true&page=0&per_page=100",
+            {"total": 1, "clients": [
+                {"client_id": "c1", "name": "Alive", "app_type": "non_interactive"}
+            ]},
+        )
+        transport.add(
+            "GET",
+            f"{AUTH0}/api/v2/client-grants?include_totals=true&page=0&per_page=100",
+            {"total": 0, "client_grants": []},
+        )
+        import os
+
+        os.environ["TEST_A0_ID2"] = "cid"
+        os.environ["TEST_A0_SEC2"] = "csec"
+        try:
+            vendor = {
+                "slug": "auth0-tenant",
+                "probe": {
+                    "provider": "auth0",
+                    "base_url": AUTH0,
+                    "client_id_env": "TEST_A0_ID2",
+                    "client_secret_env": "TEST_A0_SEC2",
+                    "mode": "live",
+                },
+            }
+            estate, err = discover_from_vendor(
+                vendor, RunConfig(offline=False), transport=transport
+            )
+            self.assertIsNone(err)
+            assert estate is not None
+            self.assertEqual(len(estate.applications), 1)
+            self.assertEqual(estate.applications[0]["id"], "c1")
+        finally:
+            os.environ.pop("TEST_A0_ID2", None)
+            os.environ.pop("TEST_A0_SEC2", None)
+            TOKEN_VAULT._items.clear()
+
+    def test_static_auth0_token_warns_it_cannot_remint(self):
+        from vra.idp import TOKEN_VAULT, discover_from_vendor
+
+        TOKEN_VAULT._items.clear()
+        transport = MemoryTransport()
+        transport.add(
+            "GET",
+            f"{AUTH0}/api/v2/clients?include_totals=true&page=0&per_page=100",
+            {"total": 0, "clients": []},
+        )
+        transport.add(
+            "GET",
+            f"{AUTH0}/api/v2/client-grants?include_totals=true&page=0&per_page=100",
+            {"total": 0, "client_grants": []},
+        )
+        import os
+
+        os.environ["AUTH0_MGMT_TOKEN"] = "static-24h"
+        try:
+            vendor = {
+                "slug": "auth0-tenant",
+                "probe": {"provider": "auth0", "base_url": AUTH0, "mode": "live"},
+            }
+            estate, err = discover_from_vendor(
+                vendor, RunConfig(offline=False), transport=transport
+            )
+            self.assertIsNone(err)
+            assert estate is not None
+            self.assertTrue(any("24h" in w or "expire" in w for w in estate.warnings))
+        finally:
+            os.environ.pop("AUTH0_MGMT_TOKEN", None)
+
+
+class TestRateLimitBackoff(unittest.TestCase):
+    def test_429_then_200_returns_the_page(self):
+        transport = MemoryTransport()
+        transport.add(
+            "GET", f"{OKTA}/api/v1/apps?limit=200", None,
+            headers={"Retry-After": "0"}, status=429,
+        )
+        transport.add("GET", f"{OKTA}/api/v1/apps?limit=200", [_okta_app(1)])
+        transport.add("GET", f"{OKTA}/api/v1/api-tokens?limit=200", [])
+        estate = discover_okta(
+            base_url=OKTA, token="ssws", transport=transport,
+            fetch_grants=False, fetch_tokens=True,
+        )
+        self.assertIsNone(estate.error)
+        self.assertEqual(len(estate.applications), 1)
+
+    def test_persistent_429_keeps_partial_list(self):
+        apps = [_okta_app(i) for i in range(3)]
+        transport = MemoryTransport()
+        transport.add(
+            "GET", f"{OKTA}/api/v1/apps?limit=2", apps[:2],
+            headers={"Link": f'<{OKTA}/api/v1/apps?after={apps[1]["id"]}&limit=2>; rel="next"'},
+        )
+        for _ in range(6):
+            transport.add(
+                "GET",
+                f"{OKTA}/api/v1/apps?after={apps[1]['id']}&limit=2",
+                None,
+                headers={"Retry-After": "0"},
+                status=429,
+            )
+        estate = discover_okta(
+            base_url=OKTA, token="ssws", transport=transport,
+            page_limit=2, fetch_grants=False, fetch_tokens=False,
+        )
+        self.assertTrue(estate.truncated)
+        self.assertEqual(len(estate.applications), 2)
+        self.assertTrue(any("rate-limited" in w for w in estate.warnings))
+
+
+class TestCrossPlaneDedup(unittest.TestCase):
+    def test_same_name_on_idp_and_vendor_is_one_identity(self):
+        from vra.nhi import link_cross_plane
+
+        okta_row = {
+            "id": "0oa2loopworkspace2",
+            "app_id": "0oa2loopworkspace2",
+            "name": "Loop Assist",
+            "principal": "loop-assist",
+            "idp": "okta",
+            "source": "observed",
+            "declared": False,
+            "cross_vendor": False,
+        }
+        slack_row = {
+            "id": "B0ASSIST",
+            "app_id": "B0ASSIST",
+            "name": "Loop Assist",
+            "principal": "loop-assist",
+            "idp": "slack",
+            "source": "observed",
+            "declared": False,
+        }
+        by_vendor = {
+            "aegis-identity-cloud": [okta_row],
+            "loop-workspace": [slack_row],
+        }
+        link_cross_plane(by_vendor)
+        self.assertTrue(okta_row["cross_plane"])
+        self.assertTrue(slack_row["cross_plane"])
+        self.assertIn("loop-workspace", okta_row["also_seen_on"])
+        self.assertTrue(okta_row["declared"], "home-plane observation satisfies NHI-06")
+        self.assertEqual(okta_row["home_vendor"], "loop-workspace")
+
+    def test_unrelated_names_are_not_merged(self):
+        from vra.nhi import link_cross_plane
+
+        a = {"id": "a", "name": "Payroll Sync", "idp": "okta", "declared": False}
+        b = {"id": "b", "name": "Rovo Writer service", "idp": "atlassian", "declared": False}
+        link_cross_plane({"idp": [a], "atlassian": [b]})
+        self.assertFalse(a.get("cross_plane"))
+        self.assertFalse(b.get("cross_plane"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

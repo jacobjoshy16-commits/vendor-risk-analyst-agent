@@ -79,8 +79,12 @@ def identity_key(vendor_slug: str, nhi: dict) -> str:
 
 
 def same_identity(a: dict, b: dict) -> bool:
-    """True when two NHI records describe the same principal."""
-    for key in ("app_id",):
+    """True when two NHI records describe the same principal.
+
+    Matches only quotable identifiers: client/app id, principal, or an
+    exact name of at least 5 characters. Does not fuzzy-match.
+    """
+    for key in ("client_id", "app_id"):
         av, bv = str(a.get(key) or "").lower(), str(b.get(key) or "").lower()
         if av and bv and av == bv:
             return True
@@ -89,7 +93,48 @@ def same_identity(a: dict, b: dict) -> bool:
         if av and bv and av == bv:
             return True
     an, bn = str(a.get("name") or "").lower(), str(b.get("name") or "").lower()
-    return bool(an and bn and an == bn)
+    return bool(an and bn and an == bn and len(an) >= 5)
+
+
+IDP_PLANES = {"okta", "auth0"}
+
+
+def link_cross_plane(by_vendor: dict[str, list[dict]]) -> None:
+    """Mark the same principal seen on two vendors / two planes.
+
+    Does not collapse inventory rows. Each plane keeps its quotable id.
+    If the home (product) plane also observed it, NHI-06 is satisfied
+    without a YAML declaration.
+    """
+    slugs = list(by_vendor)
+    for i, slug_a in enumerate(slugs):
+        for slug_b in slugs[i + 1:]:
+            for left in by_vendor[slug_a]:
+                for right in by_vendor[slug_b]:
+                    if not same_identity(left, right):
+                        continue
+                    left["cross_plane"] = True
+                    right["cross_plane"] = True
+                    left.setdefault("also_seen_on", [])
+                    right.setdefault("also_seen_on", [])
+                    if slug_b not in left["also_seen_on"]:
+                        left["also_seen_on"].append(slug_b)
+                    if slug_a not in right["also_seen_on"]:
+                        right["also_seen_on"].append(slug_a)
+                    plane_a = (left.get("idp") or "").lower()
+                    plane_b = (right.get("idp") or "").lower()
+                    # Product-plane observation counts as a declaration.
+                    if plane_a in IDP_PLANES and plane_b not in IDP_PLANES:
+                        left["declared"] = True
+                        left["home_vendor"] = left.get("home_vendor") or slug_b
+                        left["cross_vendor"] = True
+                    elif plane_b in IDP_PLANES and plane_a not in IDP_PLANES:
+                        right["declared"] = True
+                        right["home_vendor"] = right.get("home_vendor") or slug_a
+                        right["cross_vendor"] = True
+                    else:
+                        left["declared"] = True
+                        right["declared"] = True
 
 
 def _tokens_for(vendor: dict) -> list[str]:
@@ -405,6 +450,8 @@ class NHIInventory:
             "resides_in": nhi.get("resides_in"),
             "idp": nhi.get("idp"),
             "discovered_via": nhi.get("discovered_via"),
+            "cross_plane": bool(nhi.get("cross_plane")),
+            "also_seen_on": list(nhi.get("also_seen_on") or []),
             "evidence": nhi.get("evidence") or "",
             "last_seen": today,
         }
