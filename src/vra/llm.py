@@ -30,6 +30,27 @@ from typing import Any
 from .config import LLM_AUDIT_LOG, RunConfig
 
 
+class SecretInPromptError(RuntimeError):
+    """Raised when a raw credential would reach the language-model layer."""
+
+
+_SECRET_IN_PROMPT = re.compile(
+    r"(?:SSWS\s+\S+|Bearer\s+[A-Za-z0-9._\-]{20,}|xox[baprs]-[A-Za-z0-9-]+|"
+    r"client_secret\s*[:=]\s*\S+|api_token\s*[:=]\s*\S+)",
+    re.I,
+)
+
+
+def assert_prompt_clean(*parts: str) -> None:
+    blob = "\n".join(p or "" for p in parts)
+    hit = _SECRET_IN_PROMPT.search(blob)
+    if hit:
+        raise SecretInPromptError(
+            "refusing to send a raw credential to the language model: "
+            + hit.group(0)[:24] + "…"
+        )
+
+
 @dataclass
 class LLMResult:
     ok: bool
@@ -406,6 +427,7 @@ def call_json(
                 + "\nReturn ONLY a single valid JSON object matching the schema. No prose, no code fence."
             )
         started = time.time()
+        assert_prompt_clean(system, attempt_prompt)
         raw, err = backend.generate(system, attempt_prompt, cfg)
         elapsed = round(time.time() - started, 3)
         last_raw = raw

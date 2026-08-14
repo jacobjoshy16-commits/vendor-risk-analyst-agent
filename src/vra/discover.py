@@ -66,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-tokens", action="store_true", help="skip Okta /api/v1/api-tokens")
     p.add_argument("--users", action="store_true",
                    help="also list Okta users matching the service-account search")
+    p.add_argument("--allow-env-creds", action="store_true",
+                   help="CI only: fall back to environment variables if the keychain is empty")
     return p
 
 
@@ -105,7 +107,8 @@ def _persist(vendor_slug: str, vendor_name: str, nhis: list[dict], cfg: RunConfi
     for nhi in nhis:
         row = dict(nhi)
         row["vendor_name"] = vendor_name
-        rows.append(inventory.upsert(vendor_slug, row))
+        rec, _ev = inventory.upsert(vendor_slug, row)
+        rows.append(rec)
     inventory.save(cfg)
     return len(rows)
 
@@ -192,7 +195,10 @@ def discover_vendor_probe(vendor: dict, cfg: RunConfig) -> tuple[list[dict], dic
 
 
 def run_discover(args: argparse.Namespace) -> int:
-    cfg = RunConfig(offline=args.offline, dry_run=args.dry_run)
+    cfg = RunConfig(
+        offline=args.offline, dry_run=args.dry_run,
+        allow_env_creds=bool(getattr(args, "allow_env_creds", False)),
+    )
 
     # Path 1: explicit IdP flags / recorded pages — no vendor YAML required.
     if args.fixture or args.base_url or args.domain:

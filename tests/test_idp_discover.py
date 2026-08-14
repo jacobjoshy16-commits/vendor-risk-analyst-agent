@@ -436,6 +436,7 @@ class TestTokenLifecycle(unittest.TestCase):
         block = {
             "client_id_env": "TEST_A0_ID",
             "client_secret_env": "TEST_A0_SEC",
+            "_allow_env_creds": True,
         }
         import os
 
@@ -504,7 +505,7 @@ class TestTokenLifecycle(unittest.TestCase):
                 },
             }
             estate, err = discover_from_vendor(
-                vendor, RunConfig(offline=False), transport=transport
+                vendor, RunConfig(offline=False, allow_env_creds=True), transport=transport
             )
             self.assertIsNone(err)
             assert estate is not None
@@ -539,11 +540,11 @@ class TestTokenLifecycle(unittest.TestCase):
                 "probe": {"provider": "auth0", "base_url": AUTH0, "mode": "live"},
             }
             estate, err = discover_from_vendor(
-                vendor, RunConfig(offline=False), transport=transport
+                vendor, RunConfig(offline=False, allow_env_creds=True), transport=transport
             )
             self.assertIsNone(err)
             assert estate is not None
-            self.assertTrue(any("24h" in w or "expire" in w for w in estate.warnings))
+            self.assertTrue(any("static" in w or "expire" in w or "env" in w.lower() for w in estate.warnings))
         finally:
             os.environ.pop("AUTH0_MGMT_TOKEN", None)
 

@@ -22,6 +22,7 @@ home vendor, and NHI-06 fires only when the declaration is missing.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -64,6 +65,20 @@ def _age_days(value: Any) -> int | str:
     except ValueError:
         return "unknown"
     return (date.today() - stamped).days
+
+
+def entitlement_hash(scopes: list[str] | None) -> str:
+    """Stable hash of the granted-scope set. Order-independent."""
+    canon = json.dumps(sorted({str(s) for s in (scopes or []) if s}), separators=(",", ":"))
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def entitlement_diff(old_scopes: list[str] | None, new_scopes: list[str] | None) -> dict[str, list[str]]:
+    old, new = set(old_scopes or []), set(new_scopes or [])
+    return {
+        "added_scopes": sorted(new - old),
+        "removed_scopes": sorted(old - new),
+    }
 
 
 def identity_key(vendor_slug: str, nhi: dict) -> str:
@@ -427,10 +442,16 @@ class NHIInventory:
         }
         self.path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
-    def upsert(self, vendor_slug: str, nhi: dict) -> dict:
+    def upsert(self, vendor_slug: str, nhi: dict) -> tuple[dict, dict | None]:
         key = identity_key(vendor_slug, nhi)
         today = date.today().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         existing = self.identities.get(key)
+        scopes = list(nhi.get("scopes") or [])
+        ehash = entitlement_hash(scopes)
+        cred_age = nhi.get("credential_age")
+        if cred_age is None:
+            cred_age = _age_days(nhi.get("last_rotated") or nhi.get("created"))
         record = {
             "key": key,
             "vendor": vendor_slug,
@@ -439,14 +460,18 @@ class NHIInventory:
             "app_id": nhi.get("app_id") or nhi.get("id"),
             "client_id": nhi.get("client_id"),
             "name": nhi.get("name"),
+            "display_name": nhi.get("display_name") or nhi.get("name") or nhi.get("principal"),
+            "type": nhi.get("type") or nhi.get("kind"),
             "kind": nhi.get("kind"),
             "status": nhi.get("status"),
             "principal": nhi.get("principal"),
-            "scopes": nhi.get("scopes") or [],
+            "scopes": scopes,
             "write_scopes": nhi.get("write_scopes") or [],
+            "entitlement_hash": ehash,
             "owner": nhi.get("owner"),
             "last_rotated": nhi.get("last_rotated"),
             "days_since_rotated": nhi.get("days_since_rotated"),
+            "credential_age": cred_age,
             "human_in_loop": nhi.get("human_in_loop"),
             "autonomy": nhi.get("autonomy"),
             "output_logged": nhi.get("output_logged"),
@@ -461,18 +486,47 @@ class NHIInventory:
             "discovered_via": nhi.get("discovered_via"),
             "cross_plane": bool(nhi.get("cross_plane")),
             "also_seen_on": list(nhi.get("also_seen_on") or []),
+            "tenant": nhi.get("tenant") or vendor_slug,
             "evidence": nhi.get("evidence") or "",
             "last_seen": today,
         }
+        change = None
         if existing is None:
             record["first_seen"] = today
             self.identities[key] = record
-            return record
+            return record, None
+        prev_hash = existing.get("entitlement_hash")
+        prev_scopes = list(existing.get("scopes") or [])
         existing.update({k: v for k, v in record.items() if k != "first_seen"})
-        return existing
+        if prev_hash and prev_hash != ehash:
+            delta = entitlement_diff(prev_scopes, scopes)
+            from .probe import _is_write_scope
+            change = {
+                "id": f"entitlement:{key}:{ehash[:12]}",
+                "kind": "entitlement_change",
+                "family": "nhi",
+                "vendor": vendor_slug,
+                "vendor_name": record.get("vendor_name"),
+                "nhi_id": record.get("id") or record.get("app_id"),
+                "nhi_name": record.get("display_name"),
+                "added_scopes": delta["added_scopes"],
+                "removed_scopes": delta["removed_scopes"],
+                "gained_write_scope": any(_is_write_scope(s) for s in delta["added_scopes"]),
+                "previous_hash": prev_hash,
+                "current_hash": ehash,
+                "timestamp": now,
+            }
+        return existing, change
 
-    def upsert_many(self, vendor_slug: str, nhis: list[dict]) -> list[dict]:
-        return [self.upsert(vendor_slug, n) for n in nhis]
+    def upsert_many(self, vendor_slug: str, nhis: list[dict]) -> tuple[list[dict], list[dict]]:
+        rows: list[dict] = []
+        events: list[dict] = []
+        for n in nhis:
+            rec, ev = self.upsert(vendor_slug, n)
+            rows.append(rec)
+            if ev:
+                events.append(ev)
+        return rows, events
 
     def all(self) -> list[dict]:
         return sorted(self.identities.values(), key=lambda i: i["key"])

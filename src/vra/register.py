@@ -65,6 +65,7 @@ class FindingStore:
     def __init__(self, path: Path = FINDINGS_FILE):
         self.path = path
         self.findings: dict[str, dict] = {}
+        self.events: list[dict] = []
         self.meta: dict[str, Any] = {}
         self.load()
 
@@ -73,6 +74,9 @@ class FindingStore:
             blob = json.loads(self.path.read_text(encoding="utf-8"))
             self.findings = {f["id"]: f for f in blob.get("findings", [])}
             self.meta = blob.get("meta", {})
+            self.events = list(blob.get("events") or [])
+        else:
+            self.events = []
 
     def save(self, cfg: RunConfig) -> None:
         if cfg.dry_run:
@@ -80,9 +84,15 @@ class FindingStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "meta": {**self.meta, "last_run": datetime.now(timezone.utc).isoformat()},
-            "findings": sorted(self.findings.values(), key=lambda f: (f["vendor"], f["control_id"])),
+            "findings": sorted(self.findings.values(), key=lambda f: (f["vendor"], f.get("control_id") or "")),
+            "events": self.events,
         }
-        self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        self.path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+    def record_event(self, event: dict) -> dict:
+        """Append a structured event. Not a finding — no severity, no due date."""
+        self.events.append(event)
+        return event
 
     @property
     def last_run(self) -> str | None:

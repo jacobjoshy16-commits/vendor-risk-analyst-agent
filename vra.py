@@ -37,6 +37,14 @@ def main(argv: list[str] | None = None) -> int:
             from vra.monitor import main as monitor_main
 
             return monitor_main(rest)
+        if cmd == "discover":
+            from vra.discover import main as discover_main
+
+            return discover_main(rest)
+        if cmd == "creds":
+            from vra.creds import main as creds_main
+
+            return creds_main(rest)
         if cmd == "nhis":
             from vra.monitor import print_inventory
 

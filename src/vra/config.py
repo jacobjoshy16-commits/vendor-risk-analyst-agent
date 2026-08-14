@@ -76,6 +76,7 @@ class RunConfig:
         default_factory=lambda: int(os.environ.get("VRA_MONITOR_INTERVAL", "900"))
     )
     monitor_once: bool = False
+    allow_env_creds: bool = False
     webui_host: str = field(default_factory=lambda: os.environ.get("VRA_WEBUI_HOST", "0.0.0.0"))
     webui_port: int = field(
         default_factory=lambda: int(os.environ.get("VRA_WEBUI_PORT", "8765"))

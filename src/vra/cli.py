@@ -78,6 +78,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-probe", action="store_true", help="skip all in-tenant probes")
     p.add_argument("--no-fail", action="store_true",
                    help="always exit 0, even with open critical findings")
+    p.add_argument("--allow-env-creds", action="store_true",
+                   help="CI only: read tokens from the environment if the keychain is empty")
     return p
 
 
@@ -274,8 +276,16 @@ def assess(cfg: RunConfig) -> RunResult:
                 if rec.get("vendor") == slug and rec.get("family") == "nhi" and rec.get("state") != "closed":
                     seen_ids.add(rec["id"])
             continue
-        stored_nhis = inventory.upsert_many(slug, discovered)
+        stored_nhis, entitlement_events = inventory.upsert_many(slug, discovered)
         all_nhis.extend(stored_nhis)
+        for change_ev in entitlement_events:
+            store.record_event(change_ev)
+            if change_ev.get("gained_write_scope"):
+                print(
+                    f"\n      ! entitlement change {change_ev.get('nhi_name')}: "
+                    f"gained write scope(s) {', '.join(change_ev.get('added_scopes') or [])}",
+                    file=sys.stderr,
+                )
         nhi_findings_a, nhi_gaps_a = evaluate_nhis(vendor, discovered, nhi_controls)
         nhi_f_recs, nhi_g_recs = assessments_to_records(
             nhi_findings_a,
@@ -307,7 +317,7 @@ def assess(cfg: RunConfig) -> RunResult:
         "vendors": vendors, "findings": all_findings, "gaps": all_gaps,
         "triages": all_triages, "probes": all_probes, "parses": all_parses,
         "nhis": all_nhis, "new_ids": new_ids, "closed": closed, "store": store,
-        "backend": backend_name,
+        "backend": backend_name, "events": store.events,
     }
 
     text = rp.build_report(ctx, cfg)
@@ -368,6 +378,7 @@ def main(argv: list[str] | None = None) -> int:
         vendors=args.vendors,
         no_probe=args.no_probe,
         fail_on_critical=not args.no_fail,
+        allow_env_creds=args.allow_env_creds,
     )
     if args.model:
         cfg.model = args.model

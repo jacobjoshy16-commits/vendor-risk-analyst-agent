@@ -605,6 +605,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=None, help="webui bind port")
     p.add_argument("--no-probe", action="store_true", help="skip in-tenant probes")
     p.add_argument("--model", default=None, help="Ollama model tag")
+    p.add_argument("--allow-env-creds", action="store_true",
+                   help="CI only: fall back to environment variables if the keychain is empty")
     return p
 
 
@@ -666,6 +668,7 @@ def main(argv: list[str] | None = None) -> int:
         fail_on_critical=False,  # a critical is a finding, not a crashed daemon
         monitor_once=args.once,
         interval_seconds=interval,
+        allow_env_creds=args.allow_env_creds,
     )
     if args.model:
         cfg.model = args.model

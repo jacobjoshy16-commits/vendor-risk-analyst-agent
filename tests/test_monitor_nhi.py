@@ -186,11 +186,12 @@ class TestNHIInventory(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp()) / "nhis.json"
         try:
             inv = NHIInventory(path=tmp)
-            rec = inv.upsert("v", {
+            rec, ev = inv.upsert("v", {
                 "id": "a", "app_id": "a", "name": "A", "kind": "oauth_app",
                 "principal": "a", "vendor_name": "V",
             })
             self.assertEqual(rec["key"], "v|a")
+            self.assertIsNone(ev)
             inv.save(RunConfig(dry_run=False))
             again = NHIInventory(path=tmp)
             self.assertEqual(len(again.all()), 1)

@@ -47,8 +47,8 @@ This tool is the independent monitor for that gap.
 ```
 1. Bootstrap each vendor     python3 vra.py bootstrap Slack --offline
 2. Accept the proposal       edit vendors/{slug}.yaml  (model never writes it)
-3. Point probe: at each vendor API   Atlassian / Slack / Okta / Auth0 + token env
-4. Discover the identities           python3 vra.py discover --provider atlassian --base-url https://api.atlassian.com
+3. Store the API key in the OS keychain   python3 vra.py creds set okta
+4. Discover the identities                python3 vra.py discover --provider okta --base-url https://your-org.okta.com
 5. Leave the monitor up      python3 vra.py monitor --offline --webui --interval 15m
 6. Read the pack             out/latest.md
 7. List the identities       python3 vra.py nhis
@@ -60,25 +60,31 @@ vendor’s** documented API (Atlassian, Slack, Okta, Auth0) and writes
 last-rotated, `resides_in`.
 
 ```bash
-# Live IdP — full list, paginated. Token stays in the environment.
-export OKTA_API_TOKEN=...          # SSWS, never written to disk
-python3 vra.py discover --provider okta --base-url https://your-org.okta.com
+# Store secrets in the OS keychain (hidden prompt, never a CLI argument).
+python3 vra.py creds set okta
+python3 vra.py creds set auth0
+python3 vra.py creds list          # names only — never values
+python3 vra.py creds test okta --base-url https://your-org.okta.com
+python3 vra.py creds rm slack      # forget a connector
 
-export AUTH0_CLIENT_ID=...
-export AUTH0_CLIENT_SECRET=...
+python3 vra.py discover --provider okta --base-url https://your-org.okta.com
 python3 vra.py discover --provider auth0 --domain your-tenant.us.auth0.com
+
+# CI only — env vars, with an explicit warning:
+python3 vra.py discover --provider okta --base-url https://your-org.okta.com --allow-env-creds
 
 # Recorded pages (same walker as live, no network):
 python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json
 ```
 
-The monitor remints Auth0 from `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` into
-an in-process vault (`expires_in` minus 60s) and retries once on 401. A
-static `AUTH0_MGMT_TOKEN` cannot be refreshed and will 401 after ~24h — the
-cycle then keeps last inventory instead of wiping it. 429s honor
-`Retry-After` / `X-Rate-Limit-Reset` and return a partial list. The same
-principal seen on your IdP and on the vendor API is linked (`also_seen_on`);
-that observation satisfies NHI-06 without a YAML row.
+Credentials survive a shell restart because they live in the OS keychain
+(macOS Keychain, Windows Credential Locker, Linux Secret Service), not in
+the terminal. The monitor remints Auth0 from the stored client id/secret
+(`expires_in` minus 60s) and retries once on 401. 429s honor `Retry-After`
+and keep a partial list. The same principal seen on your IdP and on the
+vendor API is linked (`also_seen_on`); that observation satisfies NHI-06.
+If an agent **gains a write scope** since last cycle, that is recorded as
+an `entitlement_change` event in `data/findings.json` (not a model opinion).
 
 The monitor re-reads `vendors/` every cycle. A vendor you onboard at 2pm is in
 the 2:15 run. Two copies cannot run (`data/monitor.lock`). Identical fetches
@@ -169,7 +175,7 @@ Python 3.10+.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install pyyaml requests pypdf
+pip install -r requirements.txt   # pyyaml requests pypdf keyring
 # optional, for live-model triage:
 ollama pull qwen2.5:7b-instruct
 ```
@@ -181,7 +187,7 @@ python3 vra.py bootstrap Slack --offline        # new vendor, catalog URL
 python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json
 python3 vra.py monitor --offline --webui --interval 15m
 python3 vra.py nhis
-python3 -m unittest tests.test_vra tests.test_monitor_nhi tests.test_real_world_vendors tests.test_idp_discover
+python3 -m unittest tests.test_vra tests.test_monitor_nhi tests.test_real_world_vendors tests.test_idp_discover tests.test_creds
 ```
 
 | Flag | Effect |

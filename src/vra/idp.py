@@ -976,25 +976,40 @@ def _live_token(
     cannot be refreshed — the monitor will start 401-ing when it expires.
     """
     vault = vault or TOKEN_VAULT
-    meta: dict[str, Any] = {"static": False, "remintable": False, "cache_key": ""}
+    meta: dict[str, Any] = {"static": False, "remintable": False, "cache_key": "", "used_env": False}
+    allow_env = bool(block.get("_allow_env_creds"))
+    from .creds import resolve_secrets
+
+    connector = provider if provider in ("okta", "auth0", "atlassian", "slack") else "okta"
+    extra_env: dict[str, tuple[str, ...]] = {}
+    if block.get("token_env"):
+        extra_env["api_token"] = (str(block["token_env"]),)
+        extra_env["bot_token"] = (str(block["token_env"]),)
+        extra_env["management_token"] = (str(block["token_env"]),)
+    if block.get("client_id_env"):
+        extra_env["client_id"] = (str(block["client_id_env"]),)
+    if block.get("client_secret_env"):
+        extra_env["client_secret"] = (str(block["client_secret_env"]),)
+    secrets, err, used_env = resolve_secrets(
+        connector, allow_env=allow_env, env_map=extra_env or None
+    )
+    meta["used_env"] = used_env
+    if err:
+        return None, err, meta
+
     if provider == "atlassian":
-        env_name = block.get("token_env") or "ATLASSIAN_API_TOKEN"
-        token = os.environ.get(env_name, "")
-        if not token:
-            return None, f"no API token in ${env_name}; skipping Atlassian discovery", meta
-        return token, None, meta
+        token = secrets.get("api_token") or ""
+        secrets.clear()
+        return token or None, (None if token else "no Atlassian api_token in keychain"), meta
     if provider == "slack":
-        env_name = block.get("token_env") or "SLACK_BOT_TOKEN"
-        token = os.environ.get(env_name, "") or os.environ.get("SLACK_TOKEN", "")
-        if not token:
-            return None, f"no Slack token in ${env_name} (or $SLACK_TOKEN)", meta
-        return token, None, meta
+        token = secrets.get("bot_token") or ""
+        secrets.clear()
+        return token or None, (None if token else "no Slack bot_token in keychain"), meta
     if provider == "auth0":
-        ready_env = block.get("token_env") or "AUTH0_MGMT_TOKEN"
-        cid_env = block.get("client_id_env") or "AUTH0_CLIENT_ID"
-        sec_env = block.get("client_secret_env") or "AUTH0_CLIENT_SECRET"
-        client_id = os.environ.get(cid_env, "")
-        client_secret = os.environ.get(sec_env, "")
+        client_id = secrets.get("client_id") or ""
+        client_secret = secrets.get("client_secret") or ""
+        ready = secrets.get("management_token") or ""
+        secrets.clear()
         if client_id and client_secret:
             cache_key = f"auth0|{base}|{client_id}"
             meta.update(remintable=True, cache_key=cache_key)
@@ -1003,25 +1018,22 @@ def _live_token(
             cached = vault.get(cache_key)
             if cached is not None:
                 return cached.access_token, None, meta
-            token, expires_in, err = mint_auth0_token(
+            token, expires_in, mint_err = mint_auth0_token(
                 transport, base, client_id, client_secret, block.get("audience")
             )
-            if err or not token:
-                return None, err or "auth0 mint failed", meta
+            client_secret = ""
+            if mint_err or not token:
+                return None, mint_err or "auth0 mint failed", meta
             vault.put(cache_key, token, expires_in, source="client_credentials")
             return token, None, meta
-        ready = os.environ.get(ready_env, "")
         if ready:
             meta["static"] = True
             return ready, None, meta
-        return None, (
-            f"no Auth0 client credentials in ${cid_env} / ${sec_env} "
-            f"and no static token in ${ready_env}"
-        ), meta
-    env_name = block.get("token_env") or "OKTA_API_TOKEN"
-    token = os.environ.get(env_name, "")
+        return None, "no Auth0 client_id/client_secret (or management_token) in keychain", meta
+    token = secrets.get("api_token") or ""
+    secrets.clear()
     if not token:
-        return None, f"no API token in ${env_name}; skipping live IdP discovery", meta
+        return None, "no Okta api_token in keychain; run `python3 vra.py creds set okta`", meta
     return token, None, meta
 
 
@@ -1041,7 +1053,9 @@ def discover_from_vendor(
         return None, "offline mode: skipped live IdP discovery"
     bus = transport or LiveTransport()
     vault = TOKEN_VAULT
-    token, err, token_meta = _live_token(block, provider, bus, base, vault=vault)
+    live_block = dict(block)
+    live_block["_allow_env_creds"] = bool(getattr(cfg, "allow_env_creds", False))
+    token, err, token_meta = _live_token(live_block, provider, bus, base, vault=vault)
     if err:
         return None, err
 
@@ -1049,7 +1063,7 @@ def discover_from_vendor(
         if not token_meta.get("remintable"):
             return None
         new, new_err, _ = _live_token(
-            block, provider, bus, base, vault=vault, force_refresh=True
+            live_block, provider, bus, base, vault=vault, force_refresh=True
         )
         if new_err or not new:
             return None

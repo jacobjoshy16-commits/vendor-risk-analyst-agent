@@ -433,6 +433,7 @@ def write_report(text: str, ctx: dict, cfg: RunConfig) -> Path | None:
                 "probes": ctx["probes"],
                 "subprocessor_parses": ctx.get("parses", []),
                 "nhis": ctx.get("nhis", []),
+                "events": ctx.get("events", []),
             },
             indent=2,
             default=str,
