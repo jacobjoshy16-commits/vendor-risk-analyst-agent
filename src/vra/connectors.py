@@ -284,6 +284,12 @@ def discover_slack(
         estate.requests_made += 1
         estate.pages_fetched += 1
         pages += 1
+        if status == 429 or (isinstance(body, dict) and body.get("error") == "ratelimited"):
+            estate.truncated = True
+            estate.warnings.append(
+                f"users.list rate-limited after retries; kept {len(bots)} bot(s)"
+            )
+            break
         if status >= 400 or not isinstance(body, dict) or body.get("ok") is False:
             err = (body or {}).get("error") if isinstance(body, dict) else status
             estate.warnings.append(f"users.list failed: {err}")

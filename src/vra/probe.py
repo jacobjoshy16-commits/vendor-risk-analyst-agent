@@ -128,9 +128,12 @@ def _extract_nhis(data: dict) -> list[dict]:
         provider = app.get("idp") or idp or "unknown"
         kind = classify_kind(app, provider)
         principal = next((p for p in principals if p), None) or app.get("label")
+        oauth_client = ((app.get("credentials") or {}).get("oauthClient") or {})
+        client_id = app.get("client_id") or oauth_client.get("client_id") or app.get("id")
         nhi = {
             "id": app.get("id"),
             "app_id": app.get("id"),
+            "client_id": client_id,
             "name": app.get("label"),
             "kind": kind,
             "status": "active" if app.get("status") == "ACTIVE" else "disabled",

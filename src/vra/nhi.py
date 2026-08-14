@@ -78,19 +78,27 @@ def identity_key(vendor_slug: str, nhi: dict) -> str:
     return f"{vendor_slug}|{token}"
 
 
+def _id_tokens(nhi: dict) -> set[str]:
+    """Quotable identifiers long enough to be a real client/app id."""
+    out: set[str] = set()
+    for key in ("client_id", "app_id", "id"):
+        value = str(nhi.get(key) or "").strip().lower()
+        if len(value) >= 6 and value not in {"unnamed", "unknown", "none"}:
+            out.add(value)
+    return out
+
+
 def same_identity(a: dict, b: dict) -> bool:
     """True when two NHI records describe the same principal.
 
-    Matches only quotable identifiers: client/app id, principal, or an
-    exact name of at least 5 characters. Does not fuzzy-match.
+    Matches only quotable identifiers: client/app id (any side, any plane),
+    principal, or an exact name of at least 5 characters. Does not fuzzy-match.
     """
-    for key in ("client_id", "app_id"):
+    if _id_tokens(a) & _id_tokens(b):
+        return True
+    for key in ("principal",):
         av, bv = str(a.get(key) or "").lower(), str(b.get(key) or "").lower()
-        if av and bv and av == bv:
-            return True
-    for key in ("id", "principal"):
-        av, bv = str(a.get(key) or "").lower(), str(b.get(key) or "").lower()
-        if av and bv and av == bv:
+        if av and bv and av == bv and len(av) >= 4:
             return True
     an, bn = str(a.get("name") or "").lower(), str(b.get("name") or "").lower()
     return bool(an and bn and an == bn and len(an) >= 5)
@@ -429,6 +437,7 @@ class NHIInventory:
             "vendor_name": nhi.get("vendor_name") or vendor_slug,
             "id": nhi.get("id"),
             "app_id": nhi.get("app_id") or nhi.get("id"),
+            "client_id": nhi.get("client_id"),
             "name": nhi.get("name"),
             "kind": nhi.get("kind"),
             "status": nhi.get("status"),

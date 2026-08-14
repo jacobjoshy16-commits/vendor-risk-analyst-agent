@@ -622,6 +622,17 @@ class TestCrossPlaneDedup(unittest.TestCase):
         self.assertTrue(okta_row["declared"], "home-plane observation satisfies NHI-06")
         self.assertEqual(okta_row["home_vendor"], "loop-workspace")
 
+    def test_assess_scores_nhis_after_cross_plane_link(self):
+        """Regression: discovered_by_vendor used to stay empty, so NHI-* never scored."""
+        from vra.cli import assess
+
+        result = assess(RunConfig(
+            offline=True, snapshot_version="v1", dry_run=True,
+            fail_on_critical=False, vendors=["meridian-revcycle"],
+        ))
+        self.assertGreaterEqual(result.nhi_count, 1)
+        self.assertIn(result.exit_code, (0, 1))
+
     def test_unrelated_names_are_not_merged(self):
         from vra.nhi import link_cross_plane
 
@@ -630,6 +641,30 @@ class TestCrossPlaneDedup(unittest.TestCase):
         link_cross_plane({"idp": [a], "atlassian": [b]})
         self.assertFalse(a.get("cross_plane"))
         self.assertFalse(b.get("cross_plane"))
+
+    def test_same_client_id_matches_across_planes_even_if_names_differ(self):
+        from vra.nhi import link_cross_plane, same_identity
+
+        idp = {
+            "id": "0oaAtlassianSSO1",
+            "app_id": "0oaAtlassianSSO1",
+            "client_id": "AbCdEfGhIjKlMnOpQrSt",
+            "name": "Atlassian SSO",
+            "idp": "okta",
+            "declared": False,
+        }
+        vendor = {
+            "id": "ari:cloud:oauth::client/AbCdEfGhIjKlMnOpQrSt",
+            "app_id": "AbCdEfGhIjKlMnOpQrSt",
+            "client_id": "AbCdEfGhIjKlMnOpQrSt",
+            "name": "Jira Cloud",
+            "idp": "atlassian",
+            "declared": False,
+        }
+        self.assertTrue(same_identity(idp, vendor))
+        link_cross_plane({"okta-org": [idp], "atlassian": [vendor]})
+        self.assertTrue(idp["declared"])
+        self.assertEqual(idp["home_vendor"], "atlassian")
 
 
 if __name__ == "__main__":

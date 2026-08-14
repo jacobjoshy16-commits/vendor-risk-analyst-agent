@@ -214,27 +214,15 @@ def assess(cfg: RunConfig) -> RunResult:
                  "change_type": "uncovered_ai_subprocessor", "confidence": 1.0}
             )
 
-        # -- NHI inventory: discover, persist, evaluate ---------------------
-        # Observed identities overlay the register. Findings are deterministic
-        # and quote the tenant API field or the register row they came from.
+        # -- NHI inventory: collect only. Score after every plane is in. ----
+        # link_cross_plane needs the full portfolio so NHI-06 can see that
+        # the same principal showed up on the vendor API, not just the IdP.
         discovered = discover_nhis(vendor, pres, portfolio=portfolio)
-        stored_nhis = inventory.upsert_many(slug, discovered)
-        all_nhis.extend(stored_nhis)
-        nhi_findings_a, nhi_gaps_a = evaluate_nhis(vendor, discovered, nhi_controls)
-        nhi_f_recs, nhi_g_recs = assessments_to_records(
-            nhi_findings_a,
-            nhi_gaps_a,
-            evidence_by_subject={
-                str(n.get("principal") or n.get("id") or ""): (
-                    [{"source": "in_tenant_probe", "excerpt": n.get("evidence") or "",
-                      "change_type": "nhi_observation", "confidence": 1.0}]
-                    if n.get("evidence") else []
-                )
-                for n in discovered
-            },
-        )
-        nhi_finding_n += len(nhi_f_recs)
-        nhi_gap_n += len(nhi_g_recs)
+        discovered_by_vendor[slug] = discovered
+        if (vendor.get("probe") or {}).get("enabled") and not pres.ran:
+            probe_failed.add(slug)
+            if pres.error:
+                print(f"\n      ! probe did not run: {pres.error}", file=sys.stderr)
 
         # -- Phase 5: deterministic control evaluation ----------------------
         findings, gaps = ev.evaluate_vendor(vendor, controls, observed)
@@ -279,13 +267,14 @@ def assess(cfg: RunConfig) -> RunResult:
     for vendor in vendors:
         slug = vendor["slug"]
         discovered = discovered_by_vendor.get(slug) or []
-        if slug not in probe_failed:
-            stored_nhis = inventory.upsert_many(slug, discovered)
-        else:
-            stored_nhis = discovered
+        if slug in probe_failed:
+            stored_nhis = inventory.for_vendor(slug)
+            all_nhis.extend(stored_nhis)
             for rec in store.findings.values():
                 if rec.get("vendor") == slug and rec.get("family") == "nhi" and rec.get("state") != "closed":
                     seen_ids.add(rec["id"])
+            continue
+        stored_nhis = inventory.upsert_many(slug, discovered)
         all_nhis.extend(stored_nhis)
         nhi_findings_a, nhi_gaps_a = evaluate_nhis(vendor, discovered, nhi_controls)
         nhi_f_recs, nhi_g_recs = assessments_to_records(
