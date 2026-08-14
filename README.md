@@ -1,4 +1,4 @@
-# Vendor NHI Monitor
+# Vendor NHI Complaince Monitor (1.2) 
 
 An **independent** workstation monitor for **non-human identities** that vendor
 applications drop into your estate — especially **agentic AI** (copilots, agents,
