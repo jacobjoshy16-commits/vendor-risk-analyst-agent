@@ -64,11 +64,14 @@ watch:
   dpa: sandbox/vendors/aegis-identity-cloud/snapshots/{version}/dpa.txt
 probe:
   type: identity_provider_api
+  provider: okta
   enabled: true
   mode: fixture
   fixture: sandbox/probe/aegis_tenant_{version}.json
   base_url: https://dev-000000.aegisidentity.example
   token_env: AEGIS_API_TOKEN
+  page_limit: 200
+  max_pages: 50
 state:
   last_assessed: '2026-08-14T05:24:06.749287+00:00'
   snapshot_hashes:

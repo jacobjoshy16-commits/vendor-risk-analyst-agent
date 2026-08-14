@@ -11,8 +11,11 @@ scope, and nobody assessed it.
 
 Two modes:
   fixture — read a saved API response set from the sandbox. Offline, reproducible.
-  live    — call the vendor management API with a token from the environment.
-            The token is read from os.environ only; it is never stored in the
+            A recorded *page set* (``pages:``) is walked by the same IdP client
+            as live HTTP. A legacy single-blob fixture (``applications`` +
+            ``oauth_grants``) is accepted as already-normalised.
+  live    — page the real Okta / Auth0 management API (src/vra/idp.py).
+            Tokens come from os.environ only; they are never stored in the
             register or written to any output file.
 """
 
@@ -40,6 +43,10 @@ class ProbeResult:
     nhis: list[dict] = field(default_factory=list)
     reconciliation: list[dict] = field(default_factory=list)
     error: str | None = None
+    provider: str | None = None
+    pages_fetched: int = 0
+    resource_counts: dict[str, int] = field(default_factory=dict)
+    truncated: bool = False
 
 
 def _is_write_scope(scope: str) -> bool:
@@ -92,20 +99,23 @@ def _load_live(vendor: dict, cfg: RunConfig) -> tuple[dict, str | None]:
 
 
 def _extract_nhis(data: dict) -> list[dict]:
-    """Every application + OAuth grant becomes an observed NHI.
+    """Every application + OAuth grant + API token + service account is an NHI.
 
-    AI components are tagged ``agent_principal``; everything else is an
-    ``oauth_app`` (SSO integrations, provisioning clients, workload ids).
-    Agent-mode tenant settings overlay autonomy / human-in-the-loop on the
-    AI component so NHI-01 can fire from the same quotable API fields as
-    AIV-07, against the *identity* rather than the feature.
+    Kind is classified from quotable API fields (``src/vra/idp.classify_kind``).
+    We do not invent ``agent_principal`` from a name like "Copilot".
+    Agent-mode tenant settings overlay autonomy / human-in-the-loop on an
+    AI component so NHI-01 can fire from the same API fields as AIV-07.
     """
+    from .idp import classify_kind
+
     grants_by_app: dict[Any, list] = {}
     for grant in data.get("oauth_grants", []):
         grants_by_app.setdefault(grant.get("app_id"), []).append(grant)
 
     copilot = ((data.get("settings") or {}).get("copilot") or {})
     agent_mode = copilot.get("agent_mode") or {}
+    discovery = data.get("_discovery") or {}
+    idp = discovery.get("provider")
 
     nhis: list[dict] = []
     seen_apps: set[Any] = set()
@@ -121,7 +131,8 @@ def _extract_nhis(data: dict) -> list[dict]:
             issued = issued or grant.get("issued")
         scopes = sorted(set(scopes))
         write = sorted({s for s in scopes if _is_write_scope(s)})
-        kind = "agent_principal" if app.get("ai_component") else "oauth_app"
+        provider = app.get("idp") or idp or "unknown"
+        kind = classify_kind(app, provider)
         principal = next((p for p in principals if p), None) or app.get("label")
         nhi = {
             "id": app.get("id"),
@@ -136,6 +147,8 @@ def _extract_nhis(data: dict) -> list[dict]:
             "last_rotated": issued,
             "ai_component": bool(app.get("ai_component")),
             "source": "observed",
+            "idp": provider,
+            "discovered_via": app.get("discovered_via") or "tenant_applications",
             "evidence": (
                 f"tenant application {app.get('id')} ({app.get('label')}) "
                 f"principal={principal} scopes={', '.join(scopes) or 'none'}"
@@ -166,7 +179,61 @@ def _extract_nhis(data: dict) -> list[dict]:
                 "last_rotated": issued,
                 "ai_component": False,
                 "source": "observed",
+                "idp": idp,
+                "discovered_via": "tenant_oauth_grants",
                 "evidence": f"tenant oauth grant app_id={app_id} principal={principal}",
+            }
+        )
+
+    for token in data.get("api_tokens") or []:
+        token_id = token.get("id")
+        if not token_id or token_id in seen_apps:
+            continue
+        name = token.get("name") or str(token_id)
+        nhis.append(
+            {
+                "id": token_id,
+                "app_id": token_id,
+                "name": name,
+                "kind": "api_key",
+                "status": "active",
+                "principal": name,
+                "scopes": [],
+                "write_scopes": [],
+                "created": token.get("created"),
+                "ai_component": False,
+                "source": "observed",
+                "idp": token.get("idp") or idp,
+                "discovered_via": token.get("discovered_via") or "okta_api_tokens",
+                "evidence": (
+                    f"idp api-token {token_id} ({name}) "
+                    f"created={token.get('created') or 'unknown'}"
+                ),
+            }
+        )
+
+    for svc in data.get("service_accounts") or []:
+        svc_id = svc.get("id")
+        if not svc_id or svc_id in seen_apps:
+            continue
+        name = svc.get("name") or str(svc_id)
+        status = str(svc.get("status") or "ACTIVE").upper()
+        nhis.append(
+            {
+                "id": svc_id,
+                "app_id": svc_id,
+                "name": name,
+                "kind": "service_account",
+                "status": "active" if status == "ACTIVE" else "disabled",
+                "principal": name,
+                "scopes": [],
+                "write_scopes": [],
+                "created": svc.get("created"),
+                "ai_component": False,
+                "source": "observed",
+                "idp": svc.get("idp") or idp,
+                "discovered_via": svc.get("discovered_via") or "okta_users",
+                "evidence": f"idp service-account user {svc_id} ({name})",
             }
         )
     return nhis
@@ -217,6 +284,7 @@ def run_probe(vendor: dict, cfg: RunConfig) -> ProbeResult:
     copilot = ((data.get("settings") or {}).get("copilot") or {})
     agent_mode = copilot.get("agent_mode") or {}
 
+    discovery = data.get("_discovery") or {}
     tenant = {
         "org": data.get("org", {}),
         "copilot_enabled": copilot.get("enabled"),
@@ -225,6 +293,10 @@ def run_probe(vendor: dict, cfg: RunConfig) -> ProbeResult:
         "per_action_approval": agent_mode.get("per_action_approval"),
         "prompt_retention_days": copilot.get("prompt_retention_days"),
         "application_count": len(data.get("applications", [])),
+        "idp_provider": discovery.get("provider"),
+        "idp_pages_fetched": discovery.get("pages_fetched"),
+        "idp_truncated": discovery.get("truncated"),
+        "idp_counts": discovery.get("counts") or {},
     }
 
     # --- reconcile against the register -----------------------------------
@@ -323,4 +395,8 @@ def run_probe(vendor: dict, cfg: RunConfig) -> ProbeResult:
     return ProbeResult(
         vendor=slug, ran=True, mode=mode, tenant=tenant,
         ai_components=ai_components, nhis=nhis, reconciliation=recon,
+        provider=discovery.get("provider"),
+        pages_fetched=int(discovery.get("pages_fetched") or 0),
+        resource_counts=dict(discovery.get("counts") or {}),
+        truncated=bool(discovery.get("truncated")),
     )

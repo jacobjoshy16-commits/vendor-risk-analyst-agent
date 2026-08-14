@@ -556,7 +556,7 @@ def print_inventory(vendor: str | None = None) -> int:
     inv = NHIInventory()
     rows = inv.for_vendor(vendor) if vendor else inv.all()
     if not rows:
-        print("No NHIs inventoried yet. Run `python3 vra.py monitor --once` (or a normal assess).")
+        print("No NHIs inventoried yet. Run `python3 vra.py discover` against the IdP, or `monitor --once`.")
         return 0
     print(f"{'Vendor':<24} {'Identity':<28} {'Kind':<18} {'Write scopes':<28} {'Owner':<22} Source")
     print("-" * 140)

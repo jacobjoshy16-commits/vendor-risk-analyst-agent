@@ -126,6 +126,16 @@ python3 vra.py monitor --offline --webui --interval 2m
 > identity in the portfolio — Loop's provisioning client living in Aegis's tenant included. The
 > console shows the heartbeat. A critical is a finding, not a crashed daemon."
 
+## Beat 7d — discover the identities (20s, optional)
+
+```bash
+python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json --dry-run
+```
+
+> \"The list is not something a human typed. That is every application and API token the IdP
+> returned, across every page. A hundred NHIs per human identity is a pagination problem, not
+> a YAML problem.\"
+
 ## Beat 8 — honesty close (20s)
 
 Open `VALIDATION.md`, show the scoreboard, then scroll straight to Defects.

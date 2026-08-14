@@ -8,6 +8,7 @@ Subcommands:
   python3 vra.py bootstrap ...  onboard + propose an initial register from full artifacts
   python3 vra.py webui ...      local onboarding console (browser UI)
   python3 vra.py monitor ...    autonomous daemon — watch vendors + NHIs while the PC is on
+  python3 vra.py discover ...   pull the full NHI list from Auth0 / Okta (paginated)
   python3 vra.py nhis ...       print the portfolio NHI inventory
 """
 import sys
@@ -17,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from vra.cli import main as cli_main  # noqa: E402
 
-SUBCOMMANDS = ("run", "onboard", "bootstrap", "webui", "monitor", "nhis")
+SUBCOMMANDS = ("run", "onboard", "bootstrap", "webui", "monitor", "discover", "nhis")
 
 
 def main(argv: list[str] | None = None) -> int:

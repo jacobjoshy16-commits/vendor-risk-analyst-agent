@@ -20,6 +20,7 @@ Endpoints:
     GET  /api/nhis                 portfolio NHI inventory
     POST /api/onboard              run onboarding (JSON body, see _onboard)
     POST /api/assess               run an assessment for one vendor
+    POST /api/discover             page Okta / Auth0 (or a recorded fixture) for NHIs
     POST /api/monitor/start        spawn the autonomous monitor
     POST /api/monitor/stop         signal the monitor to exit
 
@@ -162,6 +163,19 @@ PAGE = """<!DOCTYPE html>
     </section>
     <section>
       <h2>Non-human identities</h2>
+      <p class="muted">Pulled from the IdP API (Okta / Auth0), not typed into YAML. Token stays in an environment variable — never paste it here.</p>
+      <form id="disc-form" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end;margin:10px 0 16px">
+        <div><label>Provider</label>
+          <select id="d-provider"><option value="okta">Okta</option><option value="auth0">Auth0</option></select>
+        </div>
+        <div><label>Org URL / domain</label>
+          <input id="d-base" placeholder="https://your-org.okta.com">
+        </div>
+        <div><label>Token env var</label>
+          <input id="d-token-env" placeholder="OKTA_API_TOKEN">
+        </div>
+        <button id="d-go" type="submit">Discover</button>
+      </form>
       <div id="nhis"><span class="muted">loading…</span></div>
     </section>
   </div>
@@ -341,6 +355,27 @@ $("ob-form").addEventListener("submit", async e => {
   go.disabled = false; go.textContent = "Onboard vendor";
 });
 
+$("disc-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const go = $("d-go"); go.disabled = true; go.innerHTML = '<span class="spin"></span>discovering';
+  try {
+    const res = await j("POST", "/api/discover", {
+      provider: $("d-provider").value,
+      base_url: $("d-base").value.trim(),
+      token_env: $("d-token-env").value.trim() || undefined,
+      offline: $("f-offline").checked
+    });
+    showResult({title: `Discovered ${res.count || 0} NHI(s) from ${esc(res.provider || "IdP")}`, blocks: [
+      `<div class="muted">pages ${esc(res.pages_fetched)} · truncated ${res.truncated ? "yes" : "no"} · ${esc(res.error || "ok")}</div>`,
+      res.warning ? `<div class="blocker">${esc(res.warning)}</div>` : ""
+    ]});
+    refresh();
+  } catch (err) {
+    showResult({title:"Discovery failed", blocks:[`<div class="blocker">${esc(err.message)}</div>`]});
+  }
+  go.disabled = false; go.textContent = "Discover";
+});
+
 $("mon-toggle").addEventListener("click", async () => {
   const btn = $("mon-toggle");
   btn.disabled = true;
@@ -423,6 +458,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._monitor_start(body)
             if path == "/api/monitor/stop":
                 return self._monitor_stop()
+            if path == "/api/discover":
+                return self._discover(body)
             return self._error(f"not found: {path}", 404)
         except Exception as exc:
             return self._error(f"server error: {exc}", 500)
@@ -490,6 +527,48 @@ class _Handler(BaseHTTPRequestHandler):
         from .monitor import stop_monitor
 
         self._json({"ok": True, "signalled": stop_monitor()})
+
+    def _discover(self, body: dict) -> None:
+        """Page the IdP. The token is read from an env var name, never from the body."""
+        from .discover import build_parser, run_discover
+        from .nhi import NHIInventory
+
+        if body.get("token") or body.get("client_secret"):
+            return self._error(
+                "do not send tokens in the request body; set an env var and pass token_env"
+            )
+        argv: list[str] = []
+        provider = (body.get("provider") or "").strip()
+        base = (body.get("base_url") or body.get("domain") or "").strip()
+        fixture = (body.get("fixture") or "").strip()
+        vendor = (body.get("vendor") or "").strip()
+        if provider:
+            argv.extend(["--provider", provider])
+        if base:
+            argv.extend(["--base-url", base])
+        if body.get("token_env"):
+            argv.extend(["--token-env", str(body["token_env"])])
+        if fixture:
+            argv.extend(["--fixture", fixture])
+        if vendor:
+            argv.extend(["--vendor", vendor])
+        if body.get("offline"):
+            argv.append("--offline")
+        if not fixture and not base and not vendor:
+            argv.extend(["--fixture", "sandbox/probe/idp/okta_pages.json"])
+        try:
+            args = build_parser().parse_args(argv)
+            code = run_discover(args)
+        except Exception as exc:
+            return self._error(f"discover failed: {exc}", 500)
+        rows = NHIInventory().all()
+        self._json({
+            "ok": code == 0,
+            "exit_code": code,
+            "count": len(rows),
+            "provider": provider or None,
+            "identities": rows[:200],
+        })
 
 
 # ---------------------------------------------------------------------------

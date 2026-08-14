@@ -1,0 +1,87 @@
+{
+  "provider": "auth0",
+  "base_url": "https://vra-demo.us.auth0.com",
+  "page_limit": 3,
+  "pages": [
+    {
+      "method": "GET",
+      "url": "https://vra-demo.us.auth0.com/api/v2/clients?include_totals=true&page=0&per_page=3",
+      "body": {
+        "start": 0,
+        "limit": 3,
+        "total": 5,
+        "clients": [
+          {
+            "client_id": "m2mBilling001",
+            "name": "Billing M2M",
+            "app_type": "non_interactive",
+            "grant_types": ["client_credentials"],
+            "created_at": "2025-10-01T00:00:00.000Z"
+          },
+          {
+            "client_id": "spaConsole002",
+            "name": "Admin Console",
+            "app_type": "spa",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "created_at": "2025-06-15T00:00:00.000Z"
+          },
+          {
+            "client_id": "webPortal003",
+            "name": "Customer Portal",
+            "app_type": "regular_web",
+            "grant_types": ["authorization_code"],
+            "created_at": "2024-12-01T00:00:00.000Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://vra-demo.us.auth0.com/api/v2/clients?include_totals=true&page=1&per_page=3",
+      "body": {
+        "start": 3,
+        "limit": 3,
+        "total": 5,
+        "clients": [
+          {
+            "client_id": "m2mSync00004",
+            "name": "Directory Sync",
+            "app_type": "non_interactive",
+            "grant_types": ["client_credentials"],
+            "created_at": "2026-01-20T00:00:00.000Z"
+          },
+          {
+            "client_id": "nativeMobile5",
+            "name": "Mobile App",
+            "app_type": "native",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "created_at": "2025-03-08T00:00:00.000Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://vra-demo.us.auth0.com/api/v2/client-grants?include_totals=true&page=0&per_page=3",
+      "body": {
+        "start": 0,
+        "limit": 3,
+        "total": 2,
+        "client_grants": [
+          {
+            "id": "cgr_1",
+            "client_id": "m2mBilling001",
+            "audience": "https://api.example.com",
+            "scope": ["read:invoices", "write:invoices"]
+          },
+          {
+            "id": "cgr_2",
+            "client_id": "m2mSync00004",
+            "audience": "https://api.example.com",
+            "scope": ["read:users"]
+          }
+        ]
+      }
+    }
+  ]
+}

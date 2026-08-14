@@ -8,10 +8,11 @@ owned, rotated, logged, and least-privileged?"
 
 Three-tier state still applies:
 
-  register  — human-authored ``nhis:`` block on a vendor YAML. Authoritative.
-  observed  — extracted from a tenant probe (applications + OAuth grants).
-              Overlays the register; can drive a finding because every field
-              quotes an API object.
+  register  — optional human overlay on a vendor YAML (owner, last_rotated,
+              resides_in). Not the inventory. A human does not type 100 apps.
+  observed  — pulled from the IdP management API (Okta / Auth0), paginated,
+              via ``vra.py discover`` / the monitor probe. Can drive a finding
+              because every field quotes an API object.
   proposed  — unused here. The model does not invent identities.
 
 Cross-vendor identities (Loop's provisioning principal living in Aegis's
@@ -402,6 +403,8 @@ class NHIInventory:
             "declared": bool(nhi.get("declared")),
             "home_vendor": nhi.get("home_vendor"),
             "resides_in": nhi.get("resides_in"),
+            "idp": nhi.get("idp"),
+            "discovered_via": nhi.get("discovered_via"),
             "evidence": nhi.get("evidence") or "",
             "last_seen": today,
         }

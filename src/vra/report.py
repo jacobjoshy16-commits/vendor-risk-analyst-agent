@@ -237,8 +237,15 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
         for p in probe_ran:
             a(f"### {p['vendor']} — mode `{p['mode']}`")
             a("")
+            if p.get("provider") or p.get("pages_fetched"):
+                a(f"- **IdP:** `{p.get('provider') or '—'}` · "
+                  f"**pages fetched:** `{p.get('pages_fetched') or 0}`"
+                  + (" · **truncated**" if p.get("truncated") else ""))
+                counts = p.get("resource_counts") or {}
+                if counts:
+                    a("- **IdP counts:** " + ", ".join(f"{k}={v}" for k, v in counts.items()))
             for key, val in p["tenant"].items():
-                if key == "org":
+                if key in ("org",):
                     continue
                 a(f"- **{key}:** `{val}`")
             a("")
@@ -270,8 +277,9 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     a("")
     nhis = ctx.get("nhis") or []
     if not nhis:
-        a("_No non-human identities inventoried this run. Add a `nhis:` block to the "
-          "vendor register, or enable a tenant probe._")
+        a("_No non-human identities inventoried this run. Point `probe:` at the "
+          "Okta or Auth0 tenant and run `python3 vra.py discover` — the list is "
+          "pulled from the API, not typed into YAML._")
         a("")
     else:
         a("| Vendor | Identity | Kind | Principal | Write scopes | Owner | Source | Flags |")
@@ -331,9 +339,13 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     a("")
     a("What this report is, and what it is not:")
     a("")
-    a("- **Human-entered, not observed.** Every field in the vendor register — contract status, BAA "
-      "coverage, feature autonomy, retention — was entered by an analyst reading vendor documentation. "
-      "The tool assesses what the register says. If the register is wrong, the assessment is wrong.")
+    a("- **NHIs are discovered, not typed.** Applications, OAuth clients, grants, and API tokens "
+      "come from the Okta / Auth0 management API (paginated). `vendors/*.yaml` `nhis:` is an "
+      "optional overlay (owner, last_rotated, resides_in), not the inventory.")
+    a("- **Human-entered, not observed (features / contract).** Every field in the vendor register — "
+      "contract status, BAA coverage, feature autonomy, retention — was entered by an analyst "
+      "reading vendor documentation. The tool assesses what the register says. If the register "
+      "is wrong, the assessment is wrong.")
     a("- **Public artifacts only.** Except where an in-tenant probe is configured, the tool sees what "
       "the vendor publishes. Vendors ship AI features before they document them.")
     if backend != "ollama":

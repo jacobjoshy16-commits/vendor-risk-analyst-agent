@@ -176,6 +176,10 @@ class OnboardResult:
         else:
             steps.append("Subprocessor disclosure is parsed — AIV-03 has coverage from day one.")
         steps.append(f"Run the first assessment:  python3 vra.py --vendor {self.slug}  (add --snapshot v1)")
+        steps.append(
+            "Point probe: at the vendor's Okta/Auth0 tenant and run "
+            "`python3 vra.py discover` — NHIs are pulled from the API, not typed into YAML."
+        )
         steps.append("Leave the monitor running to keep watching this vendor and its NHIs:  python3 vra.py monitor --offline --webui")
         if self.bootstrap_path:
             steps.append(

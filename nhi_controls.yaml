@@ -102,9 +102,9 @@
   fails_when: []
   severity: high
   remediation: >
-    Add the identity to the owning vendor's `nhis:` register (or revoke it
-    in the tenant). An identity nobody claimed is an identity nobody is
-    watching.
+    Claim the identity (owner + home vendor) or revoke it in the tenant.
+    Discovery already listed it from the IdP API — do not re-type it by
+    hand. An identity nobody claimed is an identity nobody is watching.
   compensating_control: >
     Disable the identity in the tenant pending inventory and owner assignment.
 

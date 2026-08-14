@@ -180,6 +180,8 @@ def assess(cfg: RunConfig) -> RunResult:
             "vendor": slug, "ran": pres.ran, "mode": pres.mode, "tenant": pres.tenant,
             "ai_components": pres.ai_components, "nhis": pres.nhis,
             "reconciliation": pres.reconciliation, "error": pres.error,
+            "provider": pres.provider, "pages_fetched": pres.pages_fetched,
+            "resource_counts": pres.resource_counts, "truncated": pres.truncated,
         })
         for r in pres.reconciliation:
             evidence_by_field.setdefault(r["surface_field"], []).append(

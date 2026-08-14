@@ -23,7 +23,7 @@ This tool is the independent monitor for that gap.
 
 | You get | What that is |
 | --- | --- |
-| **A multi-vendor NHI inventory** | Every service account / OAuth app / agent principal observed across vendors, including cross-tenant ones (vendor A’s client living in vendor B’s IdP). |
+| **A multi-vendor NHI inventory** | Every service account / OAuth app / agent principal **pulled from Auth0 or Okta** (paginated — the full list, not a hand-copied curl). Cross-tenant ones (vendor A’s client living in vendor B’s IdP) included. You do not type them into YAML. |
 | **A daemon** | `vra.py monitor` — the same assess, on a timer, while the PC is on. A critical is a finding, not a crash. |
 | **A NIST 800-53 / SOC 2 score** | 8 identity controls (`NHI-*`) + 15 feature controls (`AIV-*`). Severity and whether something is a finding come from YAML + code. **The language model cannot create or re-severity a finding.** |
 | **A draft pack** | Narrative, vendor email, POA&M row — citing 800-53 and SOC 2, not a chatbot opinion. |
@@ -47,9 +47,29 @@ This tool is the independent monitor for that gap.
 ```
 1. Bootstrap each vendor     python3 vra.py bootstrap Slack --offline
 2. Accept the proposal       edit vendors/{slug}.yaml  (model never writes it)
-3. Leave the monitor up      python3 vra.py monitor --offline --webui --interval 15m
-4. Read the pack             out/latest.md
-5. List the identities       python3 vra.py nhis
+3. Point probe: at the IdP   Okta org URL or Auth0 domain + token env
+4. Discover the identities   python3 vra.py discover --provider okta --base-url https://org.okta.com
+5. Leave the monitor up      python3 vra.py monitor --offline --webui --interval 15m
+6. Read the pack             out/latest.md
+7. List the identities       python3 vra.py nhis
+```
+
+You do **not** type NHIs into YAML. `vra.py discover` (and every monitor cycle)
+pages the Okta or Auth0 management API until there is no next page, and writes
+`data/nhis.json`. `vendors/*.yaml` `nhis:` is an optional overlay — owner,
+last-rotated, `resides_in` — for identities the API cannot annotate.
+
+```bash
+# Live IdP — full list, paginated. Token stays in the environment.
+export OKTA_API_TOKEN=...          # SSWS, never written to disk
+python3 vra.py discover --provider okta --base-url https://your-org.okta.com
+
+export AUTH0_CLIENT_ID=...
+export AUTH0_CLIENT_SECRET=...
+python3 vra.py discover --provider auth0 --domain your-tenant.us.auth0.com
+
+# Recorded pages (same walker as live, no network):
+python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json
 ```
 
 The monitor re-reads `vendors/` every cycle. A vendor you onboard at 2pm is in
@@ -150,9 +170,10 @@ ollama pull qwen2.5:7b-instruct
 python3 vra.py --offline --snapshot v1          # sandbox baseline
 python3 vra.py --offline --snapshot v2          # planted change → exit 1
 python3 vra.py bootstrap Slack --offline        # new vendor, catalog URL
+python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json
 python3 vra.py monitor --offline --webui --interval 15m
 python3 vra.py nhis
-python3 -m unittest tests.test_vra tests.test_monitor_nhi tests.test_real_world_vendors
+python3 -m unittest tests.test_vra tests.test_monitor_nhi tests.test_real_world_vendors tests.test_idp_discover
 ```
 
 | Flag | Effect |
@@ -213,12 +234,15 @@ on messy real vendor prose. Run `--model` against Ollama before relying on it.
 vra.py                  entry point
 nhi_controls.yaml       8 NHI-* controls — the identity set (800-53 + SOC 2)
 controls.yaml           15 AIV-* controls — the feature set (800-53 + SOC 2)
-vendors/*.yaml          per-vendor register + nhis:
+vendors/*.yaml          per-vendor register; nhis: is overlay, not the list
+src/vra/idp.py          Auth0 / Okta client — paginates the full NHI list
+src/vra/discover.py     `vra.py discover`
 src/vra/monitor.py      the daemon
 src/vra/nhi.py          inventory + NHI-* evaluation
 src/vra/cli.py          one assess pass
 src/vra/onboard.py      onboard / bootstrap
 src/vra/webui.py        local console
 sandbox/                planted scenario + real-world page fixtures
+sandbox/probe/idp/      recorded Okta / Auth0 pages (same walker as live)
 VALIDATION.md           including every defect found
 ```
