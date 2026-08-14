@@ -54,10 +54,10 @@ This tool is the independent monitor for that gap.
 7. List the identities       python3 vra.py nhis
 ```
 
-You do **not** type NHIs into YAML. `vra.py discover` (and every monitor cycle)
-pages the Okta or Auth0 management API until there is no next page, and writes
+You do **not** type NHIs into YAML. Each vendor connector pages **that
+vendor’s** documented API (Atlassian, Slack, Okta, Auth0) and writes
 `data/nhis.json`. `vendors/*.yaml` `nhis:` is an optional overlay — owner,
-last-rotated, `resides_in` — for identities the API cannot annotate.
+last-rotated, `resides_in`.
 
 ```bash
 # Live IdP — full list, paginated. Token stays in the environment.
