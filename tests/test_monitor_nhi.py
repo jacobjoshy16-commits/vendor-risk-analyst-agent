@@ -39,6 +39,12 @@ class TestNHIInventory(unittest.TestCase):
         self.assertTrue(all(c.id.startswith("AIV-") for c in aiv))
         self.assertLessEqual(len(aiv), 20)
 
+    def test_every_nhi_control_cites_nist_800_53_and_soc2(self):
+        for c in self.controls:
+            names = " ".join(f["name"] for f in c.frameworks)
+            self.assertIn("NIST SP 800-53", names, f"{c.id} missing NIST SP 800-53")
+            self.assertIn("SOC 2", names, f"{c.id} missing SOC 2")
+
     def test_discover_merges_register_and_probe_across_vendors(self):
         from vra.nhi import discover_nhis
         from vra.probe import run_probe

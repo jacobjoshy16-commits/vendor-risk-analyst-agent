@@ -342,18 +342,18 @@ class OfflineBackend(Backend):
                 else "Please confirm your remediation plan and target date"
             )
         return {
-            "subject": f"Vendor AI risk review — {vendor} ({feature}) — control {control}",
+            "subject": f"Vendor NHI / agentic review — {vendor} ({feature}) — control {control}",
             "body": (
                 f"Hello,\n\n"
-                f"As part of our ongoing third-party AI risk monitoring, we have identified an item "
+                f"As part of continuous third-party NHI and agentic-AI monitoring (NIST SP 800-53 / SOC 2), we have identified an item "
                 f"relating to {feature} in {vendor} that we need to resolve against our control "
                 f"{control}.\n\n"
                 f"Control question: {question}\n\n"
                 f"{ask}. Specifically we require written confirmation addressing the control question "
                 f"above, along with any supporting documentation (attestations, test summaries, or "
                 f"contractual language) you are able to share under our existing agreement.\n\n"
-                f"We are a HIPAA covered entity and this item affects our assessment of protected "
-                f"health information processed by your service. Please respond within 21 days.\n\n"
+                f"This item affects our assessment of customer data processed by your service and by "
+                f"any non-human identity it runs in our tenants. Please respond within 21 days.\n\n"
                 f"Regards,\nVendor Risk Management"
             ),
         }

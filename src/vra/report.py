@@ -47,7 +47,10 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     L: list[str] = []
     a = L.append
 
-    a("# Vendor AI Risk Assessment")
+    a("# Vendor NHI & Agentic Compliance Assessment")
+    a("")
+    a("_Independent monitor of vendor non-human identities and the agentic features they power. "
+      "Scored against NIST SP 800-53 and SOC 2 TSC. The language model did not decide any finding._")
     a("")
     a(f"**Generated:** {now.strftime('%Y-%m-%d %H:%M UTC')}  ")
     a(f"**Snapshot set:** `{cfg.snapshot_version}`  ")
@@ -74,12 +77,14 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     a(f"- **Information gaps:** {len(gaps)}")
     a(f"- **Findings closed this run:** {len(closed)}")
     a("")
-    a("| Vendor | Tier | AI features | Open findings | Critical | Gaps |")
-    a("| --- | --- | --- | --- | --- | --- |")
+    a("| Vendor | Tier | NHIs | AI features | Open findings | Critical | Gaps |")
+    a("| --- | --- | --- | --- | --- | --- | --- |")
     for v in vendors:
         vf = [f for f in open_findings if f["vendor"] == v["slug"]]
         vg = [g for g in gaps if g["vendor"] == v["slug"]]
-        a(f"| {v['vendor']} | {v['tier']} | {len(v.get('ai_surface') or [])} | {len(vf)} | "
+        vn = [n for n in nhis if n.get("vendor") == v["slug"]]
+        a(f"| {v['vendor']} | {v['tier']} | {len(vn) or len(v.get('nhis') or [])} | "
+          f"{len(v.get('ai_surface') or [])} | {len(vf)} | "
           f"{len([f for f in vf if f['severity'] == 'critical'])} | {len(vg)} |")
     a("")
 
@@ -188,7 +193,7 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     # ---------------------------------------------------------------- 4b
     a("## 5. Subprocessor parse coverage (AIV-03)")
     a("")
-    a("_AIV-03 — every model provider named as a subprocessor and BAA-covered — can only be "
+    a("_AIV-03 — every model provider named as a subprocessor and covered by a BAA or DPA — can only be "
       "assessed if the subprocessor disclosure can actually be read. This table records what the "
       "tool saw, not just what it parsed._")
     a("")

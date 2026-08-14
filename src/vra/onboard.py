@@ -177,6 +177,11 @@ class OnboardResult:
             steps.append("Subprocessor disclosure is parsed — AIV-03 has coverage from day one.")
         steps.append(f"Run the first assessment:  python3 vra.py --vendor {self.slug}  (add --snapshot v1)")
         steps.append("Leave the monitor running to keep watching this vendor and its NHIs:  python3 vra.py monitor --offline --webui")
+        if self.bootstrap_path:
+            steps.append(
+                f"Bootstrap proposal is in {self.bootstrap_path}. Review it, then edit "
+                f"vendors/{self.slug}.yaml by hand. The model never writes the register."
+            )
         if not self.seeded_features:
             steps.append("No AI features seeded. As the vendor's AI features are confirmed, add "
                          "`ai_surface` entries to the register — model triage will propose them.")
@@ -295,20 +300,20 @@ def _scaffold(
 def draft_blocker_outreach(vendor_name: str, blockers: list[str]) -> dict[str, str]:
     bullet = "\n".join(f"- {b}" for b in blockers)
     return {
-        "subject": f"Vendor AI risk onboarding — {vendor_name} — subprocessor disclosure access",
+        "subject": f"Vendor NHI / agentic review — {vendor_name} — subprocessor disclosure access",
         "body": (
-            f"Hello,\n\nAs part of onboarding {vendor_name} as a vendor that processes or may "
-            "process protected health information, we need to complete our AI risk assessment, "
+            f"Hello,\n\nAs part of onboarding {vendor_name} whose agentic identities may process "
+            "customer data, we need to complete our NIST SP 800-53 / SOC 2 assessment, "
             "including control AIV-03 (every model provider named as a subprocessor and covered "
-            "by an executed BAA).\n\n"
+            "by an executed BAA or DPA).\n\n"
             "We could not complete that step:\n" + bullet +
             "\n\nPlease either:\n"
             "1. Grant us guest or NDA-gated access to your trust portal subprocessor page, or\n"
-            "2. Send the complete, current subprocessor list with BAA coverage status for each "
+            "2. Send the complete, current subprocessor list with BAA/DPA coverage status for each "
             "entity, including every model or AI service provider.\n\n"
-            "We are a HIPAA covered entity and this item affects our assessment of protected "
-            "health information processed by your service. Please respond within 21 days.\n\n"
-            "Regards,\nVendor Risk Management"
+            "This item affects our assessment of customer data processed by your service and by "
+            "any non-human identity it runs in our tenants. Please respond within 21 days.\n\n"
+            "Regards,\nVendor Risk / NHI Monitoring"
         ),
     }
 
@@ -317,7 +322,7 @@ def draft_blocker_outreach(vendor_name: str, blockers: list[str]) -> dict[str, s
 # Bootstrap — model reads FULL artifacts (not a diff) and proposes a register
 # ---------------------------------------------------------------------------
 
-BOOTSTRAP_SYSTEM = """You are a healthcare GRC analyst proposing an INITIAL vendor AI-surface \
+BOOTSTRAP_SYSTEM = """You are a third-party risk analyst proposing an INITIAL vendor NHI / AI-surface \
 register from the vendor's current public artifacts. This is not a diff. Read the full text.
 
 Rules:

@@ -211,6 +211,13 @@ class TestControlEvaluation(unittest.TestCase):
                          data_reach=["clinical_documentation"]), self.controls)
         self.assertIn("AIV-13", [f.control.id for f in clinical])
 
+    def test_every_aiv_control_cites_nist_800_53_and_soc2(self):
+        """Product integrity: this is a NIST 800-53 / SOC 2 monitor, not a HIPAA-only tool."""
+        for c in self.controls:
+            names = " ".join(f["name"] for f in c.frameworks)
+            self.assertIn("NIST SP 800-53", names, f"{c.id} missing NIST SP 800-53")
+            self.assertIn("SOC 2", names, f"{c.id} missing SOC 2")
+
     def test_severity_comes_from_config_only(self):
         for c in self.controls:
             if c.id == "AIV-07":

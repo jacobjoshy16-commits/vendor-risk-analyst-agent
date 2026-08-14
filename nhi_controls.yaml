@@ -1,34 +1,35 @@
-# Non-human identity (NHI) control set — v1
+# Non-human identity (NHI) control set — the load-bearing set.
 #
-# Companion to controls.yaml. AIV-* assesses a vendor's *AI feature*.
-# NHI-* assesses the *identities those features (and their integrators) run
-# as* — service accounts, OAuth apps, agent principals, bots, workload
-# identities — across every vendor in the portfolio.
+# This product is an independent monitor of vendor *agentic* identities
+# (service accounts, OAuth apps, agent principals, bots, workloads) across
+# every vendor application in the estate. Primary frameworks:
 #
-# Same evaluation semantics as controls.yaml (implemented in src/vra/nhi.py,
-# reusing the deterministic operators in evaluate.py):
+#   NIST SP 800-53 Rev. 5   — AC (access), IA (authenticators), AU (audit),
+#                             CA (exchange), CM (inventory)
+#   SOC 2 TSC               — CC6 (logical access), CC7 (monitoring),
+#                             CC9 (vendor / third party)
 #
-#   fails_when:  ALL conditions must hold (AND) for a finding.
-#   gap_when:    ANY condition holds (OR) and the control did not fail →
-#                information gap, not a failure.
-#   applies_when: ALL must hold or the control is skipped for that identity.
-#   severity:    from this file only. The language model never sets it.
+# AIV-* in controls.yaml is the companion set: the *feature* those identities
+# power. NHI-* is the identity itself. Same evaluation semantics
+# (src/vra/nhi.py + evaluate.py):
 #
-# Fields resolve against the NHI record (register overlaid with tenant
-# observation). contract.* still resolves against the owning vendor.
+#   fails_when:  ALL must hold (AND) → finding
+#   gap_when:    ANY holds and the control did not fail → information gap
+#   applies_when: ALL must hold or the control is skipped
+#   severity:    from this file only. The model never sets it.
 #
 # NHI-04 (orphans) is evaluated in code — an identity seen in a tenant that
-# is not in any vendor's register — because "not in the inventory" is not a
-# field on the record itself.
+# is not in any vendor's register.
 
 - id: NHI-01
   question: >
     Does any vendor agent principal hold write scopes and take action without
     human review?
   frameworks:
-    - { name: "NIST AI RMF", id: "MANAGE-2.2" }
-    - { name: "HIPAA Security Rule", id: "164.312(a)" }
-    - { name: "HIPAA Security Rule", id: "164.308(a)(4)" }
+    - { name: "NIST SP 800-53", id: "AC-3" }
+    - { name: "NIST SP 800-53", id: "AC-6" }
+    - { name: "SOC 2 TSC", id: "CC6.1" }
+    - { name: "SOC 2 TSC", id: "CC6.3" }
   applies_when:
     - field: kind
       in: [agent_principal, bot]
@@ -43,7 +44,7 @@
   severity: critical
   remediation: >
     Revoke standing write scopes on the agent principal, or require per-action
-    human approval before any directory, clinical, or session-mutating call.
+    human approval before any privileged or state-changing call.
   compensating_control: >
     Alert on every write attributed to the principal in the SIEM within one
     business day and restrict the identity to a non-privileged group.
@@ -52,8 +53,8 @@
   question: >
     Does every non-human identity have a named human owner accountable for it?
   frameworks:
-    - { name: "HIPAA Security Rule", id: "164.308(a)(3)" }
     - { name: "NIST SP 800-53", id: "AC-2" }
+    - { name: "SOC 2 TSC", id: "CC6.1" }
   fails_when:
     - field: owner
       in: [none, unowned, orphan, "n/a"]
@@ -65,15 +66,16 @@
     Assign a named owner (role or person) for the identity and record it in
     the NHI inventory. Unowned identities are revoked, not ignored.
   compensating_control: >
-    Route alerts for the identity to the vendor-risk on-call until an owner
+    Route alerts for the identity to the security on-call until an owner
     is named.
 
 - id: NHI-03
   question: >
     Are credentials for the non-human identity rotated at least annually?
   frameworks:
-    - { name: "HIPAA Security Rule", id: "164.308(a)(5)" }
     - { name: "NIST SP 800-53", id: "IA-5" }
+    - { name: "NIST SP 800-53", id: "IA-5(1)" }
+    - { name: "SOC 2 TSC", id: "CC6.1" }
   fails_when:
     - field: days_since_rotated
       gt: 365
@@ -93,10 +95,10 @@
     Is every non-human identity observed in a tenant recorded in the inventory?
   frameworks:
     - { name: "NIST SP 800-53", id: "AC-2" }
-    - { name: "HIPAA Security Rule", id: "164.308(a)(3)" }
+    - { name: "NIST SP 800-53", id: "CM-8" }
+    - { name: "SOC 2 TSC", id: "CC6.1" }
   # Evaluated in code: an observed identity that matches no register entry
-  # (on this vendor or, for cross-tenant principals, on any vendor) is an
-  # orphan. No field conditions — empty fails_when is intentional.
+  # is an orphan. Empty fails_when is intentional.
   fails_when: []
   severity: high
   remediation: >
@@ -111,8 +113,9 @@
     Are actions taken by the non-human identity written to an auditable log
     the customer can export?
   frameworks:
-    - { name: "HIPAA Security Rule", id: "164.312(b)" }
-    - { name: "NIST AI RMF", id: "MEASURE-2.8" }
+    - { name: "NIST SP 800-53", id: "AU-2" }
+    - { name: "NIST SP 800-53", id: "AU-12" }
+    - { name: "SOC 2 TSC", id: "CC7.2" }
   fails_when:
     - field: output_logged
       equals: false
@@ -132,8 +135,10 @@
     Is every cross-vendor non-human identity (a principal issued by vendor A
     that lives in vendor B's tenant) declared in the inventory?
   frameworks:
-    - { name: "HIPAA Security Rule", id: "164.308(b)(1)" }
     - { name: "NIST SP 800-53", id: "AC-3" }
+    - { name: "NIST SP 800-53", id: "CA-3" }
+    - { name: "SOC 2 TSC", id: "CC6.6" }
+    - { name: "SOC 2 TSC", id: "CC9.2" }
   fails_when:
     - field: cross_vendor
       equals: true
@@ -153,7 +158,8 @@
     Do disabled or inactive non-human identities retain write scopes?
   frameworks:
     - { name: "NIST SP 800-53", id: "AC-2(3)" }
-    - { name: "HIPAA Security Rule", id: "164.308(a)(4)" }
+    - { name: "NIST SP 800-53", id: "AC-6" }
+    - { name: "SOC 2 TSC", id: "CC6.2" }
   fails_when:
     - field: status
       in: [disabled, inactive]
@@ -170,8 +176,9 @@
   question: >
     Does a non-acting (suggests-only) identity hold standing write scopes?
   frameworks:
-    - { name: "NIST AI RMF", id: "MAP-3.3" }
-    - { name: "HIPAA Privacy Rule", id: "164.502(b)" }
+    - { name: "NIST SP 800-53", id: "AC-6" }
+    - { name: "NIST SP 800-53", id: "AC-6(2)" }
+    - { name: "SOC 2 TSC", id: "CC6.3" }
   applies_when:
     - field: write_scopes
       truthy: true

@@ -1,38 +1,28 @@
-# Vendor AI control set — v1
+# Vendor AI *feature* control set — companion to nhi_controls.yaml.
 #
-# This file is the reusable contribution of the project. It is data, not code:
-# edit it to fit your own framework mapping without touching the engine.
+# NHI-* scores the identity. AIV-* scores the agentic feature that identity
+# powers. Primary frameworks are NIST SP 800-53 Rev. 5 and SOC 2 TSC.
+# HIPAA citations are optional extras for covered-entity customers; they are
+# not the product identity.
 #
-# Evaluation semantics (implemented in src/vra/evaluate.py, deterministically):
+# Evaluation semantics (src/vra/evaluate.py), deterministic:
 #
-#   fails_when:  list of conditions. ALL must hold for the control to FAIL
-#                (they are ANDed). Each condition names a field on an
-#                ai_surface entry, or a contract.* field.
-#   gap_when:    list of conditions, ORed. If any holds AND the control does not
-#                already fail, the control produces an INFORMATION GAP rather
-#                than a finding. A gap is a question for the vendor, not a
-#                remediation item.
-#   severity:    critical | high | medium | low. Comes from this file only.
-#                The language model may never set or change it.
+#   fails_when:  ALL must hold (AND) for the control to FAIL.
+#   gap_when:    ANY holds AND the control does not already fail → gap.
+#   severity:    from this file only. The model never sets it.
 #
 # Condition operators: equals, not_equals, in, not_in, is_unknown, gt, lt,
-#                      not_in_baa_scope, truthy, falsy
-#
-# Fields resolve against the ai_surface entry first, then the vendor contract
-# block via the "contract." prefix.
+#                      not_in_baa_scope, truthy, falsy, contains_any
 
 - id: AIV-01
   question: >
     Has the vendor disclosed which model provider processes customer data for
     each AI feature?
   frameworks:
-    - { name: "HIPAA Security Rule", id: "164.308(b)(1)" }
-    - { name: "NIST AI RMF", id: "GOVERN-6.1" }
-    - { name: "HICP", id: "TV-1" }
-  # Note: "undisclosed" is an unknown token, and the unknown check runs before
-  # fails_when, so a fails_when clause on this field would be unreachable.
-  # Non-disclosure is deliberately an information gap (a question for the
-  # vendor), never a control failure. See VALIDATION.md, "Config findings".
+    - { name: "NIST SP 800-53", id: "SA-9" }
+    - { name: "NIST SP 800-53", id: "SR-3" }
+    - { name: "SOC 2 TSC", id: "CC9.2" }
+  # "undisclosed" is an unknown token. Non-disclosure is a gap, never a failure.
   gap_when:
     - field: model_provider
       is_unknown: true
@@ -41,50 +31,52 @@
     Require the vendor to name every model provider processing customer data as
     a condition of continued use, in writing, with 30 days' notice of change.
   compensating_control: >
-    Disable the AI feature for PHI-bearing workloads until the provider is named.
+    Disable the AI feature for regulated workloads until the provider is named.
 
 - id: AIV-02
   question: >
     Is an AI-specific addendum executed with the vendor covering AI feature use
     of customer data?
   frameworks:
-    - { name: "NIST AI RMF", id: "GOVERN-2.1" }
-    - { name: "HIPAA Privacy Rule", id: "164.504(e)" }
+    - { name: "NIST SP 800-53", id: "SA-9" }
+    - { name: "NIST SP 800-53", id: "SA-4" }
+    - { name: "SOC 2 TSC", id: "CC9.2" }
   fails_when:
     - field: contract.ai_addendum_signed
       equals: false
   severity: medium
   remediation: >
-    Route the vendor's AI addendum to Legal and Privacy for execution at the
-    next contract touchpoint or sooner if the AI surface has changed.
+    Route the vendor's AI addendum to Legal for execution at the next contract
+    touchpoint, or sooner if the AI surface has changed.
   compensating_control: >
-    Rely on the existing BAA and DPA AI clauses; document the delta in the risk register.
+    Rely on existing DPA / BAA AI clauses; document the delta in the risk register.
 
 - id: AIV-03
   question: >
     Is every model provider processing customer data named as a subprocessor and
-    covered by an executed BAA?
+    covered by an executed downstream processing agreement (BAA or DPA)?
   frameworks:
-    - { name: "HIPAA Security Rule", id: "164.308(b)(1)" }
-    - { name: "HIPAA Security Rule", id: "164.314(a)" }
-    - { name: "NIST AI RMF", id: "GOVERN-6.1" }
+    - { name: "NIST SP 800-53", id: "SA-9" }
+    - { name: "NIST SP 800-53", id: "CA-3" }
+    - { name: "SOC 2 TSC", id: "CC9.2" }
   fails_when:
     - field: model_provider
       not_in_baa_scope: true
   severity: critical
   remediation: >
-    Obtain an executed BAA covering the named model provider before any PHI is
-    processed by the feature, or obtain written confirmation the provider
-    receives no PHI.
+    Obtain an executed BAA or DPA covering the named model provider before any
+    customer data is processed by the feature, or obtain written confirmation
+    the provider receives no customer data.
   compensating_control: >
-    Disable the affected AI feature at the tenant level pending BAA execution.
+    Disable the affected AI feature at the tenant level pending agreement execution.
 
 - id: AIV-04
   question: >
     Does the vendor use customer data to train, retrain, or fine-tune models?
   frameworks:
-    - { name: "HIPAA Privacy Rule", id: "164.502(b)" }
-    - { name: "NIST AI RMF", id: "MAP-4.1" }
+    - { name: "NIST SP 800-53", id: "SI-12" }
+    - { name: "NIST SP 800-53", id: "AC-4" }
+    - { name: "SOC 2 TSC", id: "CC6.1" }
   fails_when:
     - field: training_on_customer_data
       equals: true
@@ -96,16 +88,17 @@
     Exercise the contractual opt-out from model training on customer data and
     obtain written confirmation the opt-out is applied to the tenant.
   compensating_control: >
-    Confirm training data is de-identified to 45 CFR 164.514(b) and that an
-    expert determination or safe harbor attestation is on file.
+    Confirm training data is de-identified under the organisation's standard
+    and that an attestation is on file.
 
 - id: AIV-05
   question: >
     Is the retention period for prompts, outputs, and AI-derived records
     documented and bounded?
   frameworks:
-    - { name: "HIPAA Security Rule", id: "164.316(b)(2)" }
-    - { name: "NIST AI RMF", id: "MAP-5.1" }
+    - { name: "NIST SP 800-53", id: "SI-12" }
+    - { name: "NIST SP 800-53", id: "AU-11" }
+    - { name: "SOC 2 TSC", id: "C1.1" }
   fails_when:
     - field: retention_days
       gt: 365
@@ -124,8 +117,8 @@
     Is the AI feature's data reach limited to the minimum necessary for its
     stated purpose?
   frameworks:
-    - { name: "HIPAA Privacy Rule", id: "164.502(b)" }
-    - { name: "NIST AI RMF", id: "MAP-3.3" }
+    - { name: "NIST SP 800-53", id: "AC-6" }
+    - { name: "SOC 2 TSC", id: "CC6.1" }
   fails_when:
     - field: data_reach
       contains_any: [clinical_documentation, encounter_records]
@@ -133,19 +126,20 @@
       equals: acts
   severity: high
   remediation: >
-    Scope the AI feature away from clinical documentation, or require per-action
-    approval before it reads or writes clinical records.
+    Scope the AI feature away from regulated record types, or require per-action
+    approval before it reads or writes those records.
   compensating_control: >
     Restrict the feature to a named pilot group with enhanced monitoring.
 
 - id: AIV-07
   question: >
-    Does any vendor agent take autonomous action on clinical or identity records
-    without human review?
+    Does any vendor agent take autonomous action on production records
+    (identity, customer, or clinical) without human review?
   frameworks:
-    - { name: "NIST AI RMF", id: "MANAGE-2.2" }
-    - { name: "HIPAA Security Rule", id: "164.312(b)" }
-    - { name: "HIPAA Security Rule", id: "164.308(a)(4)" }
+    - { name: "NIST SP 800-53", id: "AC-3" }
+    - { name: "NIST SP 800-53", id: "AC-6" }
+    - { name: "SOC 2 TSC", id: "CC6.1" }
+    - { name: "SOC 2 TSC", id: "CC6.3" }
   fails_when:
     - field: autonomy
       equals: acts
@@ -164,8 +158,9 @@
     Are AI feature actions and outputs written to an auditable log the customer
     can export?
   frameworks:
-    - { name: "HIPAA Security Rule", id: "164.312(b)" }
-    - { name: "NIST AI RMF", id: "MEASURE-2.8" }
+    - { name: "NIST SP 800-53", id: "AU-2" }
+    - { name: "NIST SP 800-53", id: "AU-12" }
+    - { name: "SOC 2 TSC", id: "CC7.2" }
   fails_when:
     - field: output_logged
       equals: false
@@ -184,8 +179,9 @@
     Does the vendor notify customers of material model or model-version changes
     before they take effect?
   frameworks:
-    - { name: "NIST AI RMF", id: "GOVERN-1.5" }
-    - { name: "NIST AI RMF", id: "MANAGE-4.1" }
+    - { name: "NIST SP 800-53", id: "CM-3" }
+    - { name: "NIST SP 800-53", id: "SA-9" }
+    - { name: "SOC 2 TSC", id: "CC8.1" }
   fails_when:
     - field: change_notification
       in: [none, release_notes_only]
@@ -200,10 +196,11 @@
 - id: AIV-10
   question: >
     Has the vendor disclosed error, accuracy, or hallucination rates for AI
-    features that influence clinical or financial decisions?
+    features that influence operational or financial decisions?
   frameworks:
-    - { name: "NIST AI RMF", id: "MEASURE-2.3" }
-    - { name: "NIST AI RMF", id: "MEASURE-2.9" }
+    - { name: "NIST SP 800-53", id: "SI-10" }
+    - { name: "NIST SP 800-53", id: "SA-11" }
+    - { name: "SOC 2 TSC", id: "CC7.1" }
   fails_when:
     - field: error_rate_disclosed
       equals: false
@@ -222,7 +219,9 @@
     Has the vendor tested AI features against prompt injection and adversarial
     input, and will it share results?
   frameworks:
-    - { name: "NIST AI RMF", id: "MEASURE-2.7" }
+    - { name: "NIST SP 800-53", id: "SI-10" }
+    - { name: "NIST SP 800-53", id: "SA-11" }
+    - { name: "SOC 2 TSC", id: "CC7.1" }
     - { name: "OWASP LLM Top 10", id: "LLM01" }
   fails_when:
     - field: prompt_injection_tested
@@ -241,8 +240,9 @@
   question: >
     Is AI inference performed within the contracted data residency boundary?
   frameworks:
-    - { name: "HIPAA Security Rule", id: "164.308(a)(1)(ii)(A)" }
-    - { name: "NIST AI RMF", id: "MAP-4.1" }
+    - { name: "NIST SP 800-53", id: "SC-28" }
+    - { name: "NIST SP 800-53", id: "SA-9" }
+    - { name: "SOC 2 TSC", id: "CC6.7" }
   fails_when:
     - field: data_residency
       in: [offshore, undisclosed]
@@ -258,11 +258,12 @@
 
 - id: AIV-13
   question: >
-    Has the vendor performed bias or performance testing across the clinical
-    populations the feature will affect?
+    Has the vendor performed bias or performance testing across the populations
+    the feature will affect?
   frameworks:
-    - { name: "NIST AI RMF", id: "MEASURE-2.11" }
-    - { name: "Section 1557", id: "92.210" }
+    - { name: "NIST SP 800-53", id: "SA-11" }
+    - { name: "NIST SP 800-53", id: "SI-10" }
+    - { name: "SOC 2 TSC", id: "CC7.1" }
   fails_when:
     - field: bias_tested_clinical
       equals: false
@@ -274,9 +275,8 @@
       contains_any: [clinical_documentation, encounter_records, claims]
   severity: high
   remediation: >
-    Request subgroup performance analysis across age, sex, race, ethnicity, and
-    payer class for the populations served, per Section 1557 expectations for
-    patient care decision support tools.
+    Request subgroup performance analysis for the populations the feature
+    will affect before expanding use.
   compensating_control: >
     Monitor internal override rates by service line and escalate disparities.
 
@@ -285,8 +285,10 @@
     Does the vendor have an AI-specific incident response process covering model
     failure, harmful output, and agent misuse?
   frameworks:
-    - { name: "NIST AI RMF", id: "MANAGE-4.3" }
-    - { name: "HIPAA Security Rule", id: "164.308(a)(6)" }
+    - { name: "NIST SP 800-53", id: "IR-4" }
+    - { name: "NIST SP 800-53", id: "IR-6" }
+    - { name: "SOC 2 TSC", id: "CC7.3" }
+    - { name: "SOC 2 TSC", id: "CC7.4" }
   fails_when:
     - field: ai_incident_process
       equals: false
@@ -304,8 +306,9 @@
   question: >
     Can the customer disable the AI feature entirely at tenant level?
   frameworks:
-    - { name: "NIST AI RMF", id: "MANAGE-2.3" }
-    - { name: "HIPAA Security Rule", id: "164.308(a)(3)" }
+    - { name: "NIST SP 800-53", id: "CM-7" }
+    - { name: "NIST SP 800-53", id: "AC-3" }
+    - { name: "SOC 2 TSC", id: "CC6.3" }
   fails_when:
     - field: customer_disableable
       equals: false

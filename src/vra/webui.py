@@ -48,7 +48,7 @@ PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vendor AI Risk Analyst — console</title>
+<title>Vendor NHI Monitor — NIST 800-53 / SOC 2</title>
 <style>
   :root {
     --bg:#0f1420; --panel:#171e2e; --panel2:#1d2640; --line:#2a3552;
