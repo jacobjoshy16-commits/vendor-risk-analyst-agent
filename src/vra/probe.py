@@ -58,6 +58,9 @@ def _load_fixture(vendor: dict, cfg: RunConfig) -> tuple[dict, str | None]:
     The fixture path may contain {version} so the sandbox can model tenant state
     before and after the vendor shipped a change, in step with the artifact
     snapshots. A real deployment uses mode: live and never touches this.
+
+    If the file is a recorded page set (``pages``), it is walked by the same
+    IdP client as live HTTP so pagination is exercised offline.
     """
     cfg_block = vendor.get("probe") or {}
     path = Path(str(cfg_block.get("fixture", "")).replace("{version}", cfg.snapshot_version))
@@ -65,36 +68,28 @@ def _load_fixture(vendor: dict, cfg: RunConfig) -> tuple[dict, str | None]:
         path = REPO_ROOT / path
     if not path.exists():
         return {}, f"probe fixture not found: {path}"
-    return json.loads(path.read_text(encoding="utf-8")), None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and data.get("pages"):
+        from .idp import discover_from_recorded
+
+        estate, err = discover_from_recorded(data, vendor)
+        if err:
+            return {}, err
+        return estate.to_probe_blob(), None
+    return data, None
 
 
 def _load_live(vendor: dict, cfg: RunConfig) -> tuple[dict, str | None]:
-    block = vendor.get("probe") or {}
+    """Page the real Okta / Auth0 management API. One unpaginated GET is not discovery."""
+    from .idp import discover_from_vendor
+
     if cfg.offline:
         return {}, "offline mode: skipped live tenant probe"
-    token = os.environ.get(block.get("token_env", ""), "")
-    if not token:
-        return {}, f"no API token in ${block.get('token_env')}; skipping live probe"
-    try:
-        import requests
-
-        base = block["base_url"].rstrip("/")
-        headers = {"Authorization": f"SSWS {token}", "Accept": "application/json"}
-        apps = requests.get(f"{base}/api/v1/apps", headers=headers, timeout=30)
-        apps.raise_for_status()
-        grants = requests.get(f"{base}/api/v1/apps/grants", headers=headers, timeout=30)
-        settings = requests.get(f"{base}/api/v1/org/settings", headers=headers, timeout=30)
-        return (
-            {
-                "org": {"subdomain": base},
-                "applications": apps.json(),
-                "oauth_grants": grants.json() if grants.ok else [],
-                "settings": settings.json() if settings.ok else {},
-            },
-            None,
-        )
-    except Exception as exc:  # pragma: no cover - network path
-        return {}, f"live probe failed: {exc}"
+    estate, err = discover_from_vendor(vendor, cfg)
+    if err:
+        return {}, err
+    assert estate is not None
+    return estate.to_probe_blob(), None
 
 
 def _extract_nhis(data: dict) -> list[dict]:
