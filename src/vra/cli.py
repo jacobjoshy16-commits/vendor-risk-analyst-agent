@@ -15,16 +15,47 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import DEFAULT_OUT_DIR, RunConfig
 from . import analyst, evaluate as ev, report as rp
 from .llm import get_backend, probe_ollama
+from .nhi import (
+    NHIInventory,
+    assessments_to_records,
+    discover_nhis,
+    evaluate_nhis,
+    load_nhi_controls,
+)
 from .observe import observe_vendor
 from .probe import run_probe
 from .register import FindingStore, load_vendors, update_vendor_state
 from .triage import triage_diff, write_pending_review
 from .watch import watch_vendor
+
+
+@dataclass
+class RunResult:
+    """Structured outcome of one assessment pass. Used by the monitor daemon."""
+
+    exit_code: int = 0
+    vendor_count: int = 0
+    feature_count: int = 0
+    nhi_count: int = 0
+    changed_sources: int = 0
+    ai_relevant: int = 0
+    open_findings: int = 0
+    critical: int = 0
+    new_findings: int = 0
+    gaps: int = 0
+    nhi_findings: int = 0
+    nhi_gaps: int = 0
+    closed: int = 0
+    backend: str = ""
+    error: str | None = None
+    report_path: str | None = None
+    vendors: list[str] = field(default_factory=list)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,13 +81,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(cfg: RunConfig) -> int:
+    return assess(cfg).exit_code
+
+
+def assess(cfg: RunConfig) -> RunResult:
+    result = RunResult()
     vendors = load_vendors(cfg)
     if not vendors:
         print("No vendors matched. Check vendors/ and --vendor filters.", file=sys.stderr)
-        return 2
+        result.exit_code = 2
+        result.error = "no vendors matched"
+        return result
 
+    # Full portfolio (unfiltered) so cross-vendor NHI declarations resolve
+    # even when this run is scoped to one vendor.
+    portfolio = load_vendors(RunConfig())
     controls = ev.load_controls()
+    nhi_controls = load_nhi_controls()
     store = FindingStore()
+    inventory = NHIInventory()
 
     backend = get_backend(cfg)
     backend_name = backend.name
@@ -78,8 +121,11 @@ def run(cfg: RunConfig) -> int:
     all_triages: list[dict] = []
     all_probes: list[dict] = []
     all_parses: list[dict] = []
+    all_nhis: list[dict] = []
     new_ids: set[str] = set()
     seen_ids: set[str] = set()
+    nhi_finding_n = 0
+    nhi_gap_n = 0
 
     for vendor in vendors:
         slug = vendor["slug"]
@@ -132,8 +178,8 @@ def run(cfg: RunConfig) -> int:
         pres = run_probe(vendor, cfg)
         all_probes.append({
             "vendor": slug, "ran": pres.ran, "mode": pres.mode, "tenant": pres.tenant,
-            "ai_components": pres.ai_components, "reconciliation": pres.reconciliation,
-            "error": pres.error,
+            "ai_components": pres.ai_components, "nhis": pres.nhis,
+            "reconciliation": pres.reconciliation, "error": pres.error,
         })
         for r in pres.reconciliation:
             evidence_by_field.setdefault(r["surface_field"], []).append(
@@ -162,6 +208,28 @@ def run(cfg: RunConfig) -> int:
                 {"source": "subprocessors", "excerpt": sp.raw_line,
                  "change_type": "uncovered_ai_subprocessor", "confidence": 1.0}
             )
+
+        # -- NHI inventory: discover, persist, evaluate ---------------------
+        # Observed identities overlay the register. Findings are deterministic
+        # and quote the tenant API field or the register row they came from.
+        discovered = discover_nhis(vendor, pres, portfolio=portfolio)
+        stored_nhis = inventory.upsert_many(slug, discovered)
+        all_nhis.extend(stored_nhis)
+        nhi_findings_a, nhi_gaps_a = evaluate_nhis(vendor, discovered, nhi_controls)
+        nhi_f_recs, nhi_g_recs = assessments_to_records(
+            nhi_findings_a,
+            nhi_gaps_a,
+            evidence_by_subject={
+                str(n.get("principal") or n.get("id") or ""): (
+                    [{"source": "in_tenant_probe", "excerpt": n.get("evidence") or "",
+                      "change_type": "nhi_observation", "confidence": 1.0}]
+                    if n.get("evidence") else []
+                )
+                for n in discovered
+            },
+        )
+        nhi_finding_n += len(nhi_f_recs)
+        nhi_gap_n += len(nhi_g_recs)
 
         # -- Phase 5: deterministic control evaluation ----------------------
         findings, gaps = ev.evaluate_vendor(vendor, controls, observed)
@@ -192,12 +260,22 @@ def run(cfg: RunConfig) -> int:
                 new_ids.add(stored["id"])
             (all_findings if assessment.kind == "finding" else all_gaps).append(stored)
 
+        for rec in nhi_f_recs + nhi_g_recs:
+            rec = analyst.enrich(rec, cfg)
+            stored, is_new = store.upsert(rec)
+            stored["poam"] = analyst.build_poam(stored)
+            seen_ids.add(stored["id"])
+            if is_new:
+                new_ids.add(stored["id"])
+            (all_findings if rec["kind"] == "finding" else all_gaps).append(stored)
+
         update_vendor_state(vendor, hashes={s.source: s.sha256 for s in snaps if not s.error}, cfg=cfg)
 
         changed_n = len([d for d in diffs if d.changed])
         relevant_n = len([t for t in triage_results if t.ai_relevant])
         print(f"{changed_n} source(s) changed, {relevant_n} AI-relevant, "
-              f"{len(findings)} finding(s), {len(gaps)} gap(s)"
+              f"{len(findings)} finding(s), {len(gaps)} gap(s), "
+              f"{len(discovered)} NHI(s)"
               + (f", proposals -> {pending.name}" if pending else ""))
 
     # -- Phase 7: lifecycle reconciliation ---------------------------------
@@ -206,13 +284,14 @@ def run(cfg: RunConfig) -> int:
     ctx = {
         "vendors": vendors, "findings": all_findings, "gaps": all_gaps,
         "triages": all_triages, "probes": all_probes, "parses": all_parses,
-        "new_ids": new_ids, "closed": closed, "store": store,
+        "nhis": all_nhis, "new_ids": new_ids, "closed": closed, "store": store,
         "backend": backend_name,
     }
 
     text = rp.build_report(ctx, cfg)
     path = rp.write_report(text, ctx, cfg)
     store.save(cfg)
+    inventory.save(cfg)
 
     # -- console summary ----------------------------------------------------
     open_findings = [f for f in all_findings if f.get("state") not in ("closed",)]
@@ -223,11 +302,13 @@ def run(cfg: RunConfig) -> int:
     print()
     print("=" * 68)
     print(f"  Vendors assessed     : {len(vendors)}")
+    print(f"  NHIs inventoried     : {len(all_nhis)}")
     print(f"  AI-relevant changes  : {len(ai_changes)}")
     print(f"  Open findings        : {len(open_findings)}  "
           f"(critical {len(crit)}, high {len(high)})")
     print(f"  New this run         : {len(new_ids)}")
     print(f"  Information gaps     : {len(all_gaps)}")
+    print(f"  NHI findings / gaps  : {nhi_finding_n} / {nhi_gap_n}")
     print(f"  Closed this run      : {len(closed)}")
     print(f"  Report               : {path if path else '(dry-run, not written)'}")
     print("=" * 68)
@@ -236,9 +317,23 @@ def run(cfg: RunConfig) -> int:
         print(f"  {marker}CRITICAL {f['control_id']}  {f['vendor_name']} — {f['feature']}")
     print()
 
-    if crit and cfg.fail_on_critical:
-        return 1
-    return 0
+    result.exit_code = 1 if (crit and cfg.fail_on_critical) else 0
+    result.vendor_count = len(vendors)
+    result.feature_count = sum(len(v.get("ai_surface") or []) for v in vendors)
+    result.nhi_count = len(all_nhis)
+    result.changed_sources = len([t for t in all_triages if t.get("changed")])
+    result.ai_relevant = len(ai_changes)
+    result.open_findings = len(open_findings)
+    result.critical = len(crit)
+    result.new_findings = len(new_ids)
+    result.gaps = len(all_gaps)
+    result.nhi_findings = nhi_finding_n
+    result.nhi_gaps = nhi_gap_n
+    result.closed = len(closed)
+    result.backend = backend_name
+    result.report_path = str(path) if path else None
+    result.vendors = [v["slug"] for v in vendors]
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:

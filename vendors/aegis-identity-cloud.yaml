@@ -36,6 +36,27 @@ ai_surface:
   data_residency: in_region
   bias_tested_clinical: not_applicable
   ai_incident_process: unknown
+nhis:
+- id: access-copilot
+  name: Access Copilot
+  kind: agent_principal
+  status: active
+  app_id: 0oa1copilotagent01
+  principal: copilot-assist
+  feature: Access Copilot
+  owner: Identity Operations
+  last_rotated: 2025-12-04
+  human_in_loop: true
+  autonomy: suggests
+  data_reach:
+  - identity_attributes
+  - auth_events
+  output_logged: true
+  scopes:
+  - okta.users.read
+  - okta.groups.read
+  - okta.logs.read
+  write_scopes: []
 watch:
   changelog: sandbox/vendors/aegis-identity-cloud/snapshots/{version}/changelog.html
   trust_center: sandbox/vendors/aegis-identity-cloud/snapshots/{version}/trust_center.html
@@ -49,10 +70,10 @@ probe:
   base_url: https://dev-000000.aegisidentity.example
   token_env: AEGIS_API_TOKEN
 state:
-  last_assessed: '2026-08-13T15:56:44.654943+00:00'
+  last_assessed: '2026-08-14T05:24:06.749287+00:00'
   snapshot_hashes:
-    changelog: 6f1f5d34ff8c3c7a93ed69b79dd290a1f5ea2bf3ac330c429b0da33e430817c3
-    trust_center: 1fa68961b7ae2039b4fa44749a6dd2f02e70837f302123966a69bbaebf7f1017
-    subprocessors: 7965f3799d48dba0f26026a40463c7cded3c50f2bac687db5daed1c1a4b7de65
+    changelog: ef130ed0f04b70b9a3d88e991345f47bce25325e33475aedabfa507cf5825804
+    trust_center: 033f8f0cfdd4e24c6f3684cea30cba8935860b9c2e8fc5909e12026dbbd7c986
+    subprocessors: 94269de834c42dc4e3d866a8cf539836e942758d6bc05bac079b24f3e5b62966
     dpa: 5519fa3efdbdbdd6989879742924252ba02a3d7dc283ee2c97bc0d839a0b5c7d
   open_findings: []

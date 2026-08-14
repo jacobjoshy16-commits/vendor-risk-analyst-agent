@@ -60,8 +60,10 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     # ---------------------------------------------------------------- 1
     a("## 1. Portfolio summary")
     a("")
+    nhis = ctx.get("nhis") or []
     a(f"- **Vendors assessed:** {len(vendors)}")
     a(f"- **AI features tracked:** {feature_count}")
+    a(f"- **NHIs inventoried:** {len(nhis)}")
     a(f"- **Watch sources checked:** {len(triages)}")
     a(f"- **Sources changed since last run:** {len(changed_sources)}")
     a(f"- **Changes judged AI-relevant:** {len(ai_changes)}")
@@ -253,8 +255,53 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
                 a("_Tenant state matches the register._")
                 a("")
 
-    # ---------------------------------------------------------------- 5
-    a("## 7. POA&M")
+    # ---------------------------------------------------------------- 6b
+    a("## 7. Non-human identities")
+    a("")
+    a("_An NHI is a service account, OAuth app, agent principal, or bot a vendor "
+      "runs as inside a tenant. AIV-* assesses the feature; NHI-* assesses the "
+      "identity it acts as. Cross-vendor principals (vendor A's client living in "
+      "vendor B's tenant) are flagged when they are not declared on the home vendor._")
+    a("")
+    nhis = ctx.get("nhis") or []
+    if not nhis:
+        a("_No non-human identities inventoried this run. Add a `nhis:` block to the "
+          "vendor register, or enable a tenant probe._")
+        a("")
+    else:
+        a("| Vendor | Identity | Kind | Principal | Write scopes | Owner | Source | Flags |")
+        a("| --- | --- | --- | --- | --- | --- | --- | --- |")
+        for n in nhis:
+            flags = []
+            if n.get("orphan"):
+                flags.append("orphan")
+            if n.get("cross_vendor"):
+                flags.append("cross-vendor")
+            if n.get("write_scopes"):
+                flags.append("write")
+            writes = ", ".join(n.get("write_scopes") or []) or "none"
+            a(
+                f"| {_esc(n.get('vendor_name') or n.get('vendor'))} | "
+                f"{_esc(n.get('name') or n.get('principal') or '—')} | "
+                f"`{n.get('kind') or '—'}` | `{_esc(n.get('principal') or '—')}` | "
+                f"`{_esc(writes)}` | {_esc(n.get('owner') or 'unknown')} | "
+                f"{n.get('source') or '—'} | {_esc(', '.join(flags) or '—')} |"
+            )
+        a("")
+        nhi_findings = [
+            f for f in open_findings
+            if str(f.get("control_id") or "").startswith("NHI-")
+        ]
+        if nhi_findings:
+            a("**NHI control failures this run:**")
+            a("")
+            for f in sorted(nhi_findings, key=_sev_key):
+                a(f"- `{f['severity'].upper()}` **{f['control_id']}** — "
+                  f"{_esc(f['vendor_name'])} / {_esc(f['feature'])}: {f['reason']}")
+            a("")
+
+    # ---------------------------------------------------------------- 7
+    a("## 8. POA&M")
     a("")
     poam_rows = sorted(
         [f for f in open_findings] + [g for g in gaps],
@@ -275,7 +322,7 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
         a("")
 
     # ---------------------------------------------------------------- 6
-    a("## 8. Limitations")
+    a("## 9. Limitations")
     a("")
     a("What this report is, and what it is not:")
     a("")
@@ -368,6 +415,7 @@ def write_report(text: str, ctx: dict, cfg: RunConfig) -> Path | None:
                 "changes": ctx["triages"],
                 "probes": ctx["probes"],
                 "subprocessor_parses": ctx.get("parses", []),
+                "nhis": ctx.get("nhis", []),
             },
             indent=2,
             default=str,

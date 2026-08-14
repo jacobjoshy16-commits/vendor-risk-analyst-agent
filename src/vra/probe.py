@@ -37,6 +37,7 @@ class ProbeResult:
     mode: str
     tenant: dict[str, Any] = field(default_factory=dict)
     ai_components: list[dict] = field(default_factory=list)
+    nhis: list[dict] = field(default_factory=list)
     reconciliation: list[dict] = field(default_factory=list)
     error: str | None = None
 
@@ -90,6 +91,87 @@ def _load_live(vendor: dict, cfg: RunConfig) -> tuple[dict, str | None]:
         return {}, f"live probe failed: {exc}"
 
 
+def _extract_nhis(data: dict) -> list[dict]:
+    """Every application + OAuth grant becomes an observed NHI.
+
+    AI components are tagged ``agent_principal``; everything else is an
+    ``oauth_app`` (SSO integrations, provisioning clients, workload ids).
+    Agent-mode tenant settings overlay autonomy / human-in-the-loop on the
+    AI component so NHI-01 can fire from the same quotable API fields as
+    AIV-07, against the *identity* rather than the feature.
+    """
+    grants_by_app: dict[Any, list] = {}
+    for grant in data.get("oauth_grants", []):
+        grants_by_app.setdefault(grant.get("app_id"), []).append(grant)
+
+    copilot = ((data.get("settings") or {}).get("copilot") or {})
+    agent_mode = copilot.get("agent_mode") or {}
+
+    nhis: list[dict] = []
+    seen_apps: set[Any] = set()
+    for app in data.get("applications", []):
+        seen_apps.add(app.get("id"))
+        grants = grants_by_app.get(app.get("id"), [])
+        scopes: list[str] = []
+        principals: list[str] = []
+        issued = None
+        for grant in grants:
+            scopes.extend(grant.get("scopes") or [])
+            principals.append(grant.get("client_name") or grant.get("principal") or "")
+            issued = issued or grant.get("issued")
+        scopes = sorted(set(scopes))
+        write = sorted({s for s in scopes if _is_write_scope(s)})
+        kind = "agent_principal" if app.get("ai_component") else "oauth_app"
+        principal = next((p for p in principals if p), None) or app.get("label")
+        nhi = {
+            "id": app.get("id"),
+            "app_id": app.get("id"),
+            "name": app.get("label"),
+            "kind": kind,
+            "status": "active" if app.get("status") == "ACTIVE" else "disabled",
+            "principal": principal,
+            "scopes": scopes,
+            "write_scopes": write,
+            "created": app.get("created"),
+            "last_rotated": issued,
+            "ai_component": bool(app.get("ai_component")),
+            "source": "observed",
+            "evidence": (
+                f"tenant application {app.get('id')} ({app.get('label')}) "
+                f"principal={principal} scopes={', '.join(scopes) or 'none'}"
+            ),
+        }
+        if app.get("ai_component") and agent_mode.get("enabled"):
+            nhi["autonomy"] = "acts"
+            nhi["human_in_loop"] = bool(agent_mode.get("per_action_approval"))
+        nhis.append(nhi)
+
+    # Grants whose app_id is not in the applications list still count.
+    for app_id, grants in grants_by_app.items():
+        if app_id in seen_apps:
+            continue
+        scopes = sorted({s for g in grants for s in (g.get("scopes") or [])})
+        principal = next((g.get("client_name") or g.get("principal") for g in grants), None)
+        issued = next((g.get("issued") for g in grants if g.get("issued")), None)
+        nhis.append(
+            {
+                "id": app_id,
+                "app_id": app_id,
+                "name": principal or str(app_id),
+                "kind": "oauth_app",
+                "status": "active",
+                "principal": principal,
+                "scopes": scopes,
+                "write_scopes": sorted({s for s in scopes if _is_write_scope(s)}),
+                "last_rotated": issued,
+                "ai_component": False,
+                "source": "observed",
+                "evidence": f"tenant oauth grant app_id={app_id} principal={principal}",
+            }
+        )
+    return nhis
+
+
 def run_probe(vendor: dict, cfg: RunConfig) -> ProbeResult:
     block = vendor.get("probe") or {}
     slug = vendor["slug"]
@@ -129,6 +211,8 @@ def run_probe(vendor: dict, cfg: RunConfig) -> ProbeResult:
                 "created": app.get("created"),
             }
         )
+
+    nhis = _extract_nhis(data)
 
     copilot = ((data.get("settings") or {}).get("copilot") or {})
     agent_mode = copilot.get("agent_mode") or {}
@@ -238,5 +322,5 @@ def run_probe(vendor: dict, cfg: RunConfig) -> ProbeResult:
 
     return ProbeResult(
         vendor=slug, ran=True, mode=mode, tenant=tenant,
-        ai_components=ai_components, reconciliation=recon,
+        ai_components=ai_components, nhis=nhis, reconciliation=recon,
     )

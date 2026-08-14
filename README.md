@@ -7,10 +7,12 @@ against healthcare compliance controls, and drafts the response.
 Runs entirely on your workstation. No vendor risk data leaves the machine by default.
 
 > **Status: draft.** The pipeline works end to end and is validated against a planted-change sandbox.
-> Vendors are onboarded through `vra.py onboard` or the local web console, and the subprocessor
-> parse that AIV-03 depends on handles real-world artifacts (HTML tables, PDFs, SafeBase/Whistic/
-> Vanta portals) instead of assuming tidy sandbox markup. The scored runs used a deterministic
-> offline backend rather than a live model — see [Limitations](#limitations).
+> Vendors are onboarded through `vra.py onboard` or the local web console. A long-running
+> `vra.py monitor` daemon re-assesses every vendor and every non-human identity (NHI) on a timer
+> while the workstation is on. The subprocessor parse that AIV-03 depends on handles real-world
+> artifacts (HTML tables, PDFs, SafeBase/Whistic/Vanta portals) instead of assuming tidy sandbox
+> markup. The scored runs used a deterministic offline backend rather than a live model — see
+> [Limitations](#limitations).
 
 ---
 
@@ -116,7 +118,9 @@ the run falls back automatically with a warning rather than failing.
 ```bash
 python3 vra.py --offline --snapshot v1     # baseline
 python3 vra.py --offline --snapshot v2     # change run -> exit 1
-python3 tests/test_vra.py                  # 66 tests
+python3 vra.py monitor --offline --webui   # keep watching while this machine is on
+python3 vra.py nhis                        # portfolio NHI inventory
+python3 -m unittest tests.test_vra tests.test_monitor_nhi
 ```
 
 | Flag | Effect |
@@ -129,6 +133,66 @@ python3 tests/test_vra.py                  # 66 tests
 | `--dry-run` | Assess and print, persist nothing — no snapshots, findings, or report files |
 | `--no-probe` | Skip all in-tenant probes |
 | `--no-fail` | Always exit 0, even with open criticals |
+
+### Autonomous monitor
+
+Leave this running. It is the same pipeline as `vra.py run`, on a timer, against every vendor
+currently in `vendors/` — including ones onboarded after the daemon started (the register is
+re-read each cycle).
+
+```bash
+python3 vra.py monitor --offline --webui --interval 15m
+python3 vra.py monitor status
+python3 vra.py monitor stop
+python3 vra.py monitor install --offline --webui   # write login-autostart units (not enabled)
+```
+
+| Flag / action | Effect |
+| --- | --- |
+| `--interval 90s\|15m\|1h` | Cycle interval. Default `900` (15 minutes), or `$VRA_MONITOR_INTERVAL` |
+| `--once` | One cycle and exit (cron-friendly) |
+| `--webui` | Also serve the local console so you can watch the heartbeat |
+| `status` | Print `data/monitor.json` (pid, last cycle, next cycle) |
+| `stop` | SIGTERM the living daemon |
+| `install` | Write a systemd user unit + XDG autostart entry (and a launchd plist on macOS) |
+
+The daemon holds a PID lock (`data/monitor.lock`) so only one copy runs. Identical artifact
+fetches do not write a new snapshot directory. A critical finding is recorded, not a crash —
+`fail_on_critical` is off inside the loop. Heartbeat and the last twenty cycles are published
+to `data/monitor.json` for the console.
+
+The monitor does **not** invent a second pipeline. Each cycle is a normal `assess()`: watch,
+triage, probe, NHI inventory, evaluate, draft, persist, report.
+
+### Non-human identities
+
+AIV-* assesses a vendor's *AI feature*. NHI-* assesses the *identity that feature (or its
+integrators) runs as* — service accounts, OAuth apps, agent principals, bots, workload
+identities — across every vendor in the portfolio.
+
+```
+register nhis:  +  tenant probe (applications + OAuth grants)
+                → overlay → evaluate nhi_controls.yaml → findings.json
+```
+
+Three-tier state still applies. An observed identity can drive a finding because every field
+quotes an API object. Cross-vendor principals (Loop's provisioning client living in Aegis's
+tenant) are first-class: observed on the tenant vendor, declared on the home vendor with
+`resides_in`, and **NHI-06** fires only when the declaration is missing.
+
+| ID | Severity | Control |
+| --- | --- | --- |
+| NHI-01 | **critical** | Agent principal holds write scopes and acts without human review |
+| NHI-02 | high | Every NHI has a named human owner |
+| NHI-03 | high | Credentials rotated at least annually |
+| NHI-04 | high | Every identity observed in a tenant is in the inventory (no orphans) |
+| NHI-05 | medium | NHI actions are written to an exportable audit log |
+| NHI-06 | high | Cross-vendor NHIs are declared on the home vendor |
+| NHI-07 | medium | Disabled identities retain no write scopes |
+| NHI-08 | high | A suggests-only identity does not hold standing write scopes |
+
+Add identities under `nhis:` on the vendor YAML, or let a tenant probe discover them. Unknown
+fields are gaps, not failures, same as AIV-*.
 
 ## Onboarding vendors
 
@@ -167,9 +231,14 @@ Flags: `--tier critical|high|medium|low`, `--category`, `--description`, `--trus
 python3 vra.py webui --host 0.0.0.0 --port 8765
 ```
 
-Opens a zero-dependency local console (no CDNs, works fully offline) for the same flow: vendor
-table with platform and parse status, an onboarding form, and one-click assessment. The UI talks
-only to the local filesystem via a small JSON API under `/api/`.
+Opens a zero-dependency local console (no CDNs, works fully offline): vendor table, onboarding
+form, one-click assessment, a live monitor heartbeat (start/stop the daemon from the header),
+and the portfolio NHI inventory. The UI talks only to the local filesystem via a small JSON API
+under `/api/`. Combined with the daemon:
+
+```bash
+python3 vra.py monitor --offline --webui --host 0.0.0.0 --port 8765
+```
 
 ### If the subprocessor list is gated
 
@@ -192,6 +261,8 @@ that vendor's findings — other vendors' findings are left alone rather than cl
 | `out/latest.md`, `out/vendor-ai-risk-{stamp}.md` | The report |
 | `out/latest.json` | Same run, machine-readable |
 | `data/findings.json` | Finding lifecycle store — **the durable state** |
+| `data/nhis.json` | Portfolio NHI inventory (register + observed) |
+| `data/monitor.json` | Daemon heartbeat, last cycle, next cycle |
 | `data/snapshots/{vendor}/{stamp}/` | Normalized artifact snapshots + hashes |
 | `data/llm_audit.jsonl` | Every prompt and response, for audit |
 | `pending_review/{vendor}-{stamp}.json` | Model-proposed register updates awaiting human acceptance |
@@ -303,8 +374,8 @@ be shown staying quiet on a real diff.
 Full record with reproduction steps in **[VALIDATION.md](VALIDATION.md)**.
 
 Baseline run: 10 findings, **0 critical**, 12 gaps. Change run: **2 new criticals**, exit 1, Vendor C
-unchanged. All 22 ground-truth assertions met; 66 unit tests pass (46 original + 20 covering
-real-world artifact parsing and vendor onboarding).
+unchanged. All 22 ground-truth assertions met. Unit tests cover the original pipeline plus the
+monitor daemon and multi-vendor NHI inventory (`python3 -m unittest tests.test_vra tests.test_monitor_nhi`).
 
 **The clean sheet is not the story.** Validation surfaced four real defects:
 
@@ -343,8 +414,9 @@ vendors.
   SaaS screen will still produce a gap, not rows.
 - **Diff-blind to unpublished change.** A vendor that swaps model providers without touching a watched
   artifact triggers nothing. The in-tenant probe partially covers this, for one vendor.
-- **Probe coverage is one vendor.** Only the identity provider has a management API modelled, in fixture
-  mode. Auth, pagination, rate limits, and schema drift are unexercised.
+- **Probe coverage is fixture-mode.** All three sandbox vendors now expose a tenant inventory
+  (applications + OAuth grants) so multi-vendor NHI assessment is exercisable offline. Auth,
+  pagination, rate limits, and schema drift of a live management API are still unexercised.
 - **The register is trusted.** Except where the probe or a parsed artifact overrides it, the tool believes
   what a human wrote. A stale register produces confident, wrong output.
 - **No adversarial text testing.** Nothing exercises a vendor describing an agent in deliberately soft
@@ -358,9 +430,9 @@ a database — it holds every `accepted_risk` decision a human has made, and los
 ## Roadmap (not in v1)
 
 Browser extension for capturing artifacts behind auth (SafeBase/Whistic/Vanta guest sessions) ·
-multi-tenant / multi-analyst state · scheduled unattended runs · cloud sync of findings · model
-distillation for faster local triage · custom quantization · OCR fallback for scanned subprocessor
-PDFs.
+multi-tenant / multi-analyst state · live (non-fixture) probes for more vendor APIs · cloud sync
+of findings · model distillation for faster local triage · custom quantization · OCR fallback for
+scanned subprocessor PDFs.
 
 ## Repository layout
 

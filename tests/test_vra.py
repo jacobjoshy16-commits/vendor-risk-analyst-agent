@@ -11,6 +11,7 @@ can create or re-severity a finding.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -393,9 +394,14 @@ class TestGroundTruthScenario(unittest.TestCase):
             self.assertIn("watch", v)
             self.assertEqual(v["slug"], slug)
 
-    def test_only_identity_provider_has_probe(self):
-        with_probe = [s for s, v in self.vendors.items() if v.get("probe")]
-        self.assertEqual(with_probe, ["aegis-identity-cloud"])
+    def test_sandbox_vendors_have_probes_and_nhis(self):
+        with_probe = sorted(s for s, v in self.vendors.items() if v.get("probe"))
+        self.assertEqual(
+            with_probe,
+            ["aegis-identity-cloud", "loop-workspace", "meridian-revcycle"],
+        )
+        for slug, v in self.vendors.items():
+            self.assertTrue(v.get("nhis"), f"{slug} has no nhis: inventory")
 
     def test_baseline_registers_have_no_critical(self):
         """Ground truth: criticals arrive in run 2, not at baseline."""
@@ -773,15 +779,21 @@ class TestModelDefaultAndWebUI(unittest.TestCase):
         self.assertEqual(RunConfig().model, "qwen2.5:7b-instruct")
 
     def test_webui_summary_and_vendors(self):
-        from vra.webui import _list_vendors, _summary
+        from vra.webui import _list_nhis, _list_vendors, _monitor, _summary
 
         s = _summary()
         self.assertIn("vendors", s)
         self.assertIn("blocked_parses", s)
         self.assertIn("model", s)
+        self.assertIn("nhis", s)
+        self.assertGreaterEqual(s["nhis"], 1)
         v = _list_vendors()
         self.assertGreaterEqual(len(v), 3)
         self.assertTrue(all("slug" in x and "parse" in x for x in v))
+        nhis = _list_nhis()
+        self.assertGreaterEqual(len(nhis), 3)
+        mon = _monitor()
+        self.assertIn(mon.get("status"), ("stopped", "running", "stale"))
 
 
 if __name__ == "__main__":

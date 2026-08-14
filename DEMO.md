@@ -116,6 +116,16 @@ python3 vra.py onboard "Acme Corp" --trust-center https://acme.safebase.io --off
 Land the point from review: *"the parser that AIV-03 depends on must survive real trust centers,
 not pipe-delimited sandbox fixtures."*
 
+## Beat 7c — leave it running (20s, optional)
+
+```bash
+python3 vra.py monitor --offline --webui --interval 2m
+```
+
+> "And then you leave it. Same pipeline, on a timer, against every vendor and every non-human
+> identity in the portfolio — Loop's provisioning client living in Aegis's tenant included. The
+> console shows the heartbeat. A critical is a finding, not a crashed daemon."
+
 ## Beat 8 — honesty close (20s)
 
 Open `VALIDATION.md`, show the scoreboard, then scroll straight to Defects.
