@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Entry point.
 
-Legacy usage (unchanged):      python3 vra.py --offline --snapshot v1
-Subcommands:
-  python3 vra.py run ...        same as legacy, explicit
-  python3 vra.py onboard ...    onboard a vendor from a trust center URL
-  python3 vra.py bootstrap ...  onboard + propose an initial register from full artifacts
-  python3 vra.py webui ...      local onboarding console (browser UI)
-  python3 vra.py monitor ...    autonomous daemon — watch vendors + NHIs while the PC is on
-  python3 vra.py discover ...   pull the full NHI list from Auth0 / Okta (paginated)
-  python3 vra.py nhis ...       print the portfolio NHI inventory
+Everyday path:
+  python3 vra.py connect
+  python3 vra.py monitor
+  python3 vra.py report
+
+Flag-based / scripted commands stay available:
+  python3 vra.py --offline --snapshot v1
+  python3 vra.py creds set okta
+  python3 vra.py discover --provider okta --base-url https://org.okta.com
 """
 import sys
 from pathlib import Path
@@ -18,7 +18,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from vra.cli import main as cli_main  # noqa: E402
 
-SUBCOMMANDS = ("run", "onboard", "bootstrap", "webui", "monitor", "discover", "nhis")
+SUBCOMMANDS = (
+    "run",
+    "onboard",
+    "bootstrap",
+    "webui",
+    "monitor",
+    "discover",
+    "nhis",
+    "creds",
+    "connect",
+    "report",
+    "enrich",
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -29,6 +41,11 @@ def main(argv: list[str] | None = None) -> int:
             from vra.onboard import main as onboard_main
 
             return onboard_main(rest)
+        if cmd == "bootstrap":
+            from vra.onboard import main as onboard_main
+
+            extra = [] if "--bootstrap" in rest else ["--bootstrap"]
+            return onboard_main(rest + extra)
         if cmd == "webui":
             from vra.webui import main as webui_main
 
@@ -45,6 +62,18 @@ def main(argv: list[str] | None = None) -> int:
             from vra.creds import main as creds_main
 
             return creds_main(rest)
+        if cmd == "connect":
+            from vra.connect import main as connect_main
+
+            return connect_main(rest)
+        if cmd == "report":
+            from vra.report import report_main
+
+            return report_main(rest)
+        if cmd == "enrich":
+            from vra.connect import enrich_main
+
+            return enrich_main(rest)
         if cmd == "nhis":
             from vra.monitor import print_inventory
 

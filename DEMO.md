@@ -1,5 +1,13 @@
 # Demo recording notes
 
+Customer path (what you show first, no flags):
+
+```
+python3 vra.py connect
+python3 vra.py monitor
+python3 vra.py report
+```
+
 Target: 3–4 minutes. The point to land is **the tool caught a change nobody announced**, and it did so
 with an auditable citation rather than a model's opinion.
 

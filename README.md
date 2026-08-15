@@ -1,4 +1,4 @@
-# Vendor NHI Complaince Monitor (1.2) 
+# Vendor NHI Compliance Monitor
 
 An **independent** workstation monitor for **non-human identities** that vendor
 applications drop into your estate — especially **agentic AI** (copilots, agents,
@@ -36,7 +36,8 @@ This tool is the independent monitor for that gap.
 - Not a HIPAA-only healthcare reviewer. The sandbox vendors happen to be
   clinical so the planted scenario is sharp. The product identity is
   **800-53 + SOC 2 NHI / agentic monitoring**.
-- Not an auto-remediator. It does not revoke tokens or write the register.
+- Not an auto-remediator. It does not revoke tokens or write answers into the
+  register.
 - Not a reader of NDA-gated SafeBase/Whistic/Vanta pages. That is `blocked` +
   a drafted access request, never a silent pass.
 
@@ -44,64 +45,69 @@ This tool is the independent monitor for that gap.
 
 ## How you run it
 
+Three commands. You do not need flags.
+
 ```
-1. Bootstrap each vendor     python3 vra.py bootstrap Slack --offline
-2. Accept the proposal       edit vendors/{slug}.yaml  (model never writes it)
-3. Store the API key in the OS keychain   python3 vra.py creds set okta
-4. Discover the identities                python3 vra.py discover --provider okta --base-url https://your-org.okta.com
-5. Leave the monitor up      python3 vra.py monitor --offline --webui --interval 15m
-6. Read the pack             out/latest.md
-7. List the identities       python3 vra.py nhis
+1. Connect a vendor     python3 vra.py connect
+2. Leave it running     python3 vra.py monitor
+3. Read the report      python3 vra.py report
 ```
 
-You do **not** type NHIs into YAML. Each vendor connector pages **that
-vendor’s** documented API (Atlassian, Slack, Okta, Auth0) and writes
-`data/nhis.json`. `vendors/*.yaml` `nhis:` is an optional overlay — owner,
-last-rotated, `resides_in`.
+**`connect`** asks what it needs — which vendor, the org URL, the API token
+(hidden) — stores the token in the OS keychain, checks the connection, pulls
+the identities, and writes a starter `vendors/{slug}.yaml`. Same command each
+time. Run it once per vendor.
 
-```bash
-# Store secrets in the OS keychain (hidden prompt, never a CLI argument).
-python3 vra.py creds set okta
-python3 vra.py creds set auth0
-python3 vra.py creds list          # names only — never values
-python3 vra.py creds test okta --base-url https://your-org.okta.com
-python3 vra.py creds rm slack      # forget a connector
-
-python3 vra.py discover --provider okta --base-url https://your-org.okta.com
-python3 vra.py discover --provider auth0 --domain your-tenant.us.auth0.com
-
-# CI only — env vars, with an explicit warning:
-python3 vra.py discover --provider okta --base-url https://your-org.okta.com --allow-env-creds
-
-# Recorded pages (same walker as live, no network):
-python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json
 ```
+Vendor? [okta / auth0 / slack / atlassian]  > okta
+Org URL?  > https://acme.okta.com
+Paste API token (hidden)  > ••••••••
+✓ stored in keychain   ✓ connection ok   ⚠ token has write scope — use read-only
+✓ discovered 12 identities   ✓ created vendors/okta.yaml
+```
+
+**`monitor`** turns itself on. It finds Ollama if you have it, otherwise uses
+the built-in checker. It re-checks every 15 minutes. The local console opens
+on port 8765. Every vendor you connected is picked up on the next cycle.
+
+**`report`** prints the finding summary and opens `out/latest.md`. One place
+to look.
+
+### What you get on day one, and what waits
+
+The 3-step path starts **NHI discovery and entitlement tracking** immediately.
+The richer AIV-* feature score (autonomy, model provider, BAA/DPA coverage)
+needs register fields a stub cannot invent. Those show up as `unknown` — a
+21-day question, not a failure. Fill them later:
+
+```
+python3 vra.py enrich okta          # lists what is still unknown
+python3 vra.py enrich okta --edit   # opens the file; you type the answers
+```
+
+The model will not fill these in for you.
 
 Credentials survive a shell restart because they live in the OS keychain
-(macOS Keychain, Windows Credential Locker, Linux Secret Service), not in
-the terminal. The monitor remints Auth0 from the stored client id/secret
-(`expires_in` minus 60s) and retries once on 401. 429s honor `Retry-After`
-and keep a partial list. The same principal seen on your IdP and on the
-vendor API is linked (`also_seen_on`); that observation satisfies NHI-06.
-If an agent **gains a write scope** since last cycle, that is recorded as
-an `entitlement_change` event in `data/findings.json` (not a model opinion).
+(macOS Keychain, Windows Credential Locker, Linux Secret Service), not in the
+terminal. The monitor remints Auth0 from the stored client id/secret and
+retries once on 401. 429s honor `Retry-After` and keep a partial list. The
+same principal seen on your IdP and on the vendor API is linked
+(`also_seen_on`). If an agent **gains a write scope** since last cycle, that
+is recorded as an `entitlement_change` in `data/findings.json`.
 
-The monitor re-reads `vendors/` every cycle. A vendor you onboard at 2pm is in
-the 2:15 run. Two copies cannot run (`data/monitor.lock`). Identical fetches
-do not write another snapshot.
+Two copies of the monitor cannot run (`data/monitor.lock`).
 
 ```bash
-python3 vra.py monitor --offline --webui --interval 15m
 python3 vra.py monitor status
 python3 vra.py monitor stop
-python3 vra.py monitor install --offline --webui   # writes login units; does not enable them
+python3 vra.py monitor install     # writes login units; does not enable them
 ```
 
 ---
 
 ## The two control families
 
-**NHI-*** is the product. It scores the *identity*.  
+**NHI-*** is the product. It scores the *identity*.
 **AIV-*** is the companion. It scores the *agentic feature* that identity powers.
 
 Every control cites **NIST SP 800-53** and **SOC 2 TSC**. Tests refuse a
@@ -139,10 +145,6 @@ critical 7 days, high 30, medium 60, low 90, gaps 21.
 AIV-07 and NHI-01 are AND conditions: acting **and** no human in the loop.
 An agent that acts under review is not a finding.
 
-Cross-vendor example (NHI-06): Loop’s provisioning client living in Aegis’s
-tenant is *observed* on Aegis, *declared* on Loop with `resides_in`, and
-only fires if that declaration is missing.
-
 ---
 
 ## Design rules (why the score is usable in an audit)
@@ -165,7 +167,7 @@ an API field.
 **4. Unknown is a question, not a failure.** Unanswered fields are 21-day
 information gaps, not “non-compliant.”
 
-**5. Local by default.** Ollama on the workstation, or `--offline`.
+**5. Local by default.** Ollama on the workstation, or the built-in checker.
 
 ---
 
@@ -180,23 +182,13 @@ pip install -r requirements.txt   # pyyaml requests pypdf keyring
 ollama pull qwen2.5:7b-instruct
 ```
 
+Then the three commands above. To replay the planted sandbox scenario:
+
 ```bash
 python3 vra.py --offline --snapshot v1          # sandbox baseline
 python3 vra.py --offline --snapshot v2          # planted change → exit 1
-python3 vra.py bootstrap Slack --offline        # new vendor, catalog URL
-python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json
-python3 vra.py monitor --offline --webui --interval 15m
-python3 vra.py nhis
-python3 -m unittest tests.test_vra tests.test_monitor_nhi tests.test_real_world_vendors tests.test_idp_discover tests.test_creds
+python3 -m unittest tests.test_vra tests.test_monitor_nhi tests.test_real_world_vendors tests.test_idp_discover tests.test_creds tests.test_connect
 ```
-
-| Flag | Effect |
-| --- | --- |
-| `--offline` | No network; heuristic backend. Report says so. |
-| `--vendor SLUG` | One vendor. Repeatable. Does not close others. |
-| `--dry-run` | Print only. |
-| `--once` | Monitor: one cycle then exit (cron). |
-| `--webui` | Local console on `:8765` (onboard, Start/Stop, NHI table). |
 
 Exit codes: `0` clean · `1` open critical · `2` run error.
 
@@ -210,6 +202,45 @@ Exit codes: `0` clean · `1` open critical · `2` run error.
 | `data/monitor.json` | Daemon heartbeat, last 20 cycles |
 | `data/snapshots/` | Normalized artifacts + hashes |
 | `pending_review/` | Model proposals (never auto-applied) |
+
+---
+
+## Scripts and CI
+
+The 3-step path is the human front door. Flags stay underneath so a daemon
+or a pipeline never has to answer a prompt.
+
+```bash
+# Store / list / forget a token without the wizard
+python3 vra.py creds set okta
+python3 vra.py creds list
+python3 vra.py creds test okta --base-url https://your-org.okta.com
+python3 vra.py creds rm slack
+
+# Discover without writing a stub
+python3 vra.py discover --provider okta --base-url https://your-org.okta.com
+python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json
+
+# Connect without prompts (token already in the keychain, or CI env)
+python3 vra.py connect --provider okta --base-url https://acme.okta.com --yes
+python3 vra.py connect --provider okta --base-url https://acme.okta.com --allow-env-creds --yes
+
+# Monitor without the console, or one cycle for cron
+python3 vra.py monitor --no-webui --offline --interval 15m
+python3 vra.py monitor --once --offline
+python3 vra.py report --no-open
+```
+
+`--allow-env-creds` is CI only. It prints a warning. Prefer the keychain.
+
+| Flag | Effect |
+| --- | --- |
+| `--offline` | No network; heuristic backend. Report says so. |
+| `--vendor SLUG` | One vendor. Repeatable. Does not close others. |
+| `--dry-run` | Print only. |
+| `--once` | Monitor: one cycle then exit (cron). |
+| `--no-webui` | Monitor: do not serve the local console. |
+| `--yes` | Connect: never prompt; fail if a value is missing. |
 
 ---
 
@@ -232,30 +263,34 @@ subprocessor pages. A JS shell with no table is `parse_failed`, not a pass.
 
 The scored sandbox runs used the offline heuristic, not a live 7B model. That
 validates the pipeline and the control mapping. It does **not** validate triage
-on messy real vendor prose. Run `--model` against Ollama before relying on it.
+on messy real vendor prose. Run against Ollama before relying on it.
 
 - NDA / login walls stop the parse, loudly (`blocked` + outreach).
 - Unpublished change with no probe → nothing fires.
 - Sandbox probes are fixture-mode. Live API drift is unexercised.
 - A stale register produces confident, wrong output except where a probe or
   parsed table overlays it.
+- A connect stub is enough for NHI discovery. It is **not** a complete AIV-*
+  register — those fields stay `unknown` until a human fills them.
 
 ---
 
 ## Repository
 
 ```
-vra.py                  entry point
+vra.py                  entry point — connect / monitor / report
 nhi_controls.yaml       8 NHI-* controls — the identity set (800-53 + SOC 2)
 controls.yaml           15 AIV-* controls — the feature set (800-53 + SOC 2)
 vendors/*.yaml          per-vendor register; nhis: is overlay, not the list
+src/vra/connect.py      the interactive front door
 src/vra/idp.py          IdP connectors (Okta / Auth0) + dispatcher
 src/vra/connectors.py   vendor connectors (Atlassian, Slack, …)
 src/vra/discover.py     `vra.py discover`
 src/vra/monitor.py      the daemon
 src/vra/nhi.py          inventory + NHI-* evaluation
 src/vra/cli.py          one assess pass
-src/vra/onboard.py      onboard / bootstrap
+src/vra/onboard.py      onboard / bootstrap (trust-center path)
+src/vra/creds.py        OS keychain
 src/vra/webui.py        local console
 sandbox/                planted scenario + real-world page fixtures
 sandbox/probe/idp/      recorded Okta / Auth0 pages (same walker as live)

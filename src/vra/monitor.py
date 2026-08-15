@@ -10,8 +10,8 @@ against the current register, so findings, NHI inventory, and reports stay
 the source of truth. The daemon's job is to *keep doing that* for as long
 as the workstation is up.
 
-    python3 vra.py monitor --offline --webui
-    python3 vra.py monitor --interval 15m
+    python3 vra.py monitor
+    python3 vra.py monitor --offline --no-webui
     python3 vra.py monitor --once
     python3 vra.py monitor status
     python3 vra.py monitor stop
@@ -433,6 +433,7 @@ def spawn_monitor(
         str(interval),
         "--snapshot",
         snapshot,
+        "--no-webui",  # caller (the console) already has the UI
     ]
     if offline:
         cmd.append("--offline")
@@ -599,8 +600,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="no network; deterministic heuristic backend")
     p.add_argument("--once", action="store_true",
                    help="run a single cycle and exit (for cron, or tests)")
-    p.add_argument("--webui", action="store_true",
-                   help="also serve the local console so you can watch the daemon")
+    webui = p.add_mutually_exclusive_group()
+    webui.add_argument("--webui", dest="webui", action="store_true", default=True,
+                       help="serve the local console (default on)")
+    webui.add_argument("--no-webui", dest="webui", action="store_false",
+                       help="do not serve the local console")
     p.add_argument("--host", default=None, help="webui bind address")
     p.add_argument("--port", type=int, default=None, help="webui bind port")
     p.add_argument("--no-probe", action="store_true", help="skip in-tenant probes")
@@ -657,7 +661,7 @@ def main(argv: list[str] | None = None) -> int:
         print("  Linux (systemd user):  systemctl --user enable --now vra-monitor.service")
         print("  Linux (session):       the .desktop file starts the monitor at graphical login")
         print("  macOS:                 launchctl load ~/Library/LaunchAgents/ai.vra.monitor.plist")
-        print("  otherwise:             leave `python3 vra.py monitor --webui` running")
+        print("  otherwise:             leave `python3 vra.py monitor` running")
         return 0
 
     cfg = RunConfig(
@@ -676,4 +680,24 @@ def main(argv: list[str] | None = None) -> int:
         cfg.webui_host = args.host
     if args.port:
         cfg.webui_port = args.port
-    return run_forever(cfg, interval=interval, with_webui=args.webui)
+
+    # Detect Ollama unless the caller forced --offline. A missing daemon is
+    # not a crash — assess() already falls back to the heuristic.
+    if not cfg.offline:
+        from .llm import probe_ollama
+
+        if probe_ollama(cfg):
+            print(f"vra monitor: Ollama found — using {cfg.model}")
+        else:
+            print(
+                "vra monitor: Ollama not found — using the built-in checker. "
+                "Start Ollama (`ollama pull qwen2.5:7b-instruct`) to use the local model."
+            )
+    else:
+        print("vra monitor: using the built-in checker (offline).")
+
+    # --once is a one-shot (cron / tests). Don't bind a console on a single pass.
+    with_webui = bool(args.webui) and not args.once
+    pretty = f"{interval // 60} minutes" if interval % 60 == 0 and interval >= 60 else f"{interval}s"
+    print(f"vra monitor: checking every {pretty}" + (" · console on" if with_webui else ""))
+    return run_forever(cfg, interval=interval, with_webui=with_webui)
