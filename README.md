@@ -122,7 +122,9 @@ The model will not fill these in for you.
 
 Credentials survive a shell restart because they live in the OS keychain
 (macOS Keychain, Windows Credential Locker, Linux Secret Service), not in the
-terminal. The monitor remints Auth0 from the stored client id/secret and
+terminal. If this machine has no keychain (a headless Linux box, this
+sandbox), they go in `~/.local/share/vra/keyring.json` at mode `0600` and
+the CLI says so. That is a last resort, not the desktop path. The monitor remints Auth0 from the stored client id/secret and
 retries once on 401. 429s honor `Retry-After` and keep a partial list. The
 same principal seen on your IdP and on the vendor API is linked
 (`also_seen_on`). If an agent **gains a write scope** since last cycle, that

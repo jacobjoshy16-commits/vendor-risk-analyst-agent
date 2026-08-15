@@ -20,12 +20,18 @@ import getpass
 import json
 import os
 import sys
+import threading
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Iterator
 
 SERVICE_PREFIX = "vra"
 INDEX_SERVICE = "vra:_index"
 INDEX_USER = "connectors"
+
+# Last-resort store when the OS has no keychain (headless Linux, this sandbox).
+# Override in tests with VRA_KEYRING_FILE. Never commit this file.
+_DEFAULT_FILE = Path.home() / ".local/share/vra/keyring.json"
 
 def connector_catalog() -> dict[str, dict[str, Any]]:
     """Live view of registered connectors. Generated from the registry."""
@@ -60,26 +66,144 @@ class MemoryKeyring:
 
 
 _TEST_BACKEND: MemoryKeyring | None = None
+_ACTIVE_BACKEND: Any = None
+_FALLBACK_WARNED = False
+
+
+class FileKeyring:
+    """chmod-0600 JSON file. Used only when the OS keychain is missing.
+
+    Survives a shell restart. Not an in-process vault and not an env var.
+    On macOS / Windows / a Linux desktop with Secret Service this class
+    is never selected.
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        raw = path or os.environ.get("VRA_KEYRING_FILE") or _DEFAULT_FILE
+        self.path = Path(raw)
+        self._lock = threading.Lock()
+
+    def _load(self) -> dict[str, dict[str, str]]:
+        if not self.path.exists():
+            return {}
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        out: dict[str, dict[str, str]] = {}
+        for service, bucket in data.items():
+            if isinstance(bucket, dict):
+                out[str(service)] = {str(k): str(v) for k, v in bucket.items()}
+        return out
+
+    def _dump(self, data: dict[str, dict[str, str]]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(self.path.parent, 0o700)
+        except OSError:
+            pass
+        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        tmp.replace(self.path)
+        os.chmod(self.path, 0o600)
+
+    def get_password(self, service: str, username: str) -> str | None:
+        with self._lock:
+            return (self._load().get(service) or {}).get(username)
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        with self._lock:
+            data = self._load()
+            data.setdefault(service, {})[username] = password
+            self._dump(data)
+
+    def delete_password(self, service: str, username: str) -> None:
+        with self._lock:
+            data = self._load()
+            bucket = data.get(service) or {}
+            bucket.pop(username, None)
+            if bucket:
+                data[service] = bucket
+            else:
+                data.pop(service, None)
+            self._dump(data)
 
 
 def use_memory_keyring(backend: MemoryKeyring | None = None) -> MemoryKeyring:
     """Install an in-process keyring. Tests only."""
-    global _TEST_BACKEND
+    global _TEST_BACKEND, _ACTIVE_BACKEND
     _TEST_BACKEND = backend or MemoryKeyring()
+    _ACTIVE_BACKEND = None
     return _TEST_BACKEND
 
 
 def reset_memory_keyring() -> None:
-    global _TEST_BACKEND
+    global _TEST_BACKEND, _ACTIVE_BACKEND, _FALLBACK_WARNED
     _TEST_BACKEND = None
+    _ACTIVE_BACKEND = None
+    _FALLBACK_WARNED = False
+
+
+def _os_backend_usable(kr: Any) -> bool:
+    module = type(kr).__module__
+    if module.startswith("keyring.backends.fail") or module.startswith("keyring.backends.null"):
+        return False
+    try:
+        kr.set_password("vra:_probe", "_", "x")
+        kr.delete_password("vra:_probe", "_")
+    except Exception:
+        return False
+    return True
+
+
+def _warn_fallback(path: Path) -> None:
+    global _FALLBACK_WARNED
+    if _FALLBACK_WARNED:
+        return
+    _FALLBACK_WARNED = True
+    print(
+        "vra creds: no OS keychain on this machine "
+        "(macOS Keychain / Windows Credential Locker / Linux Secret Service).\n"
+        f"  Tokens will live in {path} (mode 0600) so they survive a restart.\n"
+        "  On a normal desktop they go in the OS keychain instead.",
+        file=sys.stderr,
+    )
+
+
+def _choose_backend():
+    import keyring
+
+    try:
+        kr = keyring.get_keyring()
+    except Exception:
+        kr = None
+    if kr is not None and _os_backend_usable(kr):
+        return kr
+    fallback = FileKeyring()
+    _warn_fallback(fallback.path)
+    return fallback
 
 
 def _backend():
+    global _ACTIVE_BACKEND
     if _TEST_BACKEND is not None:
         return _TEST_BACKEND
-    import keyring
+    if _ACTIVE_BACKEND is None:
+        _ACTIVE_BACKEND = _choose_backend()
+    return _ACTIVE_BACKEND
 
-    return keyring.get_keyring()
+
+def backend_info() -> str:
+    """Where tokens actually live. Never includes values."""
+    b = _backend()
+    if isinstance(b, MemoryKeyring):
+        return "memory (tests)"
+    if isinstance(b, FileKeyring):
+        return f"file ({b.path})"
+    return f"os-keychain ({type(b).__module__}.{type(b).__name__})"
 
 
 def service_name(connector: str) -> str:
@@ -111,7 +235,12 @@ def set_secret(connector: str, field: str, value: str) -> None:
     field = field.strip()
     if not value:
         raise ValueError(f"{connector}:{field} is empty")
-    _backend().set_password(service_name(connector), field, value)
+    try:
+        _backend().set_password(service_name(connector), field, value)
+    except Exception as exc:
+        raise RuntimeError(
+            f"could not store {connector}:{field} in {backend_info()}: {exc}"
+        ) from exc
     index = _load_index()
     fields = list(index.get(connector) or [])
     if field not in fields:
@@ -328,6 +457,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.action == "list":
+            print(f"vra creds: backend = {backend_info()}")
             index = listed_connectors()
             if not index:
                 print("vra creds: no connectors stored")

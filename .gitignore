@@ -16,3 +16,6 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+
+# Last-resort credential file if the OS has no keychain. Never commit.
+keyring.json

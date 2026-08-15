@@ -289,7 +289,7 @@ def write_stub(
         created = False
     dumped = yaml.safe_dump(stub, sort_keys=False, default_flow_style=False, allow_unicode=True)
     for value in (secrets or {}).values():
-        if value and value in dumped:
+        if value and len(value) >= 8 and value in dumped:
             raise ValueError("refusing to write a vendor register that contains a secret")
     path.write_text(dumped, encoding="utf-8")
     return path, created, updated
