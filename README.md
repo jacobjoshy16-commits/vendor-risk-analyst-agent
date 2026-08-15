@@ -71,7 +71,40 @@ the built-in checker. It re-checks every 15 minutes. The local console opens
 on port 8765. Every vendor you connected is picked up on the next cycle.
 
 **`report`** prints the finding summary and opens `out/latest.md`. One place
-to look.
+to look. At ~20 vendors / ~60 identities, start with the portfolio rollup
+instead of scrolling per-vendor markdown:
+
+```
+python3 vra.py portfolio
+```
+
+---
+
+## Connectors (how it scales past four vendors)
+
+The CLI menu is generated from a **connector registry**. Adding a vendor is
+registering a manifest (id, auth, fields, pagination, `list_nhis()`). There
+is no hardcoded vendor list in `connect` / `creds` / `discover`.
+
+Protocol connectors cover a *class* of APIs, not a brand:
+
+| Connector | What it lists | You give it |
+| --- | --- | --- |
+| `oidc_apps` | Registered apps + granted scopes | Org URL + token. Flavor (Okta / Auth0 / Entra / Ping / OneLogin) is inferred from the hostname. |
+| `scim` | Service accounts from any SCIM 2.0 `/Users` | SCIM base URL + bearer. Humans are skipped. |
+| `generic_rest` | Whatever your endpoint returns | List URL + JSONPath mapping for `id` / `scopes` / `owner`. |
+
+Native connectors stay for products that are not a protocol: **GitHub**
+(app installations), **Google Workspace** (directory service accounts),
+**AWS IAM** (users + roles), **Atlassian**, **Slack**.
+
+At this size the monitor also:
+
+- **Keys identities by immutable id**, not display name. A rename does not
+  fork history or drop entitlement tracking.
+- **Polls vendors on a bounded worker pool** (`VRA_WORKERS`, default 4).
+- **Isolates failure.** One vendor's 401 or timeout is logged; last-known
+  inventory is kept; the other 19 still run.
 
 ### What you get on day one, and what waits
 

@@ -1,0 +1,17 @@
+{
+  "provider": "generic_rest",
+  "base_url": "https://api.example.com/v1/service-accounts",
+  "mapping": {"list": "items", "id": "id", "name": "displayName", "scopes": "grants", "owner": "owner.email"},
+  "pages": [
+    {
+      "method": "GET",
+      "url": "https://api.example.com/v1/service-accounts",
+      "body": {
+        "items": [
+          {"id": "sa-1", "displayName": "Invoice Agent", "grants": ["invoices.read", "invoices.write"], "owner": {"email": "ops@example.com"}},
+          {"id": "sa-2", "displayName": "Read Only Sync", "grants": ["users.read"], "owner": {"email": "it@example.com"}}
+        ]
+      }
+    }
+  ]
+}

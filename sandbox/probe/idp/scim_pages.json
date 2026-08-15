@@ -1,0 +1,32 @@
+{
+  "provider": "scim",
+  "base_url": "https://idp.example.com/scim/v2",
+  "page_limit": 100,
+  "pages": [
+    {
+      "method": "GET",
+      "url": "https://idp.example.com/scim/v2/Users?count=100&startIndex=1",
+      "body": {
+        "totalResults": 3,
+        "itemsPerPage": 2,
+        "startIndex": 1,
+        "Resources": [
+          {"id": "u-human-1", "userName": "jane@example.com", "userType": "Employee", "active": true, "displayName": "Jane Human"},
+          {"id": "u-svc-1", "userName": "svc-provisioner", "userType": "Service Account", "active": true, "displayName": "Provisioner"}
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://idp.example.com/scim/v2/Users?count=100&startIndex=3",
+      "body": {
+        "totalResults": 3,
+        "itemsPerPage": 1,
+        "startIndex": 3,
+        "Resources": [
+          {"id": "u-bot-2", "userName": "bot@example.com", "userType": "Bot", "active": true, "displayName": "Help Bot"}
+        ]
+      }
+    }
+  ]
+}

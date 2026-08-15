@@ -66,6 +66,14 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     a("## 1. Portfolio summary")
     a("")
     nhis = ctx.get("nhis") or []
+    portfolio = ctx.get("portfolio")
+    if portfolio:
+        a(f"- **NHIs across portfolio:** {portfolio.get('nhis', len(nhis))}  "
+          f"(write {portfolio.get('write', 0)}, orphan {portfolio.get('orphans', 0)})")
+        a(f"- **Changed since last cycle:** "
+          f"+{len(portfolio.get('new_since_last') or [])} new / "
+          f"-{len(portfolio.get('gone_since_last') or [])} gone / "
+          f"{portfolio.get('entitlement_changes', 0)} entitlement")
     a(f"- **Vendors assessed:** {len(vendors)}")
     a(f"- **AI features tracked:** {feature_count}")
     a(f"- **NHIs inventoried:** {len(nhis)}")
@@ -457,6 +465,20 @@ def summarize_latest(*, out_dir: Path | None = None, data_dir: Path | None = Non
             nhis = []
 
     lines: list[str] = []
+    try:
+        from .portfolio import build_portfolio, format_portfolio
+        from .nhi import NHIInventory
+        from .register import FindingStore
+
+        port = format_portfolio(build_portfolio(
+            NHIInventory(path=nhi_path),
+            FindingStore(path=findings_path),
+        ))
+        if nhis or findings:
+            lines.extend(port)
+            lines.append("")
+    except Exception:
+        pass
     if not latest_md.exists() and not findings and not nhis:
         lines.append("No report yet. Connect a vendor and start the monitor:")
         lines.append("")

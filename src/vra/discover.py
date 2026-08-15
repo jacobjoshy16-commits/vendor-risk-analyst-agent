@@ -40,8 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
             "(Okta, Auth0, Atlassian, Slack). Paginates. Does not invent identities."
         ),
     )
-    p.add_argument("--provider", choices=("okta", "auth0", "atlassian", "slack"), default=None,
-                   help="Vendor API: okta, auth0, atlassian, slack. Inferred from --base-url if omitted.")
+    from .registry import menu_ids
+
+    p.add_argument("--provider", choices=tuple(menu_ids()), default=None,
+                   help="Connector id (generated from the registry). Inferred from --base-url if omitted.")
     p.add_argument("--base-url", default=None,
                    help="Okta org URL (https://org.okta.com) or Auth0 issuer")
     p.add_argument("--domain", default=None,

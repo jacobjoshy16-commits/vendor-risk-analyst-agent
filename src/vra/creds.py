@@ -27,33 +27,16 @@ SERVICE_PREFIX = "vra"
 INDEX_SERVICE = "vra:_index"
 INDEX_USER = "connectors"
 
-CONNECTORS: dict[str, dict[str, Any]] = {
-    "okta": {
-        "fields": ("api_token",),
-        "env": {"api_token": ("OKTA_API_TOKEN", "AEGIS_API_TOKEN")},
-        "opaque_admin": True,
-    },
-    "auth0": {
-        "fields": ("client_id", "client_secret", "management_token"),
-        "required": ("client_id", "client_secret"),
-        "env": {
-            "client_id": ("AUTH0_CLIENT_ID",),
-            "client_secret": ("AUTH0_CLIENT_SECRET",),
-            "management_token": ("AUTH0_MGMT_TOKEN",),
-        },
-        "opaque_admin": False,
-    },
-    "atlassian": {
-        "fields": ("api_token",),
-        "env": {"api_token": ("ATLASSIAN_API_TOKEN",)},
-        "opaque_admin": True,
-    },
-    "slack": {
-        "fields": ("bot_token",),
-        "env": {"bot_token": ("SLACK_BOT_TOKEN", "SLACK_TOKEN")},
-        "opaque_admin": False,
-    },
-}
+def connector_catalog() -> dict[str, dict[str, Any]]:
+    """Live view of registered connectors. Generated from the registry."""
+    from .registry import creds_catalog
+
+    return creds_catalog()
+
+
+# Kept as a name tests / older callers may import. Always rebuilt.
+def _connectors() -> dict[str, dict[str, Any]]:
+    return connector_catalog()
 
 WRITE_SCOPE_MARKERS = ("manage", "write", "revoke", "delete", "create", "update", "admin")
 
@@ -148,7 +131,7 @@ def get_secret(connector: str, field: str) -> str | None:
 def delete_connector(connector: str) -> list[str]:
     connector = _norm_connector(connector)
     index = _load_index()
-    fields = list(index.get(connector) or CONNECTORS.get(connector, {}).get("fields") or [])
+    fields = list(index.get(connector) or connector_catalog().get(connector, {}).get("fields") or [])
     removed: list[str] = []
     for field in fields:
         try:
@@ -170,8 +153,9 @@ def listed_connectors() -> dict[str, list[str]]:
 
 def _norm_connector(name: str) -> str:
     key = (name or "").strip().lower()
-    if key not in CONNECTORS:
-        raise ValueError(f"unknown connector {name!r}; choose {', '.join(sorted(CONNECTORS))}")
+    catalog = connector_catalog()
+    if key not in catalog:
+        raise ValueError(f"unknown connector {name!r}; choose {', '.join(sorted(catalog))}")
     return key
 
 
@@ -196,7 +180,7 @@ def resolve_secrets(
     Callers must drop the dict after the request.
     """
     connector = _norm_connector(connector)
-    spec = CONNECTORS[connector]
+    spec = connector_catalog()[connector]
     fields: tuple[str, ...] = spec["fields"]
     required: tuple[str, ...] = spec.get("required") or fields[:1]
     merged: dict[str, tuple[str, ...]] = dict(spec.get("env") or {})
@@ -252,7 +236,7 @@ def jwt_scopes(token: str) -> list[str]:
 def inspect_scopes(connector: str, secrets: dict[str, str]) -> dict[str, Any]:
     """Look at the credential itself. Does not invent grants."""
     connector = _norm_connector(connector)
-    spec = CONNECTORS[connector]
+    spec = connector_catalog()[connector]
     token = (
         secrets.get("api_token")
         or secrets.get("bot_token")
@@ -295,71 +279,14 @@ def verify_readonly(
     transport=None,
 ) -> tuple[bool, str]:
     """One read-only call so `creds test` can say the token works."""
-    from .idp import LiveTransport, _exchange
+    from .registry import ping
 
-    bus = transport or LiveTransport()
     connector = _norm_connector(connector)
-    if connector == "okta":
-        base = (base_url or os.environ.get("OKTA_BASE_URL") or "").rstrip("/")
-        if not base:
-            return False, "pass --base-url https://your-org.okta.com"
-        token = secrets.get("api_token") or ""
-        status, body, _ = _exchange(
-            bus, "GET", f"{base}/api/v1/org",
-            headers={"Authorization": f"SSWS {token}", "Accept": "application/json"},
-        )
-        if status < 400:
-            return True, f"okta org reachable ({status})"
-        return False, f"okta /api/v1/org returned {status}"
-    if connector == "auth0":
-        domain = (base_url or os.environ.get("AUTH0_DOMAIN") or "").rstrip("/")
-        if not domain:
-            return False, "pass --base-url https://your-tenant.us.auth0.com"
-        from .idp import _auth0_base, mint_auth0_token, _auth0_headers
-
-        token = secrets.get("management_token")
-        if not token and secrets.get("client_id") and secrets.get("client_secret"):
-            token, _, err = mint_auth0_token(
-                bus, domain, secrets["client_id"], secrets["client_secret"]
-            )
-            if err or not token:
-                return False, err or "auth0 mint failed"
-        if not token:
-            return False, "need client_id+client_secret or management_token"
-        base = _auth0_base(domain)
-        status, _, _ = _exchange(
-            bus, "GET", f"{base}/api/v2/clients",
-            headers=_auth0_headers(token),
-            params={"per_page": 1, "page": 0, "include_totals": "true"},
-        )
-        if status < 400:
-            return True, f"auth0 clients reachable ({status})"
-        return False, f"auth0 /api/v2/clients returned {status}"
-    if connector == "atlassian":
-        token = secrets.get("api_token") or ""
-        status, _, _ = _exchange(
-            bus, "GET", "https://api.atlassian.com/admin/v1/orgs",
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-        )
-        if status < 400:
-            return True, f"atlassian orgs reachable ({status})"
-        return False, f"atlassian /admin/v1/orgs returned {status}"
-    if connector == "slack":
-        token = secrets.get("bot_token") or ""
-        status, body, _ = _exchange(
-            bus, "GET", "https://slack.com/api/auth.test",
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-        )
-        ok = status < 400 and isinstance(body, dict) and body.get("ok") is True
-        if ok:
-            return True, f"slack auth.test ok (team={body.get('team')})"
-        err = (body or {}).get("error") if isinstance(body, dict) else status
-        return False, f"slack auth.test failed: {err}"
-    return False, f"no probe for {connector}"
+    return ping(connector, secrets, base_url=base_url, transport=transport)
 
 
 def env_fallback_names(connector: str) -> list[str]:
-    spec = CONNECTORS[_norm_connector(connector)]
+    spec = connector_catalog()[_norm_connector(connector)]
     names: list[str] = []
     for group in (spec.get("env") or {}).values():
         names.extend(group)
@@ -376,14 +303,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="action", required=True)
     set_p = sub.add_parser("set", help="prompt for secrets and write them to the keychain")
-    set_p.add_argument("connector", choices=sorted(CONNECTORS))
+    set_p.add_argument("connector", choices=sorted(connector_catalog()))
     set_p.add_argument("--field", action="append", default=[], dest="fields",
                        help="only this field (repeatable). Default: the connector's required fields")
     sub.add_parser("list", help="show which connectors have credentials (names only)")
     rm_p = sub.add_parser("rm", help="delete a connector's secrets from the keychain")
-    rm_p.add_argument("connector", choices=sorted(CONNECTORS))
+    rm_p.add_argument("connector", choices=sorted(connector_catalog()))
     test_p = sub.add_parser("test", help="read-only ping + write-scope warning")
-    test_p.add_argument("connector", choices=sorted(CONNECTORS))
+    test_p.add_argument("connector", choices=sorted(connector_catalog()))
     test_p.add_argument("--base-url", default=None)
     test_p.add_argument("--allow-env-creds", action="store_true")
     return p
@@ -415,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"vra creds: removed {args.connector} ({', '.join(removed) or 'nothing stored'})")
             return 0
         if args.action == "set":
-            spec = CONNECTORS[args.connector]
+            spec = connector_catalog()[args.connector]
             fields = args.fields or list(spec.get("required") or spec["fields"])
             unknown = [f for f in fields if f not in spec["fields"]]
             if unknown:

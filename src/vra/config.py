@@ -28,6 +28,7 @@ MONITOR_STOP_FILE = DATA_DIR / "monitor.stop"
 MONITOR_LOG_FILE = DATA_DIR / "monitor.log"
 DEFAULT_OUT_DIR = REPO_ROOT / "out"
 DEFAULT_MONITOR_INTERVAL = int(os.environ.get("VRA_MONITOR_INTERVAL", "900"))
+DEFAULT_WORKERS = max(1, min(int(os.environ.get("VRA_WORKERS", "4")), 8))
 
 SEVERITIES = ("critical", "high", "medium", "low")
 
@@ -80,6 +81,9 @@ class RunConfig:
     webui_host: str = field(default_factory=lambda: os.environ.get("VRA_WEBUI_HOST", "0.0.0.0"))
     webui_port: int = field(
         default_factory=lambda: int(os.environ.get("VRA_WEBUI_PORT", "8765"))
+    )
+    workers: int = field(
+        default_factory=lambda: max(1, min(int(os.environ.get("VRA_WORKERS", "4")), 8))
     )
 
     @property

@@ -81,16 +81,30 @@ def entitlement_diff(old_scopes: list[str] | None, new_scopes: list[str] | None)
     }
 
 
+_UNKEYED = {"", "unnamed", "unknown", "none"}
+
+
+def immutable_id(nhi: dict) -> str | None:
+    """Quotable immutable identifier. Never a display name."""
+    for key in ("id", "app_id", "client_id"):
+        value = str(nhi.get(key) or "").strip()
+        if value and value.lower() not in _UNKEYED:
+            return value
+    return None
+
+
 def identity_key(vendor_slug: str, nhi: dict) -> str:
-    """Stable inventory key. Prefer app_id, then principal, then name."""
-    token = (
-        nhi.get("app_id")
-        or nhi.get("id")
-        or nhi.get("principal")
-        or nhi.get("name")
-        or "unnamed"
-    )
-    return f"{vendor_slug}|{token}"
+    """Stable inventory key. Immutable id only — a rename must not fork history."""
+    token = immutable_id(nhi)
+    if token:
+        return f"{vendor_slug}|{token}"
+    # Last resort: hash the principal (not the display name). A rename of
+    # the label keeps the same key; a principal change is a different identity.
+    principal = str(nhi.get("principal") or "").strip()
+    if principal and principal.lower() not in _UNKEYED:
+        digest = hashlib.sha256(principal.encode("utf-8")).hexdigest()[:16]
+        return f"{vendor_slug}|prin:{digest}"
+    return f"{vendor_slug}|unkeyed"
 
 
 def _id_tokens(nhi: dict) -> set[str]:
@@ -436,6 +450,13 @@ class NHIInventory:
         if cfg.dry_run:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        current_keys = sorted(self.identities)
+        previous = self.meta.get("keys")
+        if previous is not None and list(previous) != current_keys:
+            self.meta["previous_keys"] = previous
+        elif "previous_keys" not in self.meta:
+            self.meta["previous_keys"] = current_keys
+        self.meta["keys"] = current_keys
         payload = {
             "meta": {**self.meta, "last_run": datetime.now(timezone.utc).isoformat()},
             "identities": sorted(self.identities.values(), key=lambda i: i["key"]),

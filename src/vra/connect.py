@@ -34,52 +34,36 @@ from .creds import (
     verify_readonly,
 )
 
-PROVIDERS: dict[str, dict[str, Any]] = {
-    "okta": {
-        "label": "Okta",
-        "category": "identity_provider",
-        "url_prompt": "Org URL?",
-        "url_hint": "https://acme.okta.com",
-        "url_required": True,
-        "default_url": None,
-        "fields": ("api_token",),
-        "field_prompts": {"api_token": "Paste API token (hidden)"},
-    },
-    "auth0": {
-        "label": "Auth0",
-        "category": "identity_provider",
-        "url_prompt": "Tenant URL?",
-        "url_hint": "https://acme.us.auth0.com",
-        "url_required": True,
-        "default_url": None,
-        "fields": ("client_id", "client_secret"),
-        "optional_fields": ("management_token",),
-        "field_prompts": {
-            "client_id": "Client ID (hidden)",
-            "client_secret": "Client secret (hidden)",
-        },
-    },
-    "slack": {
-        "label": "Slack",
-        "category": "collaboration",
-        "url_prompt": "Workspace URL? (optional)",
-        "url_hint": "https://acme.slack.com",
-        "url_required": False,
-        "default_url": "https://slack.com",
-        "fields": ("bot_token",),
-        "field_prompts": {"bot_token": "Paste bot token (hidden)"},
-    },
-    "atlassian": {
-        "label": "Atlassian",
-        "category": "collaboration",
-        "url_prompt": "Admin API URL? (optional)",
-        "url_hint": "https://api.atlassian.com",
-        "url_required": False,
-        "default_url": "https://api.atlassian.com",
-        "fields": ("api_token",),
-        "field_prompts": {"api_token": "Paste API token (hidden)"},
-    },
-}
+def providers() -> dict[str, dict[str, Any]]:
+    """Generated from the connector registry. Not a hardcoded vendor list."""
+    from .registry import connect_catalog
+
+    return connect_catalog()
+
+
+class _ProvidersView:
+    """dict-like view so existing PROVIDERS[id] call sites keep working."""
+
+    def _data(self) -> dict[str, dict[str, Any]]:
+        return providers()
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._data()
+
+    def __getitem__(self, key: str) -> dict[str, Any]:
+        return self._data()[key]
+
+    def keys(self):
+        return self._data().keys()
+
+    def __iter__(self):
+        return iter(self._data())
+
+    def __len__(self) -> int:
+        return len(self._data())
+
+
+PROVIDERS = _ProvidersView()
 
 STUB_NOTES = (
     "Minimal stub written by `vra connect`. NHI discovery and entitlement "
@@ -661,8 +645,9 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        names = " / ".join(sorted(providers()))
         provider = _ask(
-            "Vendor? [okta / auth0 / slack / atlassian]",
+            f"Vendor? [{names}]",
             input_fn=input,
         ).strip().lower()
         if provider not in PROVIDERS:

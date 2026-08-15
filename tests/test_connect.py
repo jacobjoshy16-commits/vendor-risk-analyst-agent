@@ -335,7 +335,7 @@ class TestEntryDispatch(unittest.TestCase):
         assert spec and spec.loader
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        for cmd in ("connect", "report", "enrich", "creds", "monitor"):
+        for cmd in ("connect", "report", "enrich", "creds", "monitor", "portfolio"):
             self.assertIn(cmd, mod.SUBCOMMANDS)
 
     def test_connect_main_fixture_exit_zero(self):

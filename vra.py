@@ -30,6 +30,7 @@ SUBCOMMANDS = (
     "connect",
     "report",
     "enrich",
+    "portfolio",
 )
 
 
@@ -74,6 +75,10 @@ def main(argv: list[str] | None = None) -> int:
             from vra.connect import enrich_main
 
             return enrich_main(rest)
+        if cmd == "portfolio":
+            from vra.portfolio import portfolio_main
+
+            return portfolio_main(rest)
         if cmd == "nhis":
             from vra.monitor import print_inventory
 

@@ -330,3 +330,110 @@ def _normalise_slack_bot(member: dict[str, Any]) -> dict[str, Any]:
         "idp": "slack",
         "discovered_via": "slack_bots",
     }
+
+
+def _ping_atlassian(secrets: dict[str, str], *, base_url: str | None = None, transport=None) -> tuple[bool, str]:
+    from .idp import LiveTransport
+
+    bus = transport or LiveTransport()
+    token = secrets.get("api_token") or ""
+    status, _, _ = _exchange(
+        bus, "GET", "https://api.atlassian.com/admin/v1/orgs",
+        headers=_bearer(token),
+    )
+    if status < 400:
+        return True, f"atlassian orgs reachable ({status})"
+    return False, f"atlassian /admin/v1/orgs returned {status}"
+
+
+def _ping_slack(secrets: dict[str, str], *, base_url: str | None = None, transport=None) -> tuple[bool, str]:
+    from .idp import LiveTransport
+
+    bus = transport or LiveTransport()
+    token = secrets.get("bot_token") or ""
+    status, body, _ = _exchange(
+        bus, "GET", "https://slack.com/api/auth.test",
+        headers=_bearer(token),
+    )
+    ok = status < 400 and isinstance(body, dict) and body.get("ok") is True
+    if ok:
+        return True, f"slack auth.test ok (team={body.get('team')})"
+    err = (body or {}).get("error") if isinstance(body, dict) else status
+    return False, f"slack auth.test failed: {err}"
+
+
+def _wrap_atlassian(*, base_url: str, token: str | None, transport, **kwargs):
+    if not token:
+        estate = IdPEstate(provider="atlassian", base_url=base_url or "https://api.atlassian.com")
+        estate.error = "no Atlassian API token"
+        return estate
+    return discover_atlassian(
+        base_url=base_url or "https://api.atlassian.com",
+        token=token,
+        transport=transport,
+        org_id=kwargs.get("org_id"),
+        page_limit=kwargs.get("page_limit") or DEFAULT_PAGE_LIMIT,
+        max_pages=kwargs.get("max_pages") or DEFAULT_MAX_PAGES,
+    )
+
+
+def _wrap_slack(*, base_url: str, token: str | None, transport, **kwargs):
+    if not token:
+        estate = IdPEstate(provider="slack", base_url=base_url or "https://slack.com")
+        estate.error = "no Slack token"
+        return estate
+    return discover_slack(
+        base_url=base_url or "https://slack.com",
+        token=token,
+        transport=transport,
+        page_limit=min(int(kwargs.get("page_limit") or 200), 200),
+        max_pages=kwargs.get("max_pages") or DEFAULT_MAX_PAGES,
+    )
+
+
+def register_all() -> None:
+    from .registry import ConnectorManifest, register
+
+    register(
+        ConnectorManifest(
+            id="atlassian",
+            display_name="Atlassian",
+            kind="native",
+            auth="bearer",
+            fields=("api_token",),
+            pagination="hal",
+            list_method="GET /admin/api-access/v1/orgs/{id}/api-tokens + service accounts",
+            category="collaboration",
+            url_prompt="Admin API URL? (optional)",
+            url_hint="https://api.atlassian.com",
+            default_url="https://api.atlassian.com",
+            url_required=False,
+            url_hosts=("atlassian.com", "atlassian.net"),
+            opaque_admin=True,
+            env={"api_token": ("ATLASSIAN_API_TOKEN",)},
+            field_prompts={"api_token": "Paste API token (hidden)"},
+        ),
+        list_nhis=_wrap_atlassian,
+        ping=_ping_atlassian,
+    )
+    register(
+        ConnectorManifest(
+            id="slack",
+            display_name="Slack",
+            kind="native",
+            auth="bearer",
+            fields=("bot_token",),
+            pagination="cursor",
+            list_method="GET /api/users.list (bots / app users)",
+            category="collaboration",
+            url_prompt="Workspace URL? (optional)",
+            url_hint="https://acme.slack.com",
+            default_url="https://slack.com",
+            url_required=False,
+            url_hosts=("slack.com",),
+            env={"bot_token": ("SLACK_BOT_TOKEN", "SLACK_TOKEN")},
+            field_prompts={"bot_token": "Paste bot token (hidden)"},
+        ),
+        list_nhis=_wrap_slack,
+        ping=_ping_slack,
+    )

@@ -147,7 +147,8 @@ class LiveTransport(Transport):
         try:
             body = response.json() if response.content else None
         except ValueError:
-            body = None
+            text = response.text if response.content else ""
+            body = {"_xml": text} if text.lstrip().startswith("<") else None
         return response.status_code, body, {k: v for k, v in response.headers.items()}
 
 
@@ -280,17 +281,15 @@ def next_link(headers: dict[str, str], *, base: str = "") -> str | None:
 def infer_provider(block: dict[str, Any] | None, *, base_url: str = "") -> str:
     block = block or {}
     explicit = str(block.get("provider") or "").strip().lower()
-    if explicit in {"okta", "auth0", "atlassian", "slack"}:
+    from .registry import infer_from_url, known_ids
+
+    known = known_ids()
+    if explicit in known:
         return explicit
-    url = (base_url or block.get("base_url") or block.get("domain") or "").lower()
-    if "auth0.com" in url or ".auth0." in url:
-        return "auth0"
-    if "okta.com" in url or "oktapreview.com" in url or "okta-" in url:
-        return "okta"
-    if "atlassian.com" in url or "atlassian.net" in url:
-        return "atlassian"
-    if "slack.com" in url:
-        return "slack"
+    url = base_url or block.get("base_url") or block.get("domain") or ""
+    guessed = infer_from_url(url)
+    if guessed:
+        return guessed
     kind = str(block.get("type") or "").lower()
     if "identity" in kind:
         return "okta"
@@ -458,6 +457,16 @@ def classify_kind(app: dict[str, Any], provider: str) -> str:
     if provider == "atlassian":
         if str(app.get("app_type") or "") in {"agent", "rovo"}:
             return "agent_principal"
+        return "oauth_app"
+    if provider == "github":
+        return "oauth_app"
+    if provider in {"entra", "ping", "onelogin", "oidc_apps"}:
+        if str(app.get("app_type") or "") in {"servicePrincipal", "non_interactive"}:
+            return "service_account"
+        return "oauth_app"
+    if provider in {"scim", "aws_iam", "google_workspace"}:
+        return "service_account"
+    if provider == "generic_rest":
         return "oauth_app"
     mode = str(app.get("signOnMode") or "").upper()
     if mode in {"SERVICE", "SERVICE_ACCOUNT", "API_SERVICES"}:
@@ -883,53 +892,38 @@ def discover_estate(
     user_search: str | None = None,
     org_id: str | None = None,
     on_unauthorized: Callable[[], dict[str, str] | None] | None = None,
+    mapping: dict[str, str] | None = None,
+    flavor: str | None = None,
 ) -> IdPEstate:
     provider = (provider or "okta").lower()
-    if provider == "atlassian":
-        if not token:
-            estate = IdPEstate(provider="atlassian", base_url=base_url or "https://api.atlassian.com")
-            estate.error = "no Atlassian API token"
-            return estate
-        from .connectors import discover_atlassian
+    extra = {
+        "page_limit": page_limit,
+        "max_pages": max_pages,
+        "max_grant_fetches": max_grant_fetches,
+        "fetch_grants": fetch_grants,
+        "fetch_tokens": fetch_tokens,
+        "fetch_users": fetch_users,
+        "user_search": user_search,
+        "org_id": org_id,
+        "on_unauthorized": on_unauthorized,
+        "mapping": mapping,
+        "flavor": flavor,
+    }
+    # Drop Nones so native signatures stay clean.
+    extra = {k: v for k, v in extra.items() if v is not None}
 
-        return discover_atlassian(
-            base_url=base_url or "https://api.atlassian.com",
+    from .registry import known_ids, list_nhis as registry_list
+
+    if provider in known_ids() and provider not in {"okta"}:
+        return registry_list(
+            provider,
+            base_url=base_url,
             token=token,
             transport=transport,
-            org_id=org_id,
-            page_limit=page_limit,
-            max_pages=max_pages,
-        )
-    if provider == "slack":
-        if not token:
-            estate = IdPEstate(provider="slack", base_url=base_url or "https://slack.com")
-            estate.error = "no Slack token"
-            return estate
-        from .connectors import discover_slack
-
-        return discover_slack(
-            base_url=base_url or "https://slack.com",
-            token=token,
-            transport=transport,
-            page_limit=min(page_limit, 200),
-            max_pages=max_pages,
-        )
-    if provider == "auth0":
-        if not token:
-            estate = IdPEstate(provider="auth0", base_url=_auth0_base(base_url))
-            estate.error = "no Auth0 management token"
-            return estate
-        return discover_auth0(
-            domain=base_url,
-            access_token=token,
-            transport=transport,
-            page_limit=min(page_limit, 100),
-            max_pages=max_pages,
-            fetch_grants=fetch_grants,
-            on_unauthorized=on_unauthorized,
+            **extra,
         )
     if not token:
-        estate = IdPEstate(provider="okta", base_url=base_url.rstrip("/"))
+        estate = IdPEstate(provider="okta", base_url=(base_url or "").rstrip("/"))
         estate.error = "no Okta API token"
         return estate
     return discover_okta(
@@ -957,6 +951,8 @@ def _block_options(block: dict[str, Any]) -> dict[str, Any]:
         "fetch_users": bool(block.get("fetch_users")),
         "user_search": block.get("user_search"),
         "org_id": block.get("org_id"),
+        "mapping": block.get("mapping"),
+        "flavor": block.get("flavor"),
     }
 
 
@@ -980,7 +976,9 @@ def _live_token(
     allow_env = bool(block.get("_allow_env_creds"))
     from .creds import resolve_secrets
 
-    connector = provider if provider in ("okta", "auth0", "atlassian", "slack") else "okta"
+    from .registry import known_ids
+
+    connector = provider if provider in known_ids() else "okta"
     extra_env: dict[str, tuple[str, ...]] = {}
     if block.get("token_env"):
         extra_env["api_token"] = (str(block["token_env"]),)
@@ -1030,10 +1028,18 @@ def _live_token(
             meta["static"] = True
             return ready, None, meta
         return None, "no Auth0 client_id/client_secret (or management_token) in keychain", meta
-    token = secrets.get("api_token") or ""
+    token = (
+        secrets.get("api_token")
+        or secrets.get("bot_token")
+        or secrets.get("access_key_id")
+        or ""
+    )
     secrets.clear()
     if not token:
-        return None, "no Okta api_token in keychain; run `python3 vra.py creds set okta`", meta
+        return None, (
+            f"no keychain secret for {connector}. "
+            f"Run: python3 vra.py creds set {connector}"
+        ), meta
     return token, None, meta
 
 
@@ -1104,14 +1110,19 @@ def discover_from_recorded(
         blob = recorded
     transport, provider, base = load_recorded_transport(blob)
     block = (vendor or {}).get("probe") or {}
-    if not provider or provider not in {"okta", "auth0", "atlassian", "slack"}:
+    from .registry import known_ids
+
+    if not provider or provider not in known_ids():
         provider = infer_provider(block, base_url=base)
     if not base:
         base = (block.get("base_url") or block.get("domain") or "").rstrip("/")
     if not base:
         return None, "recorded page set has no base_url"
     options = _block_options(block)
-    for key in ("page_limit", "max_pages", "max_grant_fetches", "fetch_grants", "fetch_tokens", "fetch_users", "org_id"):
+    for key in (
+        "page_limit", "max_pages", "max_grant_fetches", "fetch_grants",
+        "fetch_tokens", "fetch_users", "org_id", "mapping", "flavor",
+    ):
         if key in blob:
             options[key] = blob[key]
     # Recorded sets do not need a real token; the walker still sends the header.
