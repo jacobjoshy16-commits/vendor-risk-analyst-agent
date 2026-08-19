@@ -32,7 +32,8 @@ from typing import Any
 AI_PURPOSE_TERMS = (
     "model", "inference", "llm", "generative", "generation", "ai ", " ai",
     "summariz", "embedding", "vector", "retrieval", "copilot", "assist",
-    "transcription", "speech", "nlp",
+    "transcription", "speech", "nlp", "machine learning", "deep learning",
+    "large language", "intelligence", "synthetic", "rag ",
 )
 
 # Known model/AI providers — a name match alone is enough even if the purpose
@@ -46,7 +47,43 @@ KNOWN_MODEL_PROVIDERS = (
 )
 
 # BAA column values that do NOT constitute executed coverage.
-NON_COVERAGE_MARKERS = ("no", "pending", "in progress", "n/a", "not applicable", "tbd", "—", "-")
+NON_COVERAGE_MARKERS = (
+    "no", "pending", "in progress", "n/a", "not applicable", "tbd",
+    "—", "-", "none", "not covered", "unexecuted", "false",
+)
+
+# Header keyword classification
+NAME_HEADER_KEYWORDS = (
+    "subprocessor", "sub-processor", "sub processor", "entity", "legal entity",
+    "company", "vendor", "supplier", "third-party", "third party", "provider",
+    "name", "organization", "partner", "contractor", "subcontractor",
+)
+
+PURPOSE_HEADER_KEYWORDS = (
+    "purpose", "service", "services", "function", "processing", "activity",
+    "activities", "scope", "description", "nature", "role", "use case",
+    "applicable", "feature", "category", "subject matter",
+)
+
+REGION_HEADER_KEYWORDS = (
+    "location", "region", "country", "where", "hosting", "data location",
+    "jurisdiction", "headquarters", "corporate", "geographic", "storage",
+    "place",
+)
+
+BAA_HEADER_KEYWORDS = (
+    "baa", "hipaa", "phi", "coverage", "covered", "agreement", "dpa",
+    "safeguards", "status",
+)
+
+EXCLUDED_NAME_VALUES = {
+    "subprocessor", "subprocessors", "sub-processor", "sub-processors",
+    "sub processor", "sub processors", "entity", "entity name",
+    "legal entity name", "legal entity", "third party", "third-party",
+    "third party subprocessor", "third-party subprocessor", "third-party subprocessors",
+    "vendor", "company", "name", "organization", "partner", "supplier",
+    "provider", "service provider",
+}
 
 
 @dataclass
@@ -288,7 +325,9 @@ def _parse_rows(
         return out
 
     for idx, row in enumerate(rows):
-        if header_idx is not None and idx <= header_idx:
+        if idx < start_idx:
+            continue
+        if len(row) < 2:
             continue
         if len(row) == 1 and _is_section_or_header_name(row[0]):
             continue
@@ -301,11 +340,14 @@ def _parse_rows(
             continue
 
         def get(i: int | None) -> str:
-            return row[i] if i is not None and i < len(row) else ""
+            if i is not None and 0 <= i < len(row):
+                return re.sub(r"\s+", " ", row[i]).strip()
+            return ""
 
         name = get(i_name)
         if not name or _is_section_or_header_name(name):
             continue
+
         out.append(
             ObservedSubprocessor(
                 name=name,
@@ -319,10 +361,38 @@ def _parse_rows(
     return out
 
 
+def _parse_rows(
+    rows: list[list[str]], source: str, *, require_header: bool = False
+) -> list[ObservedSubprocessor]:
+    """Backward-compatible alias for table row parsing."""
+    return _parse_table_rows(rows, source, require_header=require_header)
+
+
+def parse_html_tables(
+    tables: list[list[list[str]]], source: str
+) -> list[ObservedSubprocessor]:
+    """Extract subprocessor rows across all HTML tables in a document."""
+    all_rows: list[ObservedSubprocessor] = []
+    seen: set[tuple[str, str]] = set()
+
+    for table in tables:
+        if not table or len(table) < 2:
+            continue
+        parsed = _parse_table_rows(table, source, require_header=True)
+        if not parsed and len(tables) == 1:
+            parsed = _parse_table_rows(table, source, require_header=False)
+        for sp in parsed:
+            key = (sp.name.lower().strip(), sp.purpose.lower().strip())
+            if key not in seen:
+                seen.add(key)
+                all_rows.append(sp)
+    return all_rows
+
+
 def parse_subprocessor_table(text: str, source: str) -> list[ObservedSubprocessor]:
     """Parse subprocessor rows from normalized text (pipe-delimited or aligned)."""
     rows, _ = _rows_from_text(text)
-    return _parse_rows(rows, source)
+    return _parse_table_rows(rows, source, require_header=False)
 
 
 def parse_subprocessors(
@@ -382,12 +452,17 @@ def parse_subprocessors(
                 "This is a parse failure, not a clean list.",
             )
         return [], status(
-            "empty",
-            "no subprocessor table found in the artifact; AIV-03 cannot be evaluated "
-            "from this source. Confirm the watch URL points at the subprocessor list.",
+            "parse_failed",
+            "subprocessor disclosure page was reachable but could not be parsed into "
+            "valid subprocessor rows; unrecognized table structure or unsupported markup. "
+            "Manual review required.",
         )
 
-    return parsed, status("parsed", f"parsed {len(parsed)} subprocessor row(s).", rows=len(parsed))
+    return [], status(
+        "empty",
+        "no subprocessor table found in the artifact; AIV-03 cannot be evaluated "
+        "from this source. Confirm the watch URL points at the subprocessor list.",
+    )
 
 
 def observe_vendor(vendor: dict, snapshots: list, probe_result) -> ObservedState:

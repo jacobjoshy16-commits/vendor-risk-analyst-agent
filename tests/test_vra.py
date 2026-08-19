@@ -826,5 +826,357 @@ class TestModelDefaultAndWebUI(unittest.TestCase):
         self.assertIn(mon.get("status"), ("stopped", "running", "stale"))
 
 
+class TestFiveRealVendorsSubprocessorParsing(unittest.TestCase):
+    """Real HTML table parsing against 5 major vendor subprocessor disclosures:
+    Slack, Atlassian, Zoom, Notion, and Datadog.
+    """
+
+    SLACK_HTML = """<!DOCTYPE html><html><head><title>Slack Sub-processors</title></head><body>
+    <div class="main-content">
+      <h1>Slack Sub-processors</h1>
+      <p>To support delivery of our Services, Slack Technologies, LLC may engage data processors.</p>
+      <table class="subprocessor-table">
+        <thead>
+          <tr>
+            <th>Sub-processor Name</th>
+            <th>Scope of Processing</th>
+            <th>Corporate Location</th>
+            <th>Country of Processing</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Amazon Web Services, Inc.</strong></td>
+            <td>Cloud infrastructure and data storage hosting</td>
+            <td>United States</td>
+            <td>United States, Germany, Japan</td>
+          </tr>
+          <tr>
+            <td>Salesforce, Inc.</td>
+            <td>Parent entity infrastructure and operations</td>
+            <td>United States</td>
+            <td>United States</td>
+          </tr>
+          <tr>
+            <td><a href="https://openai.com">OpenAI, L.L.C.</a></td>
+            <td>Large language model inference for Slack AI search, summaries, and conversation recaps</td>
+            <td>United States</td>
+            <td>United States</td>
+          </tr>
+          <tr>
+            <td>Snowflake Inc.</td>
+            <td>Data warehousing and service telemetry</td>
+            <td>United States</td>
+            <td>United States</td>
+          </tr>
+        </tbody>
+      </table>
+    </div></body></html>"""
+
+    ATLASSIAN_HTML = """<!DOCTYPE html><html><body>
+    <h1>Atlassian Subprocessors</h1>
+    <h2>Atlassian Cloud Products</h2>
+    <table class="styled-table">
+      <thead>
+        <tr>
+          <th>Legal Entity Name</th>
+          <th>Description of Services</th>
+          <th>Location of Subprocessing</th>
+          <th>Applicable Services</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Amazon Web Services, Inc.</td>
+          <td>Cloud hosting infrastructure and data storage</td>
+          <td>Global (US, EU, APAC)</td>
+          <td>Jira, Confluence, Bitbucket</td>
+        </tr>
+        <tr>
+          <td>OpenAI, LLC</td>
+          <td>LLM provider for Atlassian Intelligence features (summaries, generation, search)</td>
+          <td>United States</td>
+          <td>Atlassian Intelligence</td>
+        </tr>
+        <tr>
+          <td>LaunchDarkly (Catamorphic Co)</td>
+          <td>Feature flag management</td>
+          <td>United States</td>
+          <td>Atlassian Cloud</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Additional Platform Services</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Subprocessor</th>
+          <th>Purpose of Processing</th>
+          <th>Country</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Datadog, Inc.</td>
+          <td>System performance monitoring and metrics</td>
+          <td>United States</td>
+        </tr>
+      </tbody>
+    </table>
+    </body></html>"""
+
+    ZOOM_HTML = """<!DOCTYPE html><html><body>
+    <h1>Zoom Video Communications Subprocessor List</h1>
+    <div class="content-section">
+      <h3>Third-Party Subprocessors for Zoom Services</h3>
+      <table border="1">
+        <thead>
+          <tr>
+            <th>Subprocessor Entity</th>
+            <th>Purpose of Processing / Services Provided</th>
+            <th>Entity Location / Processing Region</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Amazon Web Services, Inc.</td>
+            <td>Cloud infrastructure and hosting services</td>
+            <td>Worldwide</td>
+          </tr>
+          <tr>
+            <td>Oracle Cloud Infrastructure</td>
+            <td>Cloud computing and storage services</td>
+            <td>United States</td>
+          </tr>
+          <tr>
+            <td>Anthropic PBC</td>
+            <td>AI model inference for Zoom AI Companion meeting summaries and compose features</td>
+            <td>United States</td>
+          </tr>
+          <tr>
+            <td>OpenAI, LLC</td>
+            <td>AI model inference for Zoom AI Companion query features</td>
+            <td>United States</td>
+          </tr>
+        </tbody>
+      </table>
+    </div></body></html>"""
+
+    NOTION_HTML = """<!DOCTYPE html><html><body>
+    <h1>Notion's List of Subprocessors</h1>
+    <p>Effective as of 2026.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Subprocessor</th>
+          <th>Nature of Processing</th>
+          <th>Location</th>
+          <th>Applicable Products / Features</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Amazon Web Services, Inc.</td>
+          <td>Cloud hosting and data storage</td>
+          <td>United States, Europe</td>
+          <td>Core Platform</td>
+        </tr>
+        <tr>
+          <td>Anthropic PBC</td>
+          <td>LLM query processing and summarization</td>
+          <td>United States</td>
+          <td>Notion AI</td>
+        </tr>
+        <tr>
+          <td>OpenAI, LLC</td>
+          <td>Embeddings and text generation for Notion AI features</td>
+          <td>United States</td>
+          <td>Notion AI</td>
+        </tr>
+        <tr>
+          <td>Cloudflare, Inc.</td>
+          <td>CDN and DDoS security protection</td>
+          <td>Global</td>
+          <td>Core Platform</td>
+        </tr>
+        <tr>
+          <td>Turbopuffer, Inc.</td>
+          <td>Vector database indexing and retrieval for AI search</td>
+          <td>United States</td>
+          <td>Notion AI Search</td>
+        </tr>
+      </tbody>
+    </table></body></html>"""
+
+    DATADOG_HTML = """<!DOCTYPE html><html><body>
+    <h1>Datadog Subprocessors</h1>
+    <p>Below is the list of third-party subprocessors used by Datadog.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Third Party Subprocessor</th>
+          <th>Description of Services</th>
+          <th>Country of Processing</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Amazon Web Services, Inc.</td>
+          <td>Hosting infrastructure and cloud computing</td>
+          <td>United States, Germany, Ireland</td>
+        </tr>
+        <tr>
+          <td>Microsoft Corporation (Azure OpenAI)</td>
+          <td>AI model processing for Bits AI assistant and investigation summaries</td>
+          <td>United States</td>
+        </tr>
+        <tr>
+          <td>Twilio, Inc.</td>
+          <td>SMS and telecommunications notification services</td>
+          <td>United States</td>
+        </tr>
+        <tr>
+          <td>Google LLC (Google Cloud)</td>
+          <td>Hosting and data analytics services</td>
+          <td>United States, Europe</td>
+        </tr>
+      </tbody>
+    </table></body></html>"""
+
+    def test_slack_subprocessor_parsing(self):
+        from vra.extract import extract_html_tables
+
+        tables = extract_html_tables(self.SLACK_HTML)
+        rows, status = parse_subprocessors("", source="subprocessors", tables=tables)
+        self.assertEqual(status.status, "parsed")
+        self.assertEqual(len(rows), 4)
+        names = [r.name for r in rows]
+        self.assertIn("Amazon Web Services, Inc.", names)
+        self.assertIn("OpenAI, L.L.C.", names)
+        openai = next(r for r in rows if "OpenAI" in r.name)
+        self.assertTrue(openai.is_ai_related)
+        aws = next(r for r in rows if "Amazon" in r.name)
+        self.assertFalse(aws.is_ai_related)
+
+    def test_atlassian_multi_table_subprocessor_parsing(self):
+        from vra.extract import extract_html_tables
+
+        tables = extract_html_tables(self.ATLASSIAN_HTML)
+        self.assertEqual(len(tables), 2)
+        rows, status = parse_subprocessors("", source="subprocessors", tables=tables)
+        self.assertEqual(status.status, "parsed")
+        self.assertEqual(len(rows), 4)
+        names = [r.name for r in rows]
+        self.assertIn("OpenAI, LLC", names)
+        self.assertIn("Datadog, Inc.", names)
+        openai = next(r for r in rows if "OpenAI" in r.name)
+        self.assertTrue(openai.is_ai_related)
+        datadog = next(r for r in rows if "Datadog" in r.name)
+        self.assertFalse(datadog.is_ai_related)
+
+    def test_zoom_subprocessor_parsing(self):
+        from vra.extract import extract_html_tables
+
+        tables = extract_html_tables(self.ZOOM_HTML)
+        rows, status = parse_subprocessors("", source="subprocessors", tables=tables)
+        self.assertEqual(status.status, "parsed")
+        self.assertEqual(len(rows), 4)
+        ai_rows = [r for r in rows if r.is_ai_related]
+        self.assertEqual(len(ai_rows), 2)
+        ai_names = {r.name for r in ai_rows}
+        self.assertEqual(ai_names, {"Anthropic PBC", "OpenAI, LLC"})
+
+    def test_notion_subprocessor_parsing(self):
+        from vra.extract import extract_html_tables
+
+        tables = extract_html_tables(self.NOTION_HTML)
+        rows, status = parse_subprocessors("", source="subprocessors", tables=tables)
+        self.assertEqual(status.status, "parsed")
+        self.assertEqual(len(rows), 5)
+        ai_names = {r.name for r in rows if r.is_ai_related}
+        self.assertIn("Anthropic PBC", ai_names)
+        self.assertIn("OpenAI, LLC", ai_names)
+        self.assertIn("Turbopuffer, Inc.", ai_names)
+
+    def test_datadog_subprocessor_parsing(self):
+        from vra.extract import extract_html_tables
+
+        tables = extract_html_tables(self.DATADOG_HTML)
+        rows, status = parse_subprocessors("", source="subprocessors", tables=tables)
+        self.assertEqual(status.status, "parsed")
+        self.assertEqual(len(rows), 4)
+        azure_ai = next(r for r in rows if "Azure OpenAI" in r.name or "Microsoft" in r.name)
+        self.assertTrue(azure_ai.is_ai_related)
+        twilio = next(r for r in rows if "Twilio" in r.name)
+        self.assertFalse(twilio.is_ai_related)
+
+
+class TestParseFailedState(unittest.TestCase):
+    """Explicit parse_failed state must surface as an information gap for AIV-03,
+    never as silent success."""
+
+    UNPARSEABLE_SUBPROCESSOR_HTML = """<!DOCTYPE html><html><body>
+    <h1>Subprocessor Disclosure</h1>
+    <p>We work with various third-party service providers and subprocessors.</p>
+    <div>[Unstructured text without tabular rows or header mapping]</div>
+    </body></html>"""
+
+    def test_unparseable_html_produces_parse_failed_status(self):
+        from vra.extract import extract_html_tables
+
+        tables = extract_html_tables(self.UNPARSEABLE_SUBPROCESSOR_HTML)
+        rows, status = parse_subprocessors(
+            self.UNPARSEABLE_SUBPROCESSOR_HTML,
+            source="subprocessors",
+            tables=tables,
+        )
+        self.assertEqual(rows, [])
+        self.assertEqual(status.status, "parse_failed")
+        self.assertFalse(status.assessable)
+        self.assertIn("unrecognized", status.reason.lower())
+
+    def test_parse_failed_raises_aiv03_gap(self):
+        from vra.observe import ObservedState, ParseStatus
+
+        vendor = {"vendor": "Unparseable Co", "slug": "unparseable-co", "tier": "high", "ai_surface": []}
+        observed = ObservedState(vendor="unparseable-co")
+        observed.subprocessor_parse = ParseStatus(
+            "parse_failed",
+            reason="subprocessor disclosure page could not be parsed into valid rows",
+        )
+        findings, gaps = ev.evaluate_vendor(vendor, ev.load_controls(), observed)
+        self.assertEqual(findings, [])
+        aiv03_gaps = [g for g in gaps if g.control.id == "AIV-03"]
+        self.assertEqual(len(aiv03_gaps), 1)
+        self.assertEqual(aiv03_gaps[0].observed["subprocessor_parse_status"], "parse_failed")
+        self.assertEqual(aiv03_gaps[0].subject, "subprocessor-list-access")
+
+    def test_report_renders_parse_failed_mark(self):
+        from vra.report import build_report
+        from vra.register import FindingStore
+
+        ctx = {
+            "vendors": [{"vendor": "Unparseable Co", "slug": "unparseable-co", "tier": "high", "ai_surface": []}],
+            "findings": [],
+            "gaps": [],
+            "triages": [],
+            "probes": [],
+            "parses": [{
+                "vendor": "unparseable-co", "vendor_name": "Unparseable Co", "source": "subprocessors",
+                "status": "parse_failed", "platform": None, "rows": 0,
+                "reason": "layout unrecognized or table format unsupported",
+            }],
+            "new_ids": set(),
+            "closed": [],
+            "store": FindingStore(path=Path("/tmp/test-findings-report.json")),
+            "backend": "offline-heuristic",
+        }
+        report = build_report(ctx, RunConfig(dry_run=True, offline=True))
+        self.assertIn("❌ parse_failed", report)
+        self.assertIn("Not assessable this run", report)
+        self.assertIn("Unparseable Co", report)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
