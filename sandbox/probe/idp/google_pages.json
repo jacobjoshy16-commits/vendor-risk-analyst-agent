@@ -1,0 +1,26 @@
+{
+  "provider": "google_workspace",
+  "base_url": "https://admin.googleapis.com",
+  "page_limit": 100,
+  "pages": [
+    {
+      "method": "GET",
+      "url": "https://admin.googleapis.com/admin/directory/v1/users?customer=my_customer&maxResults=100&query=email%3A%2Agserviceaccount.com",
+      "body": {
+        "users": [
+          {"id": "sa-123", "primaryEmail": "agent@acme.iam.gserviceaccount.com", "name": {"fullName": "Agent SA"}, "suspended": false, "creationTime": "2025-09-01T00:00:00.000Z"}
+        ],
+        "nextPageToken": "page2"
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://admin.googleapis.com/admin/directory/v1/users?customer=my_customer&maxResults=100&pageToken=page2&query=email%3A%2Agserviceaccount.com",
+      "body": {
+        "users": [
+          {"id": "sa-456", "primaryEmail": "sync@acme.iam.gserviceaccount.com", "name": {"fullName": "Sync SA"}, "suspended": false, "creationTime": "2026-02-01T00:00:00.000Z"}
+        ]
+      }
+    }
+  ]
+}

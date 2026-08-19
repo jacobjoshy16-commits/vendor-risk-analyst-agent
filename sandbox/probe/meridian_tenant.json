@@ -1,0 +1,31 @@
+{
+  "_comment": "Meridian RevCycle tenant inventory. Negative-control NHI: owned, rotated, logged, read-only, no agent mode.",
+  "org": {
+    "id": "meridian-tenant-1",
+    "plan": "hospital",
+    "retrieved_at": "2026-08-14T00:00:00Z"
+  },
+  "settings": {},
+  "applications": [
+    {
+      "id": "meridian-coding-svc",
+      "label": "Coding Assist",
+      "status": "ACTIVE",
+      "signOnMode": "SERVICE_ACCOUNT",
+      "ai_component": true,
+      "created": "2025-12-15T00:00:00Z"
+    }
+  ],
+  "oauth_grants": [
+    {
+      "app_id": "meridian-coding-svc",
+      "client_name": "coding-assist-svc",
+      "principal": "service_account",
+      "scopes": [
+        "encounters.read",
+        "claims.read"
+      ],
+      "issued": "2026-03-01T00:00:00Z"
+    }
+  ]
+}

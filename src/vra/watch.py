@@ -172,8 +172,33 @@ def previous_snapshot_dir(slug: str) -> Path | None:
     return runs[-1] if runs else None
 
 
+def snapshots_unchanged(snaps: list[SourceSnapshot], prev_dir: Path | None) -> bool:
+    """True when every source hash matches the previous snapshot and none erred.
+
+    The monitor daemon re-fetches on a timer. Writing a new timestamped
+    directory for an identical fetch fills the disk and makes ``previous``
+    a no-op. Skip the write; the last real snapshot stays authoritative.
+    """
+    if not prev_dir or not (prev_dir / "manifest.json").exists():
+        return False
+    prev = json.loads((prev_dir / "manifest.json").read_text(encoding="utf-8"))
+    current = {s.source: s for s in snaps}
+    if set(current) != set(prev):
+        return False
+    for source, snap in current.items():
+        if snap.error:
+            return False
+        entry = prev.get(source) or {}
+        if entry.get("error") or entry.get("sha256") != snap.sha256:
+            return False
+    return True
+
+
 def store_snapshot(slug: str, snaps: list[SourceSnapshot], cfg: RunConfig) -> Path:
     """Persist this run's snapshot set. Returns the directory written."""
+    prev = previous_snapshot_dir(slug)
+    if snapshots_unchanged(snaps, prev):
+        return prev  # type: ignore[return-value]
     run_dir = _vendor_snapshot_root(slug) / _utc_stamp()
     if cfg.dry_run:
         return run_dir

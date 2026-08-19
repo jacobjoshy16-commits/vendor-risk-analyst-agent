@@ -1,0 +1,105 @@
+{
+  "provider": "okta",
+  "base_url": "https://dev-000000.okta.com",
+  "page_limit": 3,
+  "pages": [
+    {
+      "method": "GET",
+      "url": "https://dev-000000.okta.com/api/v1/apps?limit=3",
+      "headers": {
+        "Link": "<https://dev-000000.okta.com/api/v1/apps?after=0oa003meridian3&limit=3>; rel=\"next\""
+      },
+      "body": [
+        {
+          "id": "0oa001copilot01",
+          "label": "Access Copilot",
+          "status": "ACTIVE",
+          "signOnMode": "OPENID_CONNECT",
+          "created": "2025-12-04T00:00:00.000Z",
+          "credentials": {"oauthClient": {"client_id": "0oa001copilot01"}}
+        },
+        {
+          "id": "0oa002loopwork2",
+          "label": "Loop Workspace SSO",
+          "status": "ACTIVE",
+          "signOnMode": "SAML_2_0",
+          "created": "2024-06-11T00:00:00.000Z"
+        },
+        {
+          "id": "0oa003meridian3",
+          "label": "Meridian RevCycle SSO",
+          "status": "ACTIVE",
+          "signOnMode": "SAML_2_0",
+          "created": "2023-02-20T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "url": "https://dev-000000.okta.com/api/v1/apps?after=0oa003meridian3&limit=3",
+      "headers": {},
+      "body": [
+        {
+          "id": "0oa004payroll04",
+          "label": "Payroll Sync",
+          "status": "ACTIVE",
+          "signOnMode": "OPENID_CONNECT",
+          "created": "2025-08-01T00:00:00.000Z",
+          "credentials": {"oauthClient": {"client_id": "0oa004payroll04"}}
+        },
+        {
+          "id": "0oa005backup005",
+          "label": "Backup Export",
+          "status": "ACTIVE",
+          "signOnMode": "OPENID_CONNECT",
+          "created": "2025-09-12T00:00:00.000Z",
+          "credentials": {"oauthClient": {"client_id": "0oa005backup005"}}
+        },
+        {
+          "id": "0oa006shadow006",
+          "label": "Shadow Integration",
+          "status": "ACTIVE",
+          "signOnMode": "OPENID_CONNECT",
+          "created": "2026-04-02T00:00:00.000Z",
+          "credentials": {"oauthClient": {"client_id": "0oa006shadow006"}}
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "url": "https://dev-000000.okta.com/api/v1/apps/0oa001copilot01/grants?limit=3",
+      "body": [
+        {"id": "oag1", "status": "ACTIVE", "scopeId": "okta.users.read", "created": "2025-12-04T00:00:00.000Z"},
+        {"id": "oag2", "status": "ACTIVE", "scopeId": "okta.groups.read", "created": "2025-12-04T00:00:00.000Z"}
+      ]
+    },
+    {
+      "method": "GET",
+      "url": "https://dev-000000.okta.com/api/v1/apps/0oa004payroll04/grants?limit=3",
+      "body": [
+        {"id": "oag3", "status": "ACTIVE", "scopeId": "okta.users.manage", "created": "2025-08-01T00:00:00.000Z"}
+      ]
+    },
+    {
+      "method": "GET",
+      "url": "https://dev-000000.okta.com/api/v1/apps/0oa005backup005/grants?limit=3",
+      "body": []
+    },
+    {
+      "method": "GET",
+      "url": "https://dev-000000.okta.com/api/v1/apps/0oa006shadow006/grants?limit=3",
+      "body": [
+        {"id": "oag4", "status": "ACTIVE", "scopeId": "okta.logs.read", "created": "2026-04-02T00:00:00.000Z"}
+      ]
+    },
+    {
+      "method": "GET",
+      "url": "https://dev-000000.okta.com/api/v1/api-tokens?limit=3",
+      "headers": {},
+      "body": [
+        {"id": "00Tterraform01", "name": "terraform", "created": "2025-11-01T00:00:00.000Z", "expiresAt": null},
+        {"id": "00Tcirobot0002", "name": "ci-robot", "created": "2026-02-14T00:00:00.000Z", "expiresAt": null}
+      ]
+    }
+  ]
+}

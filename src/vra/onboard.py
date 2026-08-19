@@ -25,6 +25,7 @@ gap machinery drafts the questions instead of the analyst inventing answers.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from dataclasses import dataclass
@@ -34,10 +35,58 @@ from typing import Any
 
 import yaml
 
-from .config import REPO_ROOT, RunConfig
+from .config import PENDING_REVIEW_DIR, REPO_ROOT, RunConfig
 from .extract import discover_links, looks_like_pdf
 from .observe import ParseStatus, parse_subprocessors
 from .watch import SOURCE_KINDS, _ingest, fetch, watch_vendor
+
+# Public, no-auth subprocessor pages. `vra bootstrap Slack` needs no URL.
+PUBLIC_CATALOG: dict[str, dict[str, str]] = {
+    "slack": {
+        "name": "Slack",
+        "category": "collaboration",
+        "trust_center": "https://slack.com/trust",
+        "subprocessors": "https://slack.com/slack-subprocessors",
+    },
+    "atlassian": {
+        "name": "Atlassian",
+        "category": "collaboration",
+        "trust_center": "https://www.atlassian.com/trust",
+        "subprocessors": "https://www.atlassian.com/legal/sub-processors",
+    },
+    "zoom": {
+        "name": "Zoom",
+        "category": "collaboration",
+        "trust_center": "https://www.zoom.com/en/trust/",
+        "subprocessors": "https://www.zoom.com/en/trust/subprocessors/",
+    },
+    "notion": {
+        "name": "Notion",
+        "category": "collaboration",
+        "trust_center": "https://www.notion.so/help/notion-ai-security-practices",
+        "subprocessors": (
+            "https://notion.notion.site/"
+            "Notion-s-List-of-Subprocessors-268fa5bcfa0f46b6bc29436b21676734"
+        ),
+    },
+    "datadog": {
+        "name": "Datadog",
+        "category": "observability",
+        "trust_center": "https://www.datadoghq.com/trust/",
+        "subprocessors": "https://www.datadoghq.com/legal/subprocessors/",
+    },
+}
+
+
+def lookup_catalog(name: str) -> dict[str, str] | None:
+    key = slugify(name).split("-")[0]
+    if key in PUBLIC_CATALOG:
+        return PUBLIC_CATALOG[key]
+    low = name.strip().lower()
+    for slug, entry in PUBLIC_CATALOG.items():
+        if slug == low or entry["name"].lower() == low:
+            return entry
+    return None
 
 ARTIFACT_ROOT = REPO_ROOT / "artifacts" / "vendors"
 DEFAULT_VERSION = "v1"
@@ -80,6 +129,7 @@ class OnboardResult:
     blockers: list[str]
     warnings: list[str]
     outreach_path: Path | None = None
+    bootstrap_path: Path | None = None
     dry_run: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -112,6 +162,7 @@ class OnboardResult:
             "blockers": self.blockers,
             "warnings": self.warnings,
             "outreach_path": str(self.outreach_path) if self.outreach_path else None,
+            "bootstrap_path": str(self.bootstrap_path) if self.bootstrap_path else None,
             "dry_run": self.dry_run,
             "next_steps": self._next_steps(),
         }
@@ -125,6 +176,16 @@ class OnboardResult:
         else:
             steps.append("Subprocessor disclosure is parsed — AIV-03 has coverage from day one.")
         steps.append(f"Run the first assessment:  python3 vra.py --vendor {self.slug}  (add --snapshot v1)")
+        steps.append(
+            "Point probe: at the vendor's Okta/Auth0 tenant and run "
+            "`python3 vra.py discover` — NHIs are pulled from the API, not typed into YAML."
+        )
+        steps.append("Leave the monitor running to keep watching this vendor and its NHIs:  python3 vra.py monitor --offline --webui")
+        if self.bootstrap_path:
+            steps.append(
+                f"Bootstrap proposal is in {self.bootstrap_path}. Review it, then edit "
+                f"vendors/{self.slug}.yaml by hand. The model never writes the register."
+            )
         if not self.seeded_features:
             steps.append("No AI features seeded. As the vendor's AI features are confirmed, add "
                          "`ai_surface` entries to the register — model triage will propose them.")
@@ -204,6 +265,7 @@ def _scaffold(
             "baa_covered_subprocessors": [],
         },
         "ai_surface": features,
+        "nhis": [],
         "watch": watch,
         "onboarding": {
             "onboarded_at": now,
@@ -242,22 +304,129 @@ def _scaffold(
 def draft_blocker_outreach(vendor_name: str, blockers: list[str]) -> dict[str, str]:
     bullet = "\n".join(f"- {b}" for b in blockers)
     return {
-        "subject": f"Vendor AI risk onboarding — {vendor_name} — subprocessor disclosure access",
+        "subject": f"Vendor NHI / agentic review — {vendor_name} — subprocessor disclosure access",
         "body": (
-            f"Hello,\n\nAs part of onboarding {vendor_name} as a vendor that processes or may "
-            "process protected health information, we need to complete our AI risk assessment, "
+            f"Hello,\n\nAs part of onboarding {vendor_name} whose agentic identities may process "
+            "customer data, we need to complete our NIST SP 800-53 / SOC 2 assessment, "
             "including control AIV-03 (every model provider named as a subprocessor and covered "
-            "by an executed BAA).\n\n"
+            "by an executed BAA or DPA).\n\n"
             "We could not complete that step:\n" + bullet +
             "\n\nPlease either:\n"
             "1. Grant us guest or NDA-gated access to your trust portal subprocessor page, or\n"
-            "2. Send the complete, current subprocessor list with BAA coverage status for each "
+            "2. Send the complete, current subprocessor list with BAA/DPA coverage status for each "
             "entity, including every model or AI service provider.\n\n"
-            "We are a HIPAA covered entity and this item affects our assessment of protected "
-            "health information processed by your service. Please respond within 21 days.\n\n"
-            "Regards,\nVendor Risk Management"
+            "This item affects our assessment of customer data processed by your service and by "
+            "any non-human identity it runs in our tenants. Please respond within 21 days.\n\n"
+            "Regards,\nVendor Risk / NHI Monitoring"
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap — model reads FULL artifacts (not a diff) and proposes a register
+# ---------------------------------------------------------------------------
+
+BOOTSTRAP_SYSTEM = """You are a third-party risk analyst proposing an INITIAL vendor NHI / AI-surface \
+register from the vendor's current public artifacts. This is not a diff. Read the full text.
+
+Rules:
+- Answer ONLY with a single JSON object.
+- Propose only features the text actually names. Do not invent products.
+- Every field you cannot quote from the text must be "unknown".
+- You do not assign severity or findings.
+- evidence_excerpt must be copied verbatim from the artifacts."""
+
+BOOTSTRAP_PROMPT = """TASK: BOOTSTRAP_REGISTER
+
+vendor: {vendor}
+
+The artifacts below are the vendor's current public disclosures, read in full.
+
+--- BEGIN ARTIFACTS ---
+{artifacts}
+--- END ARTIFACTS ---
+
+Return JSON:
+{{
+  "features": [
+    {{
+      "feature": "name of the AI feature",
+      "status": "available",
+      "autonomy": "unknown",
+      "model_provider": "named provider or unknown",
+      "human_in_loop": "unknown",
+      "training_on_customer_data": "unknown",
+      "evidence_excerpt": "verbatim phrase from the artifacts"
+    }}
+  ],
+  "notes": "one or two sentences on what you could and could not see"
+}}
+
+If the artifacts name no AI feature, return an empty features list."""
+
+
+def _bootstrap_schema(obj: dict) -> str | None:
+    if "features" not in obj or not isinstance(obj["features"], list):
+        return "missing features list"
+    if "notes" not in obj or not isinstance(obj.get("notes"), str):
+        return "missing notes"
+    for feat in obj["features"]:
+        if not isinstance(feat, dict) or "feature" not in feat:
+            return "each feature needs a feature name"
+    return None
+
+
+def bootstrap_register(
+    vendor_name: str,
+    slug: str,
+    artifact_text: str,
+    cfg: RunConfig,
+    *,
+    _root: Path | None = None,
+) -> Path | None:
+    """Read artifacts in full, propose an ai_surface, quarantine it.
+
+    The proposal never touches vendors/{slug}.yaml. Same rule as triage.
+    """
+    from .llm import call_json
+
+    if cfg.dry_run:
+        return None
+    prompt = BOOTSTRAP_PROMPT.format(
+        vendor=vendor_name,
+        artifacts=(artifact_text or "")[:14000],
+    )
+    result = call_json(
+        system=BOOTSTRAP_SYSTEM,
+        prompt=prompt,
+        cfg=cfg,
+        schema_check=_bootstrap_schema,
+        task="bootstrap_register",
+        context={"vendor": slug},
+    )
+    root = _root or REPO_ROOT
+    dest = root / "pending_review" if _root else PENDING_REVIEW_DIR
+    dest.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = dest / f"{slug}-bootstrap-{stamp}.json"
+    payload = {
+        "vendor": vendor_name,
+        "slug": slug,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "backend": result.backend,
+        "llm_ok": result.ok,
+        "error": result.error,
+        "instructions": (
+            "BOOTSTRAP PROPOSAL — NOT APPLIED. The model read the vendor's current "
+            "artifacts in full (not a diff) and proposed an initial ai_surface. "
+            f"To accept, edit vendors/{slug}.yaml by hand, then delete this file. "
+            "The tool will never write these fields to the register on its own."
+        ),
+        "proposed_ai_surface": (result.data or {}).get("features") if result.ok else [],
+        "notes": (result.data or {}).get("notes", "") if result.ok else "",
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -313,10 +482,20 @@ def onboard_vendor(
     trust_center_url: str | None = None,
     urls: dict[str, str] | None = None,
     cfg: RunConfig | None = None,
+    bootstrap: bool = False,
     _root: Path | None = None,
 ) -> OnboardResult:
     cfg = cfg or RunConfig()
     urls = dict(urls or {})
+    catalog = lookup_catalog(name)
+    if catalog:
+        name = catalog.get("name") or name
+        if not urls.get("subprocessors") and catalog.get("subprocessors"):
+            urls["subprocessors"] = catalog["subprocessors"]
+        if not trust_center_url and catalog.get("trust_center"):
+            trust_center_url = catalog["trust_center"]
+        if category in ("other", "", None) and catalog.get("category"):
+            category = catalog["category"]
     _validate(name, tier)
     slug = slugify(name)
 
@@ -339,6 +518,7 @@ def onboard_vendor(
     watch: dict[str, str] = {}
     parse_status = ParseStatus("missing", reason="no subprocessor disclosure URL was supplied or discovered.")
     parsed_rows: list[Any] = []
+    artifact_blobs: list[str] = []
 
     # --- 1) trust center: fetch, platform-detect, discover artifact links ----
     tc_raw_html = ""
@@ -355,6 +535,8 @@ def onboard_vendor(
                 # has no anchors).
                 tc_raw_html = raw.decode("utf-8", errors="replace")
                 discovered = discover_links(tc_raw_html, trust_center_url)
+            if tc_snap.text:
+                artifact_blobs.append(f"[trust_center]\n{tc_snap.text}")
                 if not discovered:
                     warnings.append("no watchable artifact links discovered on the trust center page.")
             if tc_snap.portal_blocked:
@@ -425,6 +607,8 @@ def onboard_vendor(
             )
             if parse_status.status != "parsed":
                 blockers.append(parse_status.reason)
+            if sp_snap.text:
+                artifact_blobs.append(f"[subprocessors]\n{sp_snap.text}")
             cached = _cache_artifact(slug, "subprocessors", final_urls["subprocessors"], cfg, artifact_root)
             watch["subprocessors"] = cached or final_urls["subprocessors"]
 
@@ -480,6 +664,20 @@ def onboard_vendor(
             except Exception as exc:  # pragma: no cover - defensive
                 warnings.append(f"baseline snapshot failed: {exc}")
 
+    bootstrap_path: Path | None = None
+    if bootstrap:
+        blob = "\n\n".join(artifact_blobs)
+        if parsed_rows:
+            blob += "\n\n[parsed_subprocessors]\n" + "\n".join(
+                f"{r.name} | {r.purpose} | {r.region} | {r.baa_marker}" for r in parsed_rows
+            )
+        try:
+            bootstrap_path = bootstrap_register(
+                name, slug, blob, cfg, _root=_root,
+            )
+        except Exception as exc:  # pragma: no cover - never fail the scaffold
+            warnings.append(f"bootstrap proposal failed: {exc}")
+
     seeded = _seed_features(parsed_rows)
     result = OnboardResult(
         vendor_name=name, slug=slug, tier=tier,
@@ -493,6 +691,7 @@ def onboard_vendor(
         blockers=blockers,
         warnings=warnings,
         outreach_path=outreach_path,
+        bootstrap_path=bootstrap_path,
         dry_run=cfg.dry_run,
     )
     return result
@@ -528,6 +727,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="assess and print the scaffold, persist nothing")
     p.add_argument("--assess", action="store_true",
                    help="after onboarding, run the first assessment for this vendor")
+    p.add_argument("--bootstrap", action="store_true",
+                   help="read current artifacts in full (not a diff) and drop a model-"
+                        "proposed register in pending_review/ for human acceptance")
     return p
 
 
@@ -584,6 +786,7 @@ def main(argv: list[str] | None = None) -> int:
             trust_center_url=args.trust_center_url,
             urls=urls,
             cfg=cfg,
+            bootstrap=args.bootstrap,
         )
     except ValueError as exc:
         print(f"vra onboard: {exc}", file=sys.stderr)

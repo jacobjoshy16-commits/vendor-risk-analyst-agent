@@ -36,16 +36,56 @@ ai_surface:
   data_residency: us_only
   bias_tested_clinical: false
   ai_incident_process: unknown
+nhis:
+- id: coding-assist-svc
+  name: Coding Assist
+  kind: service_account
+  status: active
+  app_id: meridian-coding-svc
+  principal: coding-assist-svc
+  feature: Coding Assist
+  owner: Revenue Cycle Ops
+  last_rotated: 2026-03-01
+  human_in_loop: true
+  autonomy: suggests
+  data_reach:
+  - clinical_documentation
+  - encounter_records
+  - claims
+  output_logged: true
+  scopes:
+  - encounters.read
+  - claims.read
+  write_scopes: []
+- id: meridian-sso
+  name: Meridian RevCycle SSO
+  kind: oauth_app
+  status: active
+  app_id: 0oa3meridianrev33
+  principal: Meridian RevCycle SSO
+  resides_in: aegis-identity-cloud
+  owner: Revenue Cycle Ops
+  last_rotated: 2026-03-01
+  human_in_loop: true
+  autonomy: n/a
+  output_logged: true
+  scopes: []
+  write_scopes: []
 watch:
   changelog: sandbox/vendors/meridian-revcycle/snapshots/{version}/changelog.html
   trust_center: sandbox/vendors/meridian-revcycle/snapshots/{version}/trust_center.html
   subprocessors: sandbox/vendors/meridian-revcycle/snapshots/{version}/subprocessors.html
   dpa: sandbox/vendors/meridian-revcycle/snapshots/{version}/dpa.txt
+probe:
+  type: revcycle_api
+  enabled: true
+  mode: fixture
+  fixture: sandbox/probe/meridian_tenant.json
 state:
-  last_assessed: '2026-08-13T15:56:44.675588+00:00'
+  last_assessed: '2026-08-14T05:24:06.777158+00:00'
   snapshot_hashes:
-    changelog: 4ff7405feccc84a690791bd401c9fe77edc91e6c6af8557aebac8ece495f018c
-    trust_center: d96f834dda97c0ed50c63158bbe7d9ac535084077377aaa1ff538fd0dde41be1
+    changelog: 7901b0d83f509685be49fb5b3c4e1fe78fe0eefd638c152055d1b7be7a756a04
+    trust_center: 5c959983b78dc41ab2b9b57e7bac9caf077dfc9f3e1b133f9379ee4809be069c
     subprocessors: 2d57f94a6fdf624008a49cb324c4caf1ce82c0109ef006a4eec5fd8a6b5ff3f2
     dpa: 9b18d3118ba83cc1ea1fed7877d2b18290799eb921a88189e5978ccdff51dc06
   open_findings: []

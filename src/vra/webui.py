@@ -16,8 +16,13 @@ Endpoints:
     GET  /api/vendors              register + onboarding parse status
     GET  /api/vendors/<slug>       raw register YAML
     GET  /api/controls             control set summary
+    GET  /api/monitor              daemon heartbeat / last cycle
+    GET  /api/nhis                 portfolio NHI inventory
     POST /api/onboard              run onboarding (JSON body, see _onboard)
     POST /api/assess               run an assessment for one vendor
+    POST /api/discover             page Okta / Auth0 (or a recorded fixture) for NHIs
+    POST /api/monitor/start        spawn the autonomous monitor
+    POST /api/monitor/stop         signal the monitor to exit
 
 The server only ever talks to the local filesystem and (unless the UI checkbox
 "offline" is unchecked) makes no network calls. Bind to 0.0.0.0 so the preview
@@ -29,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
@@ -43,7 +49,7 @@ PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vendor AI Risk Analyst — Onboarding console</title>
+<title>Vendor NHI Monitor — NIST 800-53 / SOC 2</title>
 <style>
   :root {
     --bg:#0f1420; --panel:#171e2e; --panel2:#1d2640; --line:#2a3552;
@@ -92,13 +98,25 @@ PAGE = """<!DOCTYPE html>
   .row-actions button { margin:0 6px 0 0; padding:5px 10px; font-size:12px; }
   .spin { display:inline-block; width:14px; height:14px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:sp 1s linear infinite; vertical-align:-2px; margin-right:6px; }
   @keyframes sp { to { transform:rotate(360deg); } }
+  .pill { display:inline-flex; align-items:center; gap:8px; padding:4px 12px;
+          border-radius:99px; font-size:12px; border:1px solid var(--line); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+  .dot.on { background:var(--ok); box-shadow:0 0 0 3px rgba(61,220,132,.18); }
+  .dot.stale { background:var(--warn); }
+  .dot.off { background:var(--bad); }
+  header .grow { flex:1; }
+  header button { margin:0; padding:6px 12px; font-size:12px; }
+  .stack { display:flex; flex-direction:column; gap:22px; margin-top:22px; }
 </style>
 </head>
 <body>
 <header>
   <h1>Vendor AI Risk Analyst</h1>
-  <span class="sub">onboarding console — local, no data leaves this machine</span>
+  <span class="sub">local console — onboard, monitor, inventory NHIs</span>
   <span class="sub" id="model-note"></span>
+  <span class="grow"></span>
+  <span class="pill" id="mon-pill"><span class="dot off" id="mon-dot"></span><span id="mon-label">monitor: stopped</span></span>
+  <button id="mon-toggle" class="secondary" type="button">Start monitor</button>
 </header>
 <main>
   <div class="cards" id="cards"></div>
@@ -138,6 +156,35 @@ PAGE = """<!DOCTYPE html>
     </section>
   </div>
 
+  <div class="stack">
+    <section>
+      <h2>Continuous monitor</h2>
+      <div id="mon-body"><span class="muted">loading…</span></div>
+    </section>
+    <section>
+      <h2>Non-human identities</h2>
+      <p class="muted">Pulled from the IdP API (Okta / Auth0), not typed into YAML. Token stays in an environment variable — never paste it here.</p>
+      <form id="disc-form" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end;margin:10px 0 16px">
+        <div><label>Provider</label>
+          <select id="d-provider">
+            <option value="okta">Okta (your IdP)</option>
+            <option value="auth0">Auth0 (your IdP)</option>
+            <option value="atlassian">Atlassian (Rovo / tokens)</option>
+            <option value="slack">Slack (bots)</option>
+          </select>
+        </div>
+        <div><label>Org URL / domain</label>
+          <input id="d-base" placeholder="https://your-org.okta.com">
+        </div>
+        <div><label>Token env var</label>
+          <input id="d-token-env" placeholder="OKTA_API_TOKEN">
+        </div>
+        <button id="d-go" type="submit">Discover</button>
+      </form>
+      <div id="nhis"><span class="muted">loading…</span></div>
+    </section>
+  </div>
+
   <div class="result" id="result">
     <h2 style="color:var(--muted);text-transform:uppercase;font-size:14px;letter-spacing:.07em;margin:0 0 12px">Onboarding result</h2>
     <div id="result-body"></div>
@@ -163,13 +210,68 @@ async function j(method, url, body) {
   return r.json();
 }
 
+function renderMonitor(m) {
+  const st = m.status || "stopped";
+  const dot = $("mon-dot");
+  dot.className = "dot " + (st === "running" ? "on" : st === "stale" ? "stale" : "off");
+  $("mon-label").textContent = "monitor: " + st
+    + (m.cycles_completed ? ` · cycle ${m.cycles_completed}` : "")
+    + (m.next_cycle_at ? ` · next ${String(m.next_cycle_at).slice(11,19)} UTC` : "");
+  const btn = $("mon-toggle");
+  btn.textContent = st === "running" ? "Stop monitor" : "Start monitor";
+  btn.disabled = false;
+  const last = m.last_cycle || {};
+  const hist = (m.history || []).slice(-5).reverse();
+  $("mon-body").innerHTML = `
+    <table>
+      <tr><th>Status</th><td>${badge(st === "running" ? "ok" : st === "stale" ? "empty" : "missing", st)}
+        <span class="muted">pid ${esc(m.pid || "—")} · interval ${esc(m.interval_seconds || "—")}s · offline ${m.offline ? "yes" : "no"}</span></td></tr>
+      <tr><th>Heartbeat</th><td>${esc(m.last_heartbeat || "—")}</td></tr>
+      <tr><th>Last cycle</th><td>vendors ${esc(last.vendor_count ?? "—")} · NHIs ${esc(last.nhi_count ?? "—")} ·
+        changed ${esc(last.changed_sources ?? "—")} · critical ${esc(last.critical ?? "—")} ·
+        ${esc(last.duration_seconds ?? "—")}s</td></tr>
+    </table>
+    ${hist.length ? `<div class="muted" style="margin:10px 0 6px">Recent cycles</div>
+      <table><thead><tr><th>Finished</th><th>Vendors</th><th>NHIs</th><th>Changed</th><th>Critical</th><th>Exit</th></tr></thead>
+      <tbody>${hist.map(h => `<tr><td>${esc(h.finished_at || "")}</td><td>${esc(h.vendor_count)}</td>
+        <td>${esc(h.nhi_count)}</td><td>${esc(h.changed_sources)}</td>
+        <td>${esc(h.critical)}</td><td>${esc(h.exit_code)}</td></tr>`).join("")}</tbody></table>` : '<p class="muted">No cycles yet. Start the monitor to assess on a timer while this machine is on.</p>'}`;
+}
+
+function renderNhis(rows) {
+  if (!rows.length) {
+    $("nhis").innerHTML = '<span class="muted">No NHIs inventoried yet. Run an assessment or start the monitor.</span>';
+    return;
+  }
+  $("nhis").innerHTML = `<table><thead><tr>
+    <th>Vendor</th><th>Identity</th><th>Kind</th><th>Write scopes</th><th>Owner</th><th>Source</th></tr></thead>
+    <tbody>${rows.map(n => {
+      const flags = [];
+      if (n.orphan) flags.push(badge("blocked", "orphan"));
+      if (n.cross_vendor) flags.push(badge("empty", "cross-vendor"));
+      const writes = (n.write_scopes || []).join(", ") || "none";
+      return `<tr>
+        <td><b>${esc(n.vendor_name || n.vendor)}</b><div class="muted">${esc(n.vendor)}</div></td>
+        <td>${esc(n.name || n.principal || "—")}<div class="muted">${esc(n.principal || "")} ${flags.join(" ")}</div></td>
+        <td>${esc(n.kind || "—")}</td>
+        <td>${n.write_scopes && n.write_scopes.length ? badge("bad", writes) : badge("ok", "none")}</td>
+        <td>${esc(n.owner || "unknown")}</td>
+        <td>${esc(n.source || "—")}</td></tr>`;
+    }).join("")}</tbody></table>`;
+}
+
 async function refresh() {
-  const [s, v] = await Promise.all([j("GET","/api/summary"), j("GET","/api/vendors")]);
+  const [s, v, m, n] = await Promise.all([
+    j("GET","/api/summary"), j("GET","/api/vendors"),
+    j("GET","/api/monitor"), j("GET","/api/nhis")
+  ]);
   $("cards").innerHTML = [
     ["Vendors tracked", s.vendors], ["Open findings", s.open_findings],
-    ["Gaps", s.gaps], ["Parse-blocked", s.blocked_parses],
-    ["Sources watched", s.watch_sources]
+    ["Gaps", s.gaps], ["NHIs", s.nhis],
+    ["Parse-blocked", s.blocked_parses], ["Sources watched", s.watch_sources]
   ].map(([l,n]) => `<div class="card"><div class="n">${n}</div><div class="l">${esc(l)}</div></div>`).join("");
+  renderMonitor(m);
+  renderNhis(n);
 
   if (!v.length) { $("vendors").innerHTML = '<span class="muted">No vendors yet — onboard the first one.</span>'; return; }
   $("vendors").innerHTML = `
@@ -258,8 +360,43 @@ $("ob-form").addEventListener("submit", async e => {
   go.disabled = false; go.textContent = "Onboard vendor";
 });
 
+$("disc-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const go = $("d-go"); go.disabled = true; go.innerHTML = '<span class="spin"></span>discovering';
+  try {
+    const res = await j("POST", "/api/discover", {
+      provider: $("d-provider").value,
+      base_url: $("d-base").value.trim(),
+      token_env: $("d-token-env").value.trim() || undefined,
+      offline: $("f-offline").checked
+    });
+    showResult({title: `Discovered ${res.count || 0} NHI(s) from ${esc(res.provider || "IdP")}`, blocks: [
+      `<div class="muted">pages ${esc(res.pages_fetched)} · truncated ${res.truncated ? "yes" : "no"} · ${esc(res.error || "ok")}</div>`,
+      res.warning ? `<div class="blocker">${esc(res.warning)}</div>` : ""
+    ]});
+    refresh();
+  } catch (err) {
+    showResult({title:"Discovery failed", blocks:[`<div class="blocker">${esc(err.message)}</div>`]});
+  }
+  go.disabled = false; go.textContent = "Discover";
+});
+
+$("mon-toggle").addEventListener("click", async () => {
+  const btn = $("mon-toggle");
+  btn.disabled = true;
+  try {
+    const m = await j("GET", "/api/monitor");
+    if (m.status === "running") await j("POST", "/api/monitor/stop", {});
+    else await j("POST", "/api/monitor/start", {offline: $("f-offline").checked, interval: 120});
+  } catch (e) {
+    showResult({title:"Monitor", blocks:[`<div class="blocker">${esc(e.message)}</div>`]});
+  }
+  setTimeout(refresh, 800);
+});
+
 j("GET", "/api/summary").then(s => { $("model-note").textContent = `model: ${s.model} · backend: ${s.backend}`; }).catch(() => {});
 refresh();
+setInterval(() => { refresh().catch(() => {}); }, 4000);
 </script>
 </body>
 </html>
@@ -305,6 +442,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"slug": slug, "yaml": yaml_text})
             if path == "/api/controls":
                 return self._json(_controls())
+            if path == "/api/monitor":
+                return self._json(_monitor())
+            if path == "/api/nhis":
+                return self._json(_list_nhis())
             return self._error(f"not found: {path}", 404)
         except Exception as exc:  # pragma: no cover - surface, don't hang the UI
             return self._error(f"server error: {exc}", 500)
@@ -318,6 +459,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._onboard(body)
             if path == "/api/assess":
                 return self._assess(body)
+            if path == "/api/monitor/start":
+                return self._monitor_start(body)
+            if path == "/api/monitor/stop":
+                return self._monitor_stop()
+            if path == "/api/discover":
+                return self._discover(body)
             return self._error(f"not found: {path}", 404)
         except Exception as exc:
             return self._error(f"server error: {exc}", 500)
@@ -370,6 +517,64 @@ class _Handler(BaseHTTPRequestHandler):
             **report,
         })
 
+    def _monitor_start(self, body: dict) -> None:
+        from .monitor import parse_interval, spawn_monitor
+
+        interval = parse_interval(body.get("interval") or 900)
+        pid = spawn_monitor(
+            offline=bool(body.get("offline", True)),
+            interval=interval,
+            snapshot=str(body.get("snapshot") or "v1"),
+        )
+        self._json({"ok": True, "pid": pid, "interval": interval})
+
+    def _monitor_stop(self) -> None:
+        from .monitor import stop_monitor
+
+        self._json({"ok": True, "signalled": stop_monitor()})
+
+    def _discover(self, body: dict) -> None:
+        """Page the IdP. The token is read from an env var name, never from the body."""
+        from .discover import build_parser, run_discover
+        from .nhi import NHIInventory
+
+        if body.get("token") or body.get("client_secret"):
+            return self._error(
+                "do not send tokens in the request body; set an env var and pass token_env"
+            )
+        argv: list[str] = []
+        provider = (body.get("provider") or "").strip()
+        base = (body.get("base_url") or body.get("domain") or "").strip()
+        fixture = (body.get("fixture") or "").strip()
+        vendor = (body.get("vendor") or "").strip()
+        if provider:
+            argv.extend(["--provider", provider])
+        if base:
+            argv.extend(["--base-url", base])
+        if body.get("token_env"):
+            argv.extend(["--token-env", str(body["token_env"])])
+        if fixture:
+            argv.extend(["--fixture", fixture])
+        if vendor:
+            argv.extend(["--vendor", vendor])
+        if body.get("offline"):
+            argv.append("--offline")
+        if not fixture and not base and not vendor:
+            argv.extend(["--fixture", "sandbox/probe/idp/okta_pages.json"])
+        try:
+            args = build_parser().parse_args(argv)
+            code = run_discover(args)
+        except Exception as exc:
+            return self._error(f"discover failed: {exc}", 500)
+        rows = NHIInventory().all()
+        self._json({
+            "ok": code == 0,
+            "exit_code": code,
+            "count": len(rows),
+            "provider": provider or None,
+            "identities": rows[:200],
+        })
+
 
 # ---------------------------------------------------------------------------
 # API data
@@ -409,15 +614,56 @@ def _summary() -> dict:
         if sp.get("status") in ("blocked", "error", "empty", "missing", "parse_failed"):
             blocked += 1
         watch_sources += len(v.get("watch") or {})
+    nhis = 0
+    nhi_path = DATA_DIR / "nhis.json"
+    if nhi_path.exists():
+        try:
+            nhis = len(json.loads(nhi_path.read_text(encoding="utf-8")).get("identities", []))
+        except Exception:
+            nhis = 0
+    if not nhis:
+        nhis = sum(len(v.get("nhis") or []) for v in vendors)
     return {
         "vendors": len(vendors),
         "open_findings": len(open_findings),
         "gaps": len([g for g in findings if g.get("kind") == "gap"]),
         "blocked_parses": blocked,
         "watch_sources": watch_sources,
+        "nhis": nhis,
         "model": os.environ.get("VRA_MODEL", "qwen2.5:7b-instruct"),
         "backend": "offline-heuristic",
     }
+
+
+def _monitor() -> dict:
+    from .monitor import read_status
+
+    return read_status()
+
+
+def _list_nhis() -> list[dict]:
+    path = DATA_DIR / "nhis.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8")).get("identities", [])
+        except Exception:
+            pass
+    out = []
+    for v in _load_registers():
+        for n in v.get("nhis") or []:
+            out.append({
+                "vendor": v.get("slug"),
+                "vendor_name": v.get("vendor"),
+                "name": n.get("name"),
+                "kind": n.get("kind"),
+                "principal": n.get("principal"),
+                "write_scopes": n.get("write_scopes") or [],
+                "owner": n.get("owner"),
+                "source": "register",
+                "cross_vendor": bool(n.get("resides_in") and n.get("resides_in") != v.get("slug")),
+                "orphan": False,
+            })
+    return out
 
 
 def _list_vendors() -> list[dict]:
@@ -473,11 +719,24 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+class _Server(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
+def start_server(host: str, port: int, background: bool = False) -> ThreadingHTTPServer:
+    """Bind the console. ``background=True`` serves on a daemon thread (monitor --webui)."""
+    server = _Server((host, port), _Handler)
+    if background:
+        thread = threading.Thread(target=server.serve_forever, name="vra-webui", daemon=True)
+        thread.start()
+    return server
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    server = ThreadingHTTPServer((args.host, args.port), _Handler)
+    server = start_server(args.host, args.port)
     host, port = server.server_address
-    print(f"vra webui: onboarding console on http://{host}:{port}  (Ctrl-C to stop)")
+    print(f"vra webui: console on http://{host}:{port}  (Ctrl-C to stop)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -1,0 +1,54 @@
+{
+  "provider": "atlassian",
+  "base_url": "https://api.atlassian.com",
+  "org_id": "org-acme-1",
+  "page_limit": 50,
+  "pages": [
+    {
+      "method": "GET",
+      "url": "https://api.atlassian.com/admin/api-access/v1/orgs/org-acme-1/api-tokens?limit=50",
+      "body": {
+        "data": [
+          {
+            "id": "tok-rovo-mcp-01",
+            "label": "rovo-mcp-ci",
+            "createdAt": "2026-03-01T00:00:00.000Z"
+          },
+          {
+            "id": "tok-jira-export",
+            "label": "jira-nightly-export",
+            "createdAt": "2025-11-12T00:00:00.000Z"
+          }
+        ],
+        "links": {}
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://api.atlassian.com/admin/v1/orgs/org-acme-1/users?limit=50",
+      "body": {
+        "data": [
+          {
+            "id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+            "attributes": {
+              "name": "Jane Human",
+              "email": "jane@acme.example",
+              "account_type": "atlassian",
+              "account_status": "active"
+            }
+          },
+          {
+            "id": "svc-rovo-writer",
+            "attributes": {
+              "name": "Rovo Writer service",
+              "email": "rovo-writer@connect.atlassian.com",
+              "account_type": "app",
+              "account_status": "active"
+            }
+          }
+        ],
+        "links": {}
+      }
+    }
+  ]
+}

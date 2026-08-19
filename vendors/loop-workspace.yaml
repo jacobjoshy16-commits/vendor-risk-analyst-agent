@@ -36,16 +36,57 @@ ai_surface:
   data_residency: in_region
   bias_tested_clinical: not_applicable
   ai_incident_process: unknown
+nhis:
+- id: loop-assist
+  name: Loop Assist
+  kind: agent_principal
+  status: active
+  app_id: loop-assist-bot
+  principal: loop-assist
+  feature: Loop Assist
+  owner: Collaboration Admin
+  last_rotated: 2026-01-15
+  human_in_loop: true
+  autonomy: suggests
+  data_reach:
+  - messages
+  - files
+  output_logged: true
+  scopes:
+  - messages.read
+  - files.read
+  write_scopes: []
+- id: loop-provisioning
+  name: Loop Workspace provisioning
+  kind: service_account
+  status: active
+  app_id: 0oa2loopworkspace2
+  principal: loop-provisioning
+  resides_in: aegis-identity-cloud
+  owner: Collaboration Admin
+  last_rotated: 2026-01-15
+  human_in_loop: true
+  autonomy: n/a
+  output_logged: true
+  scopes:
+  - okta.users.read
+  - okta.groups.read
+  write_scopes: []
 watch:
   changelog: sandbox/vendors/loop-workspace/snapshots/{version}/changelog.html
   trust_center: sandbox/vendors/loop-workspace/snapshots/{version}/trust_center.html
   subprocessors: sandbox/vendors/loop-workspace/snapshots/{version}/subprocessors.html
   dpa: sandbox/vendors/loop-workspace/snapshots/{version}/dpa.txt
+probe:
+  type: workspace_api
+  enabled: true
+  mode: fixture
+  fixture: sandbox/probe/loop_tenant.json
 state:
-  last_assessed: '2026-08-13T15:56:44.665303+00:00'
+  last_assessed: '2026-08-14T05:24:06.762749+00:00'
   snapshot_hashes:
-    changelog: 44bc1d6c8be7af08fbe4e5367e89dd196c94ec241bebf1ee3d1432731a6dc053
+    changelog: 697e1fea2bd16897105885700683bf64682c97bf45a48c64dba89f988bc2e98d
     trust_center: af4c578463379776d30010a4161dd73ebdc03da6c8b9490410cdb5620a7244e8
-    subprocessors: de16985ab411c000832dd391b37baa184113904968cb4d07bfa25ff89234bf5d
+    subprocessors: 14227dd7aeca633e04f886d550f2b87612c80e2e01f9b5352fbbf8c5543bda09
     dpa: 74154cfe7aef94365038324a284ec07d6c956b9e4c8c63d4dc67ea78cb33dc30
   open_findings: []

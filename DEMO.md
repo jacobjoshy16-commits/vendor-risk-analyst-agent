@@ -1,5 +1,13 @@
 # Demo recording notes
 
+Customer path (what you show first, no flags):
+
+```
+python3 vra.py connect
+python3 vra.py monitor
+python3 vra.py report
+```
+
 Target: 3–4 minutes. The point to land is **the tool caught a change nobody announced**, and it did so
 with an auditable citation rather than a model's opinion.
 
@@ -115,6 +123,26 @@ python3 vra.py onboard "Acme Corp" --trust-center https://acme.safebase.io --off
 
 Land the point from review: *"the parser that AIV-03 depends on must survive real trust centers,
 not pipe-delimited sandbox fixtures."*
+
+## Beat 7c — leave it running (20s, optional)
+
+```bash
+python3 vra.py monitor --offline --webui --interval 2m
+```
+
+> "And then you leave it. Same pipeline, on a timer, against every vendor and every non-human
+> identity in the portfolio — Loop's provisioning client living in Aegis's tenant included. The
+> console shows the heartbeat. A critical is a finding, not a crashed daemon."
+
+## Beat 7d — discover the identities (20s, optional)
+
+```bash
+python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json --dry-run
+```
+
+> \"The list is not something a human typed. That is every application and API token the IdP
+> returned, across every page. A hundred NHIs per human identity is a pagination problem, not
+> a YAML problem.\"
 
 ## Beat 8 — honesty close (20s)
 

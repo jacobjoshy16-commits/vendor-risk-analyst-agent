@@ -1,0 +1,197 @@
+# Non-human identity (NHI) control set — the load-bearing set.
+#
+# This product is an independent monitor of vendor *agentic* identities
+# (service accounts, OAuth apps, agent principals, bots, workloads) across
+# every vendor application in the estate. Primary frameworks:
+#
+#   NIST SP 800-53 Rev. 5   — AC (access), IA (authenticators), AU (audit),
+#                             CA (exchange), CM (inventory)
+#   SOC 2 TSC               — CC6 (logical access), CC7 (monitoring),
+#                             CC9 (vendor / third party)
+#
+# AIV-* in controls.yaml is the companion set: the *feature* those identities
+# power. NHI-* is the identity itself. Same evaluation semantics
+# (src/vra/nhi.py + evaluate.py):
+#
+#   fails_when:  ALL must hold (AND) → finding
+#   gap_when:    ANY holds and the control did not fail → information gap
+#   applies_when: ALL must hold or the control is skipped
+#   severity:    from this file only. The model never sets it.
+#
+# NHI-04 (orphans) is evaluated in code — an identity seen in a tenant that
+# is not in any vendor's register.
+
+- id: NHI-01
+  question: >
+    Does any vendor agent principal hold write scopes and take action without
+    human review?
+  frameworks:
+    - { name: "NIST SP 800-53", id: "AC-3" }
+    - { name: "NIST SP 800-53", id: "AC-6" }
+    - { name: "SOC 2 TSC", id: "CC6.1" }
+    - { name: "SOC 2 TSC", id: "CC6.3" }
+  applies_when:
+    - field: kind
+      in: [agent_principal, bot]
+    - field: write_scopes
+      truthy: true
+  fails_when:
+    - field: human_in_loop
+      equals: false
+  gap_when:
+    - field: human_in_loop
+      is_unknown: true
+  severity: critical
+  remediation: >
+    Revoke standing write scopes on the agent principal, or require per-action
+    human approval before any privileged or state-changing call.
+  compensating_control: >
+    Alert on every write attributed to the principal in the SIEM within one
+    business day and restrict the identity to a non-privileged group.
+
+- id: NHI-02
+  question: >
+    Does every non-human identity have a named human owner accountable for it?
+  frameworks:
+    - { name: "NIST SP 800-53", id: "AC-2" }
+    - { name: "SOC 2 TSC", id: "CC6.1" }
+  fails_when:
+    - field: owner
+      in: [none, unowned, orphan, "n/a"]
+  gap_when:
+    - field: owner
+      is_unknown: true
+  severity: high
+  remediation: >
+    Assign a named owner (role or person) for the identity and record it in
+    the NHI inventory. Unowned identities are revoked, not ignored.
+  compensating_control: >
+    Route alerts for the identity to the security on-call until an owner
+    is named.
+
+- id: NHI-03
+  question: >
+    Are credentials for the non-human identity rotated at least annually?
+  frameworks:
+    - { name: "NIST SP 800-53", id: "IA-5" }
+    - { name: "NIST SP 800-53", id: "IA-5(1)" }
+    - { name: "SOC 2 TSC", id: "CC6.1" }
+  fails_when:
+    - field: days_since_rotated
+      gt: 365
+  gap_when:
+    - field: last_rotated
+      is_unknown: true
+  severity: high
+  remediation: >
+    Rotate the client secret, key, or token and record the rotation date.
+    Put the identity on a documented rotation cadence of 365 days or less.
+  compensating_control: >
+    Bound the credential with short-lived tokens (OAuth client-credentials
+    with a one-hour access token) until rotation can be completed.
+
+- id: NHI-04
+  question: >
+    Is every non-human identity observed in a tenant recorded in the inventory?
+  frameworks:
+    - { name: "NIST SP 800-53", id: "AC-2" }
+    - { name: "NIST SP 800-53", id: "CM-8" }
+    - { name: "SOC 2 TSC", id: "CC6.1" }
+  # Evaluated in code: an observed identity that matches no register entry
+  # is an orphan. Empty fails_when is intentional.
+  fails_when: []
+  severity: high
+  remediation: >
+    Claim the identity (owner + home vendor) or revoke it in the tenant.
+    Discovery already listed it from the IdP API — do not re-type it by
+    hand. An identity nobody claimed is an identity nobody is watching.
+  compensating_control: >
+    Disable the identity in the tenant pending inventory and owner assignment.
+
+- id: NHI-05
+  question: >
+    Are actions taken by the non-human identity written to an auditable log
+    the customer can export?
+  frameworks:
+    - { name: "NIST SP 800-53", id: "AU-2" }
+    - { name: "NIST SP 800-53", id: "AU-12" }
+    - { name: "SOC 2 TSC", id: "CC7.2" }
+  fails_when:
+    - field: output_logged
+      equals: false
+  gap_when:
+    - field: output_logged
+      is_unknown: true
+  severity: medium
+  remediation: >
+    Enable exportable audit logging attributable to the principal and retain
+    it per the organisation's log-retention standard.
+  compensating_control: >
+    Ingest whatever vendor telemetry exists into the SIEM and alert on gaps
+    in the principal's event stream.
+
+- id: NHI-06
+  question: >
+    Is every cross-vendor non-human identity (a principal issued by vendor A
+    that lives in vendor B's tenant) declared in the inventory?
+  frameworks:
+    - { name: "NIST SP 800-53", id: "AC-3" }
+    - { name: "NIST SP 800-53", id: "CA-3" }
+    - { name: "SOC 2 TSC", id: "CC6.6" }
+    - { name: "SOC 2 TSC", id: "CC9.2" }
+  fails_when:
+    - field: cross_vendor
+      equals: true
+    - field: declared
+      equals: false
+  severity: high
+  remediation: >
+    Declare the identity on the home vendor's register with `resides_in`
+    pointing at the tenant where it was observed, assign an owner, and
+    confirm the scopes are the minimum necessary.
+  compensating_control: >
+    Scope the undeclared principal to read-only and alert on any new grant
+    until the declaration is complete.
+
+- id: NHI-07
+  question: >
+    Do disabled or inactive non-human identities retain write scopes?
+  frameworks:
+    - { name: "NIST SP 800-53", id: "AC-2(3)" }
+    - { name: "NIST SP 800-53", id: "AC-6" }
+    - { name: "SOC 2 TSC", id: "CC6.2" }
+  fails_when:
+    - field: status
+      in: [disabled, inactive]
+    - field: write_scopes
+      truthy: true
+  severity: medium
+  remediation: >
+    Revoke all write scopes (and, preferably, the credential) on any
+    identity that is not active. Disabled-but-privileged is still privileged.
+  compensating_control: >
+    Alert on any token use by a disabled identity and revoke on first sighting.
+
+- id: NHI-08
+  question: >
+    Does a non-acting (suggests-only) identity hold standing write scopes?
+  frameworks:
+    - { name: "NIST SP 800-53", id: "AC-6" }
+    - { name: "NIST SP 800-53", id: "AC-6(2)" }
+    - { name: "SOC 2 TSC", id: "CC6.3" }
+  applies_when:
+    - field: write_scopes
+      truthy: true
+  fails_when:
+    - field: autonomy
+      in: [suggests, none, "n/a"]
+  gap_when:
+    - field: autonomy
+      is_unknown: true
+  severity: high
+  remediation: >
+    Remove write scopes from any identity whose feature is classified as
+    suggestive. Write access is for agents that act, under human review.
+  compensating_control: >
+    Require step-up / per-action approval on every write the identity
+    attempts until scopes are reduced.

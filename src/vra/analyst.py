@@ -25,7 +25,7 @@ from typing import Any
 from .config import RunConfig
 from .llm import call_json
 
-NARRATIVE_SYSTEM = """You are a healthcare GRC analyst writing for a compliance officer.
+NARRATIVE_SYSTEM = """You are a third-party risk analyst writing for a compliance officer who monitors vendor agentic identities against NIST SP 800-53 and SOC 2.
 
 You will be given a single, already-decided vendor risk finding. Your only job is to state it \
 in clear prose.
@@ -52,7 +52,8 @@ reason: {reason}
 {evidence_block}
 Write the narrative now. Two or three sentences. JSON only: {{"narrative": "..."}}"""
 
-OUTREACH_SYSTEM = """You are a healthcare vendor risk analyst drafting an email to a vendor contact.
+OUTREACH_SYSTEM = """You are a vendor-risk analyst drafting an email to a vendor contact \
+about a non-human identity or AI feature under continuous NIST SP 800-53 / SOC 2 monitoring.
 
 Rules:
 - Reference the specific control and the specific missing evidence.
@@ -128,36 +129,35 @@ def _fallback_outreach(record: dict) -> dict[str, str]:
     fields = ", ".join(record["observed"].keys())
     if record.get("subject") == "subprocessor-list-access":
         return {
-            "subject": f"Vendor AI risk onboarding — {record['vendor_name']} — subprocessor disclosure access",
+            "subject": f"Vendor NHI / agentic review — {record['vendor_name']} — subprocessor disclosure access",
             "body": (
                 "Hello,\\n\\n"
-                f"As part of onboarding {record['vendor_name']} as a vendor that processes or may "
-                "process protected health information, we must complete our AI risk assessment, "
-                "including control AIV-03 (every model provider named as a subprocessor and covered "
-                "by an executed BAA).\\n\\n"
+                f"As part of continuous monitoring of {record['vendor_name']} agentic identities "
+                "against NIST SP 800-53 and SOC 2, we must complete control AIV-03 (every model "
+                "provider named as a subprocessor and covered by an executed BAA or DPA).\\n\\n"
                 "We were unable to access your subprocessor disclosure from the public trust portal. "
                 "Please either:\\n"
                 "1. Grant us guest or NDA-gated access to the subprocessor page, or\\n"
                 "2. Send the complete, current subprocessor list with BAA coverage status for each "
                 "entity, including every model or AI service provider.\\n\\n"
-                "We are a HIPAA covered entity and this item affects our assessment of protected "
-                "health information processed by your service. Please respond within 21 days.\\n\\n"
-                "Regards,\\nVendor Risk Management"
+                "This item affects our assessment of customer data processed by your service and by "
+                "any non-human identity it runs in our tenants. Please respond within 21 days.\\n\\n"
+                "Regards,\\nVendor Risk / NHI Monitoring"
             ),
         }
     verb = "provide the following information" if is_gap else "confirm your remediation plan"
     return {
-        "subject": f"Vendor AI risk review — {record['vendor_name']} — control {record['control_id']}",
+        "subject": f"Vendor NHI / agentic review — {record['vendor_name']} — control {record['control_id']}",
         "body": (
             "Hello,\n\n"
-            f"As part of continuous third-party AI risk monitoring, we are reviewing {record['feature']} "
-            f"against our control {record['control_id']}.\n\n"
+            f"As part of continuous third-party NHI and agentic-AI monitoring (NIST SP 800-53 / SOC 2), "
+            f"we are reviewing {record['feature']} against our control {record['control_id']}.\n\n"
             f"Control question: {record['control_question']}\n"
             f"Framework references: {record['citation']}\n\n"
             f"Please {verb} in respect of: {fields}.\n\n"
-            "We are a HIPAA covered entity and this item affects our assessment of protected health "
-            "information processed by your service. Please respond within 21 days.\n\n"
-            "Regards,\nVendor Risk Management"
+            "This item affects our assessment of customer data processed by your service and by "
+            "any non-human identity it runs in our tenants. Please respond within 21 days.\n\n"
+            "Regards,\nVendor Risk / NHI Monitoring"
         ),
     }
 

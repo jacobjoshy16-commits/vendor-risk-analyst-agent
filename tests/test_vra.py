@@ -11,6 +11,7 @@ can create or re-severity a finding.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -210,6 +211,13 @@ class TestControlEvaluation(unittest.TestCase):
                          data_reach=["clinical_documentation"]), self.controls)
         self.assertIn("AIV-13", [f.control.id for f in clinical])
 
+    def test_every_aiv_control_cites_nist_800_53_and_soc2(self):
+        """Product integrity: this is a NIST 800-53 / SOC 2 monitor, not a HIPAA-only tool."""
+        for c in self.controls:
+            names = " ".join(f["name"] for f in c.frameworks)
+            self.assertIn("NIST SP 800-53", names, f"{c.id} missing NIST SP 800-53")
+            self.assertIn("SOC 2", names, f"{c.id} missing SOC 2")
+
     def test_severity_comes_from_config_only(self):
         for c in self.controls:
             if c.id == "AIV-07":
@@ -393,9 +401,14 @@ class TestGroundTruthScenario(unittest.TestCase):
             self.assertIn("watch", v)
             self.assertEqual(v["slug"], slug)
 
-    def test_only_identity_provider_has_probe(self):
-        with_probe = [s for s, v in self.vendors.items() if v.get("probe")]
-        self.assertEqual(with_probe, ["aegis-identity-cloud"])
+    def test_sandbox_vendors_have_probes_and_nhis(self):
+        with_probe = sorted(s for s, v in self.vendors.items() if v.get("probe"))
+        self.assertEqual(
+            with_probe,
+            ["aegis-identity-cloud", "loop-workspace", "meridian-revcycle"],
+        )
+        for slug, v in self.vendors.items():
+            self.assertTrue(v.get("nhis"), f"{slug} has no nhis: inventory")
 
     def test_baseline_registers_have_no_critical(self):
         """Ground truth: criticals arrive in run 2, not at baseline."""
@@ -507,7 +520,8 @@ class TestRealWorldSubprocessorParsing(unittest.TestCase):
                  "We engage subprocessors in the ordinary course of business")
         rows, status = parse_subprocessors(prose, source="subprocessors", raw_kind="pdf")
         self.assertEqual(rows, [], f"prose invented rows: {rows}")
-        self.assertEqual(status.status, "empty")
+        # Mentions subprocessors but has no table → parse_failed, never a pass.
+        self.assertEqual(status.status, "parse_failed")
 
     # -- portals ----------------------------------------------------------
     def test_detect_safebase_portal(self):
@@ -756,6 +770,28 @@ class TestOnboarding(unittest.TestCase):
         self.assertIsNone(res.outreach_path)
         self.assertFalse((self.tmp / "vendors" / "dry-co.yaml").exists())
 
+    def test_bootstrap_proposes_register_into_pending_review(self):
+        """A new vendor has no v1 register. Bootstrap reads artifacts in full
+        (not a diff) and quarantines the proposal — never writes the register."""
+        from vra.onboard import onboard_vendor
+
+        res = onboard_vendor(
+            "Boot Co", tier="high",
+            urls={"subprocessors": str(self.tmp / "fixtures" / "subprocessors.html")},
+            cfg=RunConfig(offline=True),
+            bootstrap=True,
+            _root=self.tmp,
+        )
+        self.assertIsNotNone(res.bootstrap_path)
+        self.assertTrue(res.bootstrap_path.exists())
+        blob = json.loads(res.bootstrap_path.read_text())
+        self.assertIn("BOOTSTRAP PROPOSAL — NOT APPLIED", blob["instructions"])
+        self.assertTrue(any("OpenAI" in (f.get("model_provider") or "")
+                            for f in blob["proposed_ai_surface"]))
+        # The register itself stays conservative — unknowns, not the proposal.
+        register = yaml.safe_load((self.tmp / "vendors" / "boot-co.yaml").read_text())
+        self.assertEqual(register["ai_surface"][0]["autonomy"], "unknown")
+
     def test_onboard_refuses_duplicate_slug(self):
         from vra.onboard import onboard_vendor
 
@@ -773,15 +809,21 @@ class TestModelDefaultAndWebUI(unittest.TestCase):
         self.assertEqual(RunConfig().model, "qwen2.5:7b-instruct")
 
     def test_webui_summary_and_vendors(self):
-        from vra.webui import _list_vendors, _summary
+        from vra.webui import _list_nhis, _list_vendors, _monitor, _summary
 
         s = _summary()
         self.assertIn("vendors", s)
         self.assertIn("blocked_parses", s)
         self.assertIn("model", s)
+        self.assertIn("nhis", s)
+        self.assertGreaterEqual(s["nhis"], 1)
         v = _list_vendors()
         self.assertGreaterEqual(len(v), 3)
         self.assertTrue(all("slug" in x and "parse" in x for x in v))
+        nhis = _list_nhis()
+        self.assertGreaterEqual(len(nhis), 3)
+        mon = _monitor()
+        self.assertIn(mon.get("status"), ("stopped", "running", "stale"))
 
 
 class TestFiveRealVendorsSubprocessorParsing(unittest.TestCase):

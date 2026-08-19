@@ -1,0 +1,57 @@
+{
+  "provider": "slack",
+  "base_url": "https://slack.com",
+  "page_limit": 200,
+  "pages": [
+    {
+      "method": "GET",
+      "url": "https://slack.com/api/auth.test",
+      "body": {
+        "ok": true,
+        "team": "Acme Workspace",
+        "team_id": "T00ACME",
+        "user_id": "U00ADMIN"
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://slack.com/api/users.list?limit=200",
+      "body": {
+        "ok": true,
+        "members": [
+          {
+            "id": "U00HUMAN",
+            "name": "jane",
+            "real_name": "Jane Human",
+            "is_bot": false,
+            "deleted": false
+          },
+          {
+            "id": "USLACKBOT",
+            "name": "slackbot",
+            "is_bot": true,
+            "deleted": false
+          },
+          {
+            "id": "B0ROVO1",
+            "name": "rovo",
+            "real_name": "Rovo",
+            "is_bot": true,
+            "deleted": false,
+            "profile": {"real_name": "Rovo"}
+          },
+          {
+            "id": "B0ASSIST",
+            "name": "loop-assist",
+            "real_name": "Loop Assist",
+            "is_bot": true,
+            "is_app_user": true,
+            "deleted": false,
+            "profile": {"real_name": "Loop Assist"}
+          }
+        ],
+        "response_metadata": {"next_cursor": ""}
+      }
+    }
+  ]
+}

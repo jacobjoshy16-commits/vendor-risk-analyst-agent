@@ -1,0 +1,27 @@
+{
+  "provider": "aws_iam",
+  "base_url": "https://iam.amazonaws.com",
+  "page_limit": 100,
+  "pages": [
+    {
+      "method": "GET",
+      "url": "https://iam.amazonaws.com/?Action=ListUsers&MaxItems=100&Version=2010-05-08",
+      "body": {
+        "Users": [
+          {"UserName": "ci-bot", "UserId": "AIDAEXAMPLECI", "Arn": "arn:aws:iam::1:user/ci-bot", "CreateDate": "2025-08-01T00:00:00Z"}
+        ],
+        "IsTruncated": false
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://iam.amazonaws.com/?Action=ListRoles&MaxItems=100&Version=2010-05-08",
+      "body": {
+        "Roles": [
+          {"RoleName": "vendor-agent-role", "RoleId": "AROAEXAMPLEROLE", "Arn": "arn:aws:iam::1:role/vendor-agent-role", "CreateDate": "2026-01-01T00:00:00Z"}
+        ],
+        "IsTruncated": false
+      }
+    }
+  ]
+}

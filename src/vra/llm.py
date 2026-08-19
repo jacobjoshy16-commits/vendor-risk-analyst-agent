@@ -30,6 +30,27 @@ from typing import Any
 from .config import LLM_AUDIT_LOG, RunConfig
 
 
+class SecretInPromptError(RuntimeError):
+    """Raised when a raw credential would reach the language-model layer."""
+
+
+_SECRET_IN_PROMPT = re.compile(
+    r"(?:SSWS\s+\S+|Bearer\s+[A-Za-z0-9._\-]{20,}|xox[baprs]-[A-Za-z0-9-]+|"
+    r"client_secret\s*[:=]\s*\S+|api_token\s*[:=]\s*\S+)",
+    re.I,
+)
+
+
+def assert_prompt_clean(*parts: str) -> None:
+    blob = "\n".join(p or "" for p in parts)
+    hit = _SECRET_IN_PROMPT.search(blob)
+    if hit:
+        raise SecretInPromptError(
+            "refusing to send a raw credential to the language model: "
+            + hit.group(0)[:24] + "…"
+        )
+
+
 @dataclass
 class LLMResult:
     ok: bool
@@ -175,6 +196,8 @@ class OfflineBackend(Backend):
             return json.dumps(self._narrative(prompt)), None
         if "TASK: VENDOR_OUTREACH" in prompt:
             return json.dumps(self._outreach(prompt)), None
+        if "TASK: BOOTSTRAP_REGISTER" in prompt:
+            return json.dumps(self._bootstrap(prompt)), None
         return json.dumps({}), "offline backend: unknown task"
 
     # -- triage -----------------------------------------------------------
@@ -275,6 +298,37 @@ class OfflineBackend(Backend):
         m = re.search(rf"^{re.escape(key)}:\s*(.+)$", prompt, re.MULTILINE)
         return m.group(1).strip() if m else ""
 
+    def _bootstrap(self, prompt: str) -> dict[str, Any]:
+        """Propose an initial ai_surface from FULL artifact text, not a diff."""
+        low = prompt.lower()
+        features: list[dict[str, Any]] = []
+        for name, keys in (
+            ("OpenAI", ("openai",)),
+            ("Anthropic", ("anthropic",)),
+            ("Perplexity", ("perplexity",)),
+            ("Google", ("vertex ai", "google llc", "google cloud")),
+        ):
+            if any(k in low for k in keys):
+                features.append({
+                    "feature": f"AI service via {name}",
+                    "status": "available",
+                    "autonomy": "unknown",
+                    "model_provider": name,
+                    "human_in_loop": "unknown",
+                    "training_on_customer_data": "unknown",
+                    "evidence_excerpt": name,
+                })
+        if any(t in low for t in self.AGENT_TERMS) and features:
+            features[0]["autonomy"] = "acts"
+            features[0]["human_in_loop"] = False
+        return {
+            "features": features[:5],
+            "notes": (
+                "Offline heuristic proposed features from named model providers "
+                "in the full artifact text. Quarantined for human review."
+            ),
+        }
+
     def _narrative(self, prompt: str) -> dict[str, Any]:
         vendor = self._field(prompt, "vendor")
         control = self._field(prompt, "control_id")
@@ -309,18 +363,18 @@ class OfflineBackend(Backend):
                 else "Please confirm your remediation plan and target date"
             )
         return {
-            "subject": f"Vendor AI risk review — {vendor} ({feature}) — control {control}",
+            "subject": f"Vendor NHI / agentic review — {vendor} ({feature}) — control {control}",
             "body": (
                 f"Hello,\n\n"
-                f"As part of our ongoing third-party AI risk monitoring, we have identified an item "
+                f"As part of continuous third-party NHI and agentic-AI monitoring (NIST SP 800-53 / SOC 2), we have identified an item "
                 f"relating to {feature} in {vendor} that we need to resolve against our control "
                 f"{control}.\n\n"
                 f"Control question: {question}\n\n"
                 f"{ask}. Specifically we require written confirmation addressing the control question "
                 f"above, along with any supporting documentation (attestations, test summaries, or "
                 f"contractual language) you are able to share under our existing agreement.\n\n"
-                f"We are a HIPAA covered entity and this item affects our assessment of protected "
-                f"health information processed by your service. Please respond within 21 days.\n\n"
+                f"This item affects our assessment of customer data processed by your service and by "
+                f"any non-human identity it runs in our tenants. Please respond within 21 days.\n\n"
                 f"Regards,\nVendor Risk Management"
             ),
         }
@@ -373,6 +427,7 @@ def call_json(
                 + "\nReturn ONLY a single valid JSON object matching the schema. No prose, no code fence."
             )
         started = time.time()
+        assert_prompt_clean(system, attempt_prompt)
         raw, err = backend.generate(system, attempt_prompt, cfg)
         elapsed = round(time.time() - started, 3)
         last_raw = raw
