@@ -63,8 +63,25 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     a("")
 
     # ---------------------------------------------------------------- 1
+    failed_vendors = ctx.get("failed_vendors") or []
+    if failed_vendors:
+        a("> ## \u26a0\ufe0f INCOMPLETE ASSESSMENT")
+        a(">")
+        a(f"> **{len(failed_vendors)} of {len(vendors)} vendor(s) in scope could not be "
+          "assessed this run.** The counts below cover only the vendors that were. "
+          "A vendor listed here is **unassessed, not clean** — no finding was raised "
+          "or closed for it, and its previously open findings were held.")
+        a(">")
+        for fv in failed_vendors:
+            a(f"> - **{_esc(fv.get('vendor_name') or fv.get('vendor'))}** "
+              f"(`{fv.get('vendor')}`) — {_esc(fv.get('error') or 'unknown error')}")
+        a("")
+
     a("## 1. Portfolio summary")
     a("")
+    if failed_vendors:
+        a(f"- **\u26a0\ufe0f Vendors NOT assessed:** {len(failed_vendors)} "
+          f"(of {len(vendors)} in scope)")
     nhis = ctx.get("nhis") or []
     portfolio = ctx.get("portfolio")
     if portfolio:
@@ -217,7 +234,7 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
         for p in parses:
             status = p["status"]
             mark = {"parsed": "✅ parsed", "blocked": "🚧 blocked", "empty": "⚠️ empty",
-                    "parse_failed": "⛔ parse_failed", "error": "⛔ error",
+                    "parse_failed": "❌ parse_failed", "error": "⛔ error",
                     "missing": "⚠️ missing", "not_attempted": "—"}.get(status, status)
             a(f"| {_esc(p['vendor_name'])} | `{p['source']}` | {mark} | "
               f"{_esc(p.get('platform') or '—')} | {p['rows']} |")
@@ -596,6 +613,8 @@ def write_report(text: str, ctx: dict, cfg: RunConfig) -> Path | None:
                 "gaps": ctx["gaps"],
                 "changes": ctx["triages"],
                 "probes": ctx["probes"],
+                "failed_vendors": ctx.get("failed_vendors", []),
+                "complete": not ctx.get("failed_vendors"),
                 "subprocessor_parses": ctx.get("parses", []),
                 "nhis": ctx.get("nhis", []),
                 "events": ctx.get("events", []),

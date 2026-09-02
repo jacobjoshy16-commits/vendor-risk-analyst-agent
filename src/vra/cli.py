@@ -54,6 +54,13 @@ class RunResult:
     error: str | None = None
     report_path: str | None = None
     vendors: list[str] = field(default_factory=list)
+    vendors_failed: int = 0
+    failed_vendors: list[dict] = field(default_factory=list)
+
+    @property
+    def fully_assessed(self) -> bool:
+        """False when any vendor in scope could not be assessed this run."""
+        return self.vendors_failed == 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,6 +139,7 @@ def assess(cfg: RunConfig) -> RunResult:
     nhi_gap_n = 0
     discovered_by_vendor: dict[str, list[dict]] = {}
     probe_failed: set[str] = set()
+    failed_vendors: list[dict] = []
 
     from .collect import collect_all
 
@@ -154,6 +162,14 @@ def assess(cfg: RunConfig) -> RunResult:
         discovered_by_vendor[slug] = work.discovered
         if work.probe_failed or work.error:
             probe_failed.add(slug)
+        if work.error:
+            # A vendor that raised was NOT assessed. It must never be counted
+            # toward a clean run — see the summary and exit code below.
+            failed_vendors.append({
+                "vendor": slug,
+                "vendor_name": vendor.get("vendor", slug),
+                "error": work.error,
+            })
 
         for assessment in work.findings + work.gaps:
             evidence: list[dict] = []
@@ -234,7 +250,12 @@ def assess(cfg: RunConfig) -> RunResult:
             (all_findings if rec["kind"] == "finding" else all_gaps).append(stored)
 
     # -- Phase 7: lifecycle reconciliation ---------------------------------
-    closed = store.reconcile(seen_ids, {v["slug"] for v in vendors}, cfg)
+    # A vendor that failed to collect produced no assessments, so every one of
+    # its open findings would look "no longer observed". Absence of evidence is
+    # not evidence of remediation: hold it out of reconciliation entirely.
+    failed_slugs = {f["vendor"] for f in failed_vendors}
+    reconcile_scope = {v["slug"] for v in vendors} - failed_slugs
+    closed = store.reconcile(seen_ids, reconcile_scope, cfg)
 
     from .portfolio import build_portfolio
 
@@ -244,6 +265,7 @@ def assess(cfg: RunConfig) -> RunResult:
         "nhis": all_nhis, "new_ids": new_ids, "closed": closed, "store": store,
         "backend": backend_name, "events": store.events,
         "portfolio": build_portfolio(inventory, store),
+        "failed_vendors": failed_vendors,
     }
 
     text = rp.build_report(ctx, cfg)
@@ -259,7 +281,13 @@ def assess(cfg: RunConfig) -> RunResult:
 
     print()
     print("=" * 68)
-    print(f"  Vendors assessed     : {len(vendors)}")
+    if failed_vendors:
+        print(f"  !! {len(failed_vendors)} of {len(vendors)} VENDOR(S) NOT ASSESSED — "
+              f"this run is INCOMPLETE")
+        for fv in failed_vendors:
+            print(f"     {fv['vendor_name']}: {fv['error']}")
+        print("-" * 68)
+    print(f"  Vendors assessed     : {len(vendors) - len(failed_vendors)} of {len(vendors)}")
     print(f"  NHIs inventoried     : {len(all_nhis)}")
     print(f"  AI-relevant changes  : {len(ai_changes)}")
     print(f"  Open findings        : {len(open_findings)}  "
@@ -275,7 +303,20 @@ def assess(cfg: RunConfig) -> RunResult:
         print(f"  {marker}CRITICAL {f['control_id']}  {f['vendor_name']} — {f['feature']}")
     print()
 
-    result.exit_code = 1 if (crit and cfg.fail_on_critical) else 0
+    # An unassessed vendor outranks a clean scoreboard: exit 0 must keep meaning
+    # "every vendor in scope was assessed and nothing critical is open".
+    if failed_vendors:
+        result.exit_code = 2
+        result.error = (
+            f"{len(failed_vendors)} vendor(s) not assessed: "
+            + "; ".join(f"{f['vendor']}: {f['error']}" for f in failed_vendors)
+        )
+    elif crit and cfg.fail_on_critical:
+        result.exit_code = 1
+    else:
+        result.exit_code = 0
+    result.vendors_failed = len(failed_vendors)
+    result.failed_vendors = failed_vendors
     result.vendor_count = len(vendors)
     result.feature_count = sum(len(v.get("ai_surface") or []) for v in vendors)
     result.nhi_count = len(all_nhis)

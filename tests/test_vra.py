@@ -16,6 +16,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -1180,3 +1181,78 @@ class TestParseFailedState(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestIncompleteRunIsNeverClean(unittest.TestCase):
+    """A vendor that could not be assessed must never read as a clean result.
+
+    This is the regression guard for the `_parse_table_rows` break: every
+    vendor raised, every vendor was logged, and the run still reported
+    "0 critical" and exited 0.
+    """
+
+    def _vendor(self, slug="boom"):
+        return {"vendor": "Boom Corp", "slug": slug, "tier": "high",
+                "watch": {}, "ai_surface": []}
+
+    def _work(self, slug="boom", error="RuntimeError: collect exploded"):
+        from vra.collect import VendorWork
+
+        return VendorWork(
+            slug=slug, vendor=self._vendor(slug), error=error,
+            probe_failed=True, log_line=f"FAILED — {error}", notes=[error],
+        )
+
+    def test_failed_vendor_forces_nonzero_exit(self):
+        from vra import cli
+        from vra.config import RunConfig
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(cli, "load_vendors", return_value=[self._vendor()]), \
+                 mock.patch("vra.collect.collect_all", return_value=[self._work()]), \
+                 mock.patch("vra.cli.collect_all", return_value=[self._work()], create=True):
+                result = cli.assess(RunConfig(offline=True, dry_run=True,
+                                              out_dir=Path(tmp)))
+
+        self.assertEqual(result.vendors_failed, 1)
+        self.assertFalse(result.fully_assessed)
+        self.assertEqual(result.exit_code, 2, "an unassessed vendor must not exit 0")
+        self.assertIn("boom", result.error or "")
+
+    def test_report_carries_an_incomplete_banner(self):
+        from vra.config import RunConfig
+        from vra.register import FindingStore
+        from vra.report import build_report
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = {
+                "vendors": [self._vendor()], "findings": [], "gaps": [],
+                "triages": [], "probes": [], "parses": [], "nhis": [],
+                "new_ids": set(), "closed": [],
+                "store": FindingStore(Path(tmp) / "f.json"),
+                "backend": "offline-heuristic", "events": [],
+                "failed_vendors": [{"vendor": "boom", "vendor_name": "Boom Corp",
+                                    "error": "RuntimeError: collect exploded"}],
+            }
+            report = build_report(ctx, RunConfig(offline=True, dry_run=True))
+
+        self.assertIn("INCOMPLETE ASSESSMENT", report)
+        self.assertIn("Boom Corp", report)
+        self.assertIn("unassessed, not clean", report)
+
+    def test_failed_vendor_findings_are_not_auto_closed(self):
+        """Absence of evidence is not evidence of remediation."""
+        from vra.config import RunConfig
+        from vra.register import FindingStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FindingStore(Path(tmp) / "findings.json")
+            store.upsert({
+                "id": "AIV-07-deadbeef", "vendor": "boom", "kind": "finding",
+                "severity": "critical", "control_id": "AIV-07", "feature": "x",
+            })
+            # The vendor failed this run, so it is held out of reconcile scope.
+            closed = store.reconcile(seen_ids=set(), vendor_slugs=set(),
+                                     cfg=RunConfig(dry_run=True))
+            self.assertEqual(closed, [])
+            self.assertEqual(store.get("AIV-07-deadbeef")["state"], "open")

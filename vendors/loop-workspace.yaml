@@ -83,10 +83,10 @@ probe:
   mode: fixture
   fixture: sandbox/probe/loop_tenant.json
 state:
-  last_assessed: '2026-08-14T05:24:06.762749+00:00'
+  last_assessed: '2026-09-02T05:10:59.429302+00:00'
   snapshot_hashes:
-    changelog: 697e1fea2bd16897105885700683bf64682c97bf45a48c64dba89f988bc2e98d
+    changelog: 44bc1d6c8be7af08fbe4e5367e89dd196c94ec241bebf1ee3d1432731a6dc053
     trust_center: af4c578463379776d30010a4161dd73ebdc03da6c8b9490410cdb5620a7244e8
-    subprocessors: 14227dd7aeca633e04f886d550f2b87612c80e2e01f9b5352fbbf8c5543bda09
+    subprocessors: de16985ab411c000832dd391b37baa184113904968cb4d07bfa25ff89234bf5d
     dpa: 74154cfe7aef94365038324a284ec07d6c956b9e4c8c63d4dc67ea78cb33dc30
   open_findings: []

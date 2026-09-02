@@ -286,7 +286,7 @@ def _from_fields(fields: dict[str, str], source: str, raw: list[str]) -> Observe
     )
 
 
-def _parse_rows(
+def _parse_table_rows(
     rows: list[list[str]], source: str, *, require_header: bool = False
 ) -> list[ObservedSubprocessor]:
     """Header-guided column mapping, plus Atlassian labeled-cell fallback.
@@ -324,6 +324,8 @@ def _parse_rows(
                 out.append(item)
         return out
 
+    # Rows above (and including) the header row are never subprocessor rows.
+    start_idx = (header_idx + 1) if header_idx is not None else 0
     for idx, row in enumerate(rows):
         if idx < start_idx:
             continue
@@ -345,14 +347,24 @@ def _parse_rows(
             return ""
 
         name = get(i_name)
-        if not name or _is_section_or_header_name(name):
+        if not name:
+            continue
+        purpose, region = get(i_purpose), get(i_region)
+        # The section-heading suffix test ("... Infrastructure", "... Providers")
+        # only applies to a row that carries nothing but a name. A full data row
+        # is a subprocessor even when its legal name ends in a section word
+        # ("Oracle Cloud Infrastructure"); dropping it loses a critical finding.
+        if purpose or region:
+            if name.strip().lower() in _SKIP_NAMES:
+                continue
+        elif _is_section_or_header_name(name):
             continue
 
         out.append(
             ObservedSubprocessor(
                 name=name,
-                purpose=get(i_purpose),
-                region=get(i_region),
+                purpose=purpose,
+                region=region,
                 baa_marker=get(i_baa),
                 source=source,
                 raw_line=" | ".join(row),
@@ -448,8 +460,9 @@ def parse_subprocessors(
             return [], status(
                 "parse_failed",
                 f"the {kind_note} discusses subprocessors or contains table markup "
-                "but no entity rows could be extracted; AIV-03 cannot be evaluated. "
-                "This is a parse failure, not a clean list.",
+                "but no entity rows could be extracted (unrecognized layout or "
+                "unsupported markup); AIV-03 cannot be evaluated. This is a parse "
+                "failure, not a clean list.",
             )
         return [], status(
             "parse_failed",
@@ -458,10 +471,8 @@ def parse_subprocessors(
             "Manual review required.",
         )
 
-    return [], status(
-        "empty",
-        "no subprocessor table found in the artifact; AIV-03 cannot be evaluated "
-        "from this source. Confirm the watch URL points at the subprocessor list.",
+    return parsed, status(
+        "parsed", f"parsed {len(parsed)} subprocessor row(s).", rows=len(parsed)
     )
 
 
