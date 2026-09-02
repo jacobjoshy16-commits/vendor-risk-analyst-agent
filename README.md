@@ -182,7 +182,10 @@ control that does not.
 | AIV-15 | medium | Feature disableable at tenant level | CM-7, AC-3 | CC6.3 |
 
 Edit `nhi_controls.yaml` / `controls.yaml` without touching code. Due dates:
-critical 7 days, high 30, medium 60, low 90, gaps 21.
+critical 7 days, high 30, medium 60, low 90, gaps 21 — counted from the day
+the finding was **first raised**, not from the current cycle, so a finding the
+monitor re-sees every 15 minutes still goes overdue and escalates. Re-rating a
+control in YAML moves the deadline; it does not restart the clock.
 
 AIV-07 and NHI-01 are AND conditions: acting **and** no human in the loop.
 An agent that acts under review is not a finding.

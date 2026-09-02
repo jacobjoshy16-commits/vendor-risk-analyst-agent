@@ -1266,3 +1266,103 @@ class TestIncompleteRunIsNeverClean(unittest.TestCase):
                                      cfg=RunConfig(dry_run=True))
             self.assertEqual(closed, [])
             self.assertEqual(store.get("AIV-07-deadbeef")["state"], "open")
+
+
+class TestDueDateIsAnchoredToFirstSeen(unittest.TestCase):
+    """A deadline measured from today is not a deadline.
+
+    to_record() derives due_date from date.today(), and upsert() used to copy
+    that onto the existing finding. On a 15-minute monitor that pushed every
+    deadline forward 96 times a day, so is_overdue() never fired and the
+    escalation branch in reconcile() was unreachable.
+    """
+
+    def _store(self, tmp):
+        from vra.register import FindingStore
+
+        return FindingStore(Path(tmp) / "findings.json")
+
+    def _record(self, severity="critical", kind="finding"):
+        return {
+            "id": "AIV-07-abc123", "vendor": "acme", "kind": kind,
+            "severity": severity, "control_id": "AIV-07", "feature": "Copilot",
+            "due_date": ev.due_date_for(severity, kind),
+        }
+
+    def test_due_date_survives_a_later_cycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            stored, is_new = store.upsert(self._record())
+            self.assertTrue(is_new)
+            first_due = stored["due_date"]
+
+            # Backdate first_seen: the finding was raised 30 days ago.
+            stored["first_seen"] = (date.today() - timedelta(days=30)).isoformat()
+
+            # A later cycle re-derives the same record with today's due date.
+            stored_again, is_new = store.upsert(self._record())
+            self.assertFalse(is_new)
+            self.assertNotEqual(
+                stored_again["due_date"], first_due,
+                "due_date should now reflect the backdated first_seen",
+            )
+            self.assertEqual(
+                stored_again["due_date"],
+                (date.today() - timedelta(days=30) + timedelta(days=7)).isoformat(),
+                "a critical raised 30 days ago was due 7 days after it was raised",
+            )
+
+    def test_an_aged_critical_becomes_overdue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            stored, _ = store.upsert(self._record())
+            self.assertFalse(store.is_overdue(stored))
+
+            stored["first_seen"] = (date.today() - timedelta(days=30)).isoformat()
+            store.upsert(self._record())
+            self.assertTrue(
+                store.is_overdue(store.get("AIV-07-abc123")),
+                "a critical open for 30 days is past its 7-day deadline",
+            )
+
+    def test_overdue_finding_is_escalated_by_reconcile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            stored, _ = store.upsert(self._record())
+            stored["first_seen"] = (date.today() - timedelta(days=30)).isoformat()
+            store.upsert(self._record())
+
+            store.reconcile({"AIV-07-abc123"}, {"acme"}, RunConfig(dry_run=True))
+            finding = store.get("AIV-07-abc123")
+            self.assertTrue(finding.get("escalated"))
+            self.assertTrue(
+                any(h.get("note", "").startswith("escalated")
+                    for h in finding.get("state_history") or []),
+                "the escalation must be recorded in state_history",
+            )
+
+    def test_severity_change_moves_the_deadline_but_keeps_the_clock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            stored, _ = store.upsert(self._record(severity="critical"))
+            raised = (date.today() - timedelta(days=10)).isoformat()
+            stored["first_seen"] = raised
+
+            # The control was re-rated in YAML: medium is 60 days, not 7.
+            store.upsert(self._record(severity="medium"))
+            self.assertEqual(
+                store.get("AIV-07-abc123")["due_date"],
+                (date.fromisoformat(raised) + timedelta(days=60)).isoformat(),
+            )
+
+    def test_gap_uses_the_response_window_from_first_seen(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            stored, _ = store.upsert(self._record(severity="info", kind="gap"))
+            raised = (date.today() - timedelta(days=5)).isoformat()
+            stored["first_seen"] = raised
+            store.upsert(self._record(severity="info", kind="gap"))
+            self.assertEqual(
+                store.get("AIV-07-abc123")["due_date"],
+                (date.fromisoformat(raised) + timedelta(days=21)).isoformat(),
+            )

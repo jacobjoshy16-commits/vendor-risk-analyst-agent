@@ -16,6 +16,7 @@ from typing import Any
 import yaml
 
 from .config import FINDINGS_FILE, VENDORS_DIR, RunConfig
+from .evaluate import due_date_for
 
 REQUIRED_KEYS = ("vendor", "slug", "tier")
 
@@ -110,17 +111,46 @@ class FindingStore:
             finding["last_seen"] = today
             finding["state"] = finding.get("state", "open")
             finding["state_history"] = [{"date": today, "state": finding["state"], "note": "raised"}]
+            # Honour a deadline the caller supplied (a migration or an import
+            # can carry real history); derive one only when it is absent. For a
+            # finding straight out of to_record() these are the same date.
+            if not finding.get("due_date"):
+                finding["due_date"] = self._due_date(finding)
             self.findings[finding["id"]] = finding
             return finding, True
 
         # Preserve human-owned lifecycle fields; refresh observed detail.
         existing["last_seen"] = today
+        # `due_date` is deliberately NOT refreshed. to_record() derives it from
+        # date.today(), so copying it here pushed the deadline forward on every
+        # cycle — with a 15-minute monitor a critical finding could never go
+        # overdue and the escalation branch below was unreachable.
         for key in ("evidence", "observed", "narrative", "poam", "outreach", "severity",
                     "control_question", "frameworks", "feature", "remediation",
-                    "compensating_control", "due_date", "owner"):
+                    "compensating_control", "owner"):
             if key in finding:
                 existing[key] = finding[key]
+        existing["due_date"] = self._due_date(existing)
         return existing, False
+
+    @staticmethod
+    def _due_date(finding: dict) -> str:
+        """Deadline measured from when the finding was first raised, not today.
+
+        Re-derived rather than frozen so that editing a control's severity in
+        YAML moves the deadline, while the clock still starts at first_seen.
+        """
+        try:
+            raised = date.fromisoformat(finding["first_seen"])
+        except (KeyError, TypeError, ValueError):
+            return finding.get("due_date") or due_date_for(
+                finding.get("severity") or "low", finding.get("kind") or "finding"
+            )
+        return due_date_for(
+            finding.get("severity") or "low",
+            finding.get("kind") or "finding",
+            today=raised,
+        )
 
     def age_days(self, finding: dict) -> int:
         try:
