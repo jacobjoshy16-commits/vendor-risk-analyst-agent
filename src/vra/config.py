@@ -78,7 +78,11 @@ class RunConfig:
     )
     monitor_once: bool = False
     allow_env_creds: bool = False
-    webui_host: str = field(default_factory=lambda: os.environ.get("VRA_WEBUI_HOST", "0.0.0.0"))
+    # Loopback by default. The console has no multi-user model and exposes
+    # POST routes that spawn processes and read local files, so binding it to
+    # every interface is opt-in (VRA_WEBUI_HOST=0.0.0.0 or --host), not the
+    # default. See webui.start_server for the token and Host/Origin checks.
+    webui_host: str = field(default_factory=lambda: os.environ.get("VRA_WEBUI_HOST", "127.0.0.1"))
     webui_port: int = field(
         default_factory=lambda: int(os.environ.get("VRA_WEBUI_PORT", "8765"))
     )

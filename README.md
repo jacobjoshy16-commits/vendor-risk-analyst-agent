@@ -68,7 +68,14 @@ Paste API token (hidden)  > ••••••••
 
 **`monitor`** turns itself on. It finds Ollama if you have it, otherwise uses
 the built-in checker. It re-checks every 15 minutes. The local console opens
-on port 8765. Every vendor you connected is picked up on the next cycle.
+on `127.0.0.1:8765` and prints a URL with a one-time token — open that exact
+URL; the console 401s without it. Every vendor you connected is picked up on
+the next cycle.
+
+The console is loopback-only by default because its POST routes start
+processes and read local paths. `--host 0.0.0.0` still works for a preview
+proxy, warns when it does, and needs the proxy hostname in
+`VRA_WEBUI_ALLOWED_HOSTS`.
 
 **`report`** prints the finding summary and opens `out/latest.md`. One place
 to look. At ~20 vendors / ~60 identities, start with the portfolio rollup

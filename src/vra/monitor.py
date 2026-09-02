@@ -340,10 +340,11 @@ def run_forever(
     webui_server = None
     if with_webui:
         try:
-            from .webui import start_server
+            from .webui import console_url, start_server
 
             webui_server = start_server(cfg.webui_host, cfg.webui_port, background=True)
-            print(f"vra monitor: console on http://{cfg.webui_host}:{cfg.webui_port}")
+            # The token is part of the URL: without it the console 401s.
+            print(f"vra monitor: console on {console_url(webui_server, cfg.webui_host)}")
         except OSError as exc:
             print(f"vra monitor: webui did not start ({exc}); continuing headless", file=sys.stderr)
 
