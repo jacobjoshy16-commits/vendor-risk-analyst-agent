@@ -222,7 +222,7 @@ Then the three commands above. To replay the planted sandbox scenario:
 ```bash
 python3 vra.py --offline --snapshot v1          # sandbox baseline
 python3 vra.py --offline --snapshot v2          # planted change → exit 1
-python3 -m unittest tests.test_vra tests.test_monitor_nhi tests.test_real_world_vendors tests.test_idp_discover tests.test_creds tests.test_connect
+python3 -m unittest discover -s tests -t .   # every test module, incl. new ones
 ```
 
 Exit codes: `0` clean · `1` open critical · `2` run error.

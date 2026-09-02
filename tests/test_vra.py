@@ -810,7 +810,17 @@ class TestModelDefaultAndWebUI(unittest.TestCase):
         self.assertEqual(RunConfig().model, "qwen2.5:7b-instruct")
 
     def test_webui_summary_and_vendors(self):
+        from vra import webui
         from vra.webui import _list_nhis, _list_vendors, _monitor, _summary
+
+        # Pin DATA_DIR at an empty temp dir. Otherwise this test reads whatever
+        # data/nhis.json a previous local run happened to leave behind, and a
+        # run that inventoried nothing makes it fail for no product reason.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patcher = mock.patch.object(webui, "DATA_DIR", Path(tmp.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         s = _summary()
         self.assertIn("vendors", s)
