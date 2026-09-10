@@ -313,6 +313,17 @@ def assess(cfg: RunConfig) -> RunResult:
             label = "tenant not reached" if fv.get("kind") == "probe" else "failed"
             print(f"     {fv['vendor_name']} [{label}]: {fv['error']}")
         print("-" * 68)
+    try:
+        from .creds import ageing_credentials
+
+        ageing = ageing_credentials()
+    except Exception:  # a keychain we cannot read must not fail the run
+        ageing = []
+    if ageing:
+        print(f"  !! {len(ageing)} stored credential(s) past the rotation age — "
+              f"run `python3 vra.py creds list`")
+        print("-" * 68)
+
     from .nhi import is_stale
 
     stale_n = len([n for n in all_nhis if is_stale(n)])

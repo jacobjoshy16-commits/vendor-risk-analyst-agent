@@ -22,6 +22,7 @@ import os
 import sys
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -44,7 +45,10 @@ def connector_catalog() -> dict[str, dict[str, Any]]:
 def _connectors() -> dict[str, dict[str, Any]]:
     return connector_catalog()
 
-from .config import WRITE_SCOPE_MARKERS  # noqa: E402  (one definition, in policy)
+from .config import (  # noqa: E402  (one definition, in policy)
+    CREDENTIAL_MAX_AGE_DAYS,
+    WRITE_SCOPE_MARKERS,
+)
 
 
 class MemoryKeyring:
@@ -210,7 +214,15 @@ def service_name(connector: str) -> str:
     return f"{SERVICE_PREFIX}:{connector}"
 
 
-def _load_index() -> dict[str, list[str]]:
+INDEX_VERSION = 2
+
+
+def _read_index_blob() -> dict[str, Any]:
+    """The raw index, upgraded in memory from the names-only v1 shape.
+
+    v1 was ``{connector: [field, ...]}``. v2 adds when each field was stored so
+    an ageing token can be called out — the values themselves never appear here.
+    """
     try:
         raw = _backend().get_password(INDEX_SERVICE, INDEX_USER)
     except Exception:
@@ -223,11 +235,62 @@ def _load_index() -> dict[str, list[str]]:
         return {}
     if not isinstance(data, dict):
         return {}
-    return {str(k): [str(x) for x in (v or [])] for k, v in data.items()}
+    if data.get("_v") == INDEX_VERSION and isinstance(data.get("connectors"), dict):
+        return data
+    # v1: names only, no timestamps. Age is simply unknown for these.
+    return {
+        "_v": INDEX_VERSION,
+        "connectors": {
+            str(k): {"fields": [str(x) for x in (v or [])], "stored_at": {}}
+            for k, v in data.items()
+            if isinstance(v, list)
+        },
+    }
 
 
-def _save_index(index: dict[str, list[str]]) -> None:
-    _backend().set_password(INDEX_SERVICE, INDEX_USER, json.dumps(index, sort_keys=True))
+def _load_index() -> dict[str, list[str]]:
+    blob = _read_index_blob()
+    return {
+        name: list(entry.get("fields") or [])
+        for name, entry in (blob.get("connectors") or {}).items()
+    }
+
+
+def _save_index_blob(blob: dict[str, Any]) -> None:
+    blob["_v"] = INDEX_VERSION
+    _backend().set_password(INDEX_SERVICE, INDEX_USER, json.dumps(blob, sort_keys=True))
+
+
+def stored_at(connector: str, field: str) -> str | None:
+    """When this secret was last written, or None if it predates the index."""
+    entry = (_read_index_blob().get("connectors") or {}).get(_norm_connector(connector))
+    return ((entry or {}).get("stored_at") or {}).get(field.strip())
+
+
+def credential_age_days(connector: str, field: str) -> int | None:
+    """Days since this secret was stored. None when it is not known."""
+    raw = stored_at(connector, field)
+    if not raw:
+        return None
+    try:
+        when = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - when).total_seconds() // 86400))
+
+
+def ageing_credentials(max_age_days: int = CREDENTIAL_MAX_AGE_DAYS) -> list[dict[str, Any]]:
+    """Stored secrets past the rotation age, oldest first."""
+    out: list[dict[str, Any]] = []
+    for connector, fields in _load_index().items():
+        for field in fields:
+            age = credential_age_days(connector, field)
+            if age is not None and age > max_age_days:
+                out.append({"connector": connector, "field": field, "age_days": age,
+                            "stored_at": stored_at(connector, field)})
+    return sorted(out, key=lambda r: r["age_days"], reverse=True)
 
 
 def set_secret(connector: str, field: str, value: str) -> None:
@@ -241,12 +304,16 @@ def set_secret(connector: str, field: str, value: str) -> None:
         raise RuntimeError(
             f"could not store {connector}:{field} in {backend_info()}: {exc}"
         ) from exc
-    index = _load_index()
-    fields = list(index.get(connector) or [])
+    blob = _read_index_blob()
+    connectors = blob.setdefault("connectors", {})
+    entry = connectors.setdefault(connector, {"fields": [], "stored_at": {}})
+    fields = list(entry.get("fields") or [])
     if field not in fields:
         fields.append(field)
-        index[connector] = sorted(fields)
-        _save_index(index)
+        entry["fields"] = sorted(fields)
+    # Rewriting a secret restarts its clock — that is what rotation is.
+    entry.setdefault("stored_at", {})[field] = datetime.now(timezone.utc).isoformat()
+    _save_index_blob(blob)
 
 
 def get_secret(connector: str, field: str) -> str | None:
@@ -270,8 +337,11 @@ def delete_connector(connector: str) -> list[str]:
             if get_secret(connector, field) is None:
                 continue
             raise
-    index.pop(connector, None)
-    _save_index(index)
+    # Drop the field names and their timestamps together — a forgotten
+    # credential must not leave an age record behind.
+    blob = _read_index_blob()
+    (blob.get("connectors") or {}).pop(connector, None)
+    _save_index_blob(blob)
     return removed
 
 
@@ -462,10 +532,26 @@ def main(argv: list[str] | None = None) -> int:
             if not index:
                 print("vra creds: no connectors stored")
                 return 0
-            print(f"{'Connector':<16} Fields")
-            print("-" * 40)
+            print(f"{'Connector':<16} {'Field':<20} {'Stored':<12} Age")
+            print("-" * 62)
             for name, fields in sorted(index.items()):
-                print(f"{name:<16} {', '.join(fields)}")
+                for field in fields:
+                    age = credential_age_days(name, field)
+                    when = (stored_at(name, field) or "")[:10] or "unknown"
+                    if age is None:
+                        note = "unknown (stored before ages were tracked)"
+                    elif age > CREDENTIAL_MAX_AGE_DAYS:
+                        note = f"{age}d  ** ROTATE — past {CREDENTIAL_MAX_AGE_DAYS}d **"
+                    else:
+                        note = f"{age}d"
+                    print(f"{name:<16} {field:<20} {when:<12} {note}")
+            stale = ageing_credentials()
+            if stale:
+                print()
+                print(f"vra creds: {len(stale)} credential(s) past "
+                      f"{CREDENTIAL_MAX_AGE_DAYS} days. NHI-03 asks vendors to rotate "
+                      f"non-human credentials at least annually; this token is one.")
+                print("  Rotate at the provider, then: python3 vra.py creds set <connector>")
             return 0
         if args.action == "rm":
             removed = delete_connector(args.connector)

@@ -99,6 +99,11 @@ GAP_RESPONSE_DAYS = 21
 # revoked API key otherwise leaves a confident-looking inventory frozen in time.
 STALE_AFTER_DAYS = int(os.environ.get("VRA_STALE_AFTER_DAYS", "2"))
 
+# NHI-03 asks whether a vendor rotates its non-human credentials at least
+# annually. The token this tool stores is itself such a credential, so it is
+# held to the same rule rather than exempted.
+CREDENTIAL_MAX_AGE_DAYS = int(os.environ.get("VRA_CREDENTIAL_MAX_AGE_DAYS", "365"))
+
 FINDING_STATES = ("open", "awaiting_vendor", "accepted_risk", "closed")
 
 # Values that mean "we do not know", as opposed to a failing answer.

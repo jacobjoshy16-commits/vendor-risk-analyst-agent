@@ -156,7 +156,12 @@ Two copies of the monitor cannot run (`data/monitor.lock`).
 ### How long it keeps watching, and how long it keeps the record
 
 A stored token has **no expiry in this tool** — it is used until you run
-`vra creds rm`. So the failure that matters is revocation, not expiry: the
+`vra creds rm`. Its age is tracked, though: `vra creds list` shows when each
+secret was stored and flags anything past `VRA_CREDENTIAL_MAX_AGE_DAYS`
+(default 365), and a run says so in its summary. NHI-03 asks vendors to rotate
+non-human credentials at least annually; this token is one, so it is held to
+the same rule rather than exempted. Re-running `vra creds set <connector>`
+restarts the clock. So the failure that matters is revocation, not expiry: the
 tenant stops answering and the inventory freezes. When a configured probe
 cannot run, its identities are kept but marked **last known**, the run reports
 INCOMPLETE and exits non-zero, and the report says which tenant was not reached
