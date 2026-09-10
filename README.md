@@ -217,6 +217,13 @@ information gaps, not “non-compliant.”
 
 **5. Local by default.** Ollama on the workstation, or the built-in checker.
 
+**6. The model is asked once per distinct prompt.** Narrative and outreach text
+is cached in `data/llm_cache.json`, keyed by a hash of the exact
+backend/model/task/system/prompt. A finding the monitor re-sees unchanged costs
+zero model calls; change anything that reaches the prompt and that entry — only
+that entry — is regenerated. Only the hash is stored, never the prompt text.
+Set `VRA_LLM_CACHE=0` to re-ask every cycle.
+
 ---
 
 ## Setup
@@ -248,6 +255,7 @@ Exit codes: `0` clean · `1` open critical · `2` run error.
 | `data/nhis.json` | Portfolio NHI inventory — **this is the product** |
 | `data/findings.json` | Finding lifecycle — **back this up** |
 | `data/monitor.json` | Daemon heartbeat, last 20 cycles |
+| `data/llm_cache.json` | Model answers, keyed by prompt hash (LRU, capped) |
 | `data/snapshots/` | Normalized artifacts + hashes |
 | `pending_review/` | Model proposals (never auto-applied) |
 

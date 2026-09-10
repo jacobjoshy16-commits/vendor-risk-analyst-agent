@@ -20,6 +20,10 @@ DATA_DIR = REPO_ROOT / "data"
 SNAPSHOT_DIR = DATA_DIR / "snapshots"
 PENDING_REVIEW_DIR = REPO_ROOT / "pending_review"
 LLM_AUDIT_LOG = DATA_DIR / "llm_audit.jsonl"
+LLM_CACHE_FILE = DATA_DIR / "llm_cache.json"
+# The monitor re-derives every open finding on every cycle. Without a cache it
+# re-asks the model for narrative and outreach text that cannot have changed.
+LLM_CACHE_MAX_ENTRIES = int(os.environ.get("VRA_LLM_CACHE_MAX", "5000"))
 FINDINGS_FILE = DATA_DIR / "findings.json"
 NHI_FILE = DATA_DIR / "nhis.json"
 MONITOR_STATUS_FILE = DATA_DIR / "monitor.json"
@@ -88,6 +92,11 @@ class RunConfig:
     )
     workers: int = field(
         default_factory=lambda: max(1, min(int(os.environ.get("VRA_WORKERS", "4")), 8))
+    )
+    # Reuse a previous model answer when the prompt is byte-identical. Set
+    # VRA_LLM_CACHE=0 to force every cycle to re-ask.
+    llm_cache: bool = field(
+        default_factory=lambda: os.environ.get("VRA_LLM_CACHE", "1") not in ("0", "false", "no")
     )
 
     @property

@@ -18,8 +18,12 @@ failed and retried attempts. Auditability is the point: if a reviewer asks
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
+import os
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -27,7 +31,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import LLM_AUDIT_LOG, RunConfig
+from .config import (
+    LLM_AUDIT_LOG,
+    LLM_CACHE_FILE,
+    LLM_CACHE_MAX_ENTRIES,
+    RunConfig,
+)
 
 
 class SecretInPromptError(RuntimeError):
@@ -65,7 +74,10 @@ class LLMResult:
 # ---------------------------------------------------------------------------
 # Audit log
 # ---------------------------------------------------------------------------
-def audit(record: dict[str, Any], *, path: Path = LLM_AUDIT_LOG) -> None:
+def audit(record: dict[str, Any], *, path: Path | None = None) -> None:
+    # Resolved here, not bound as a default, so the destination can be
+    # redirected (tests, an alternate data dir) without reimporting.
+    path = path or LLM_AUDIT_LOG
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {"ts": datetime.now(timezone.utc).isoformat(), **record}
     with path.open("a", encoding="utf-8") as fh:
@@ -114,6 +126,132 @@ def extract_json(text: str) -> dict[str, Any] | None:
                             break
             start = candidate.find("{", start + 1)
     return None
+
+
+# ---------------------------------------------------------------------------
+# Prompt cache
+# ---------------------------------------------------------------------------
+class PromptCache:
+    """Reuse a model answer when the prompt is byte-identical.
+
+    The monitor re-derives every open finding on every cycle and asks for the
+    same narrative and outreach text each time. At a 15-minute interval that is
+    two model calls per finding per cycle forever, for output that cannot have
+    changed.
+
+    The key is a hash of backend, model, task and the exact system+prompt text,
+    so a hit is only possible when the next call would have sent precisely the
+    same bytes — any change to the finding changes the prompt and therefore the
+    key. Only the hash is stored: prompt text never lands in the cache file.
+    """
+
+    VERSION = 1
+
+    def __init__(self, path: Path = LLM_CACHE_FILE, max_entries: int = LLM_CACHE_MAX_ENTRIES):
+        self.path = path
+        self.max_entries = max(1, max_entries)
+        self.entries: dict[str, dict[str, Any]] = {}
+        self.hits = 0
+        self.misses = 0
+        self._dirty = False
+        self._lock = threading.Lock()
+        self._loaded = False
+
+    @staticmethod
+    def key(*, backend: str, model: str, task: str, system: str, prompt: str) -> str:
+        digest = hashlib.sha256()
+        for part in (backend, model, task, system, prompt):
+            digest.update((part or "").encode("utf-8"))
+            digest.update(b"\x00")
+        return digest.hexdigest()
+
+    def load(self) -> None:
+        with self._lock:
+            if self._loaded:
+                return
+            self._loaded = True
+            if not self.path.exists():
+                return
+            try:
+                blob = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return
+            if blob.get("version") != self.VERSION:
+                return  # a format change invalidates the whole file
+            entries = blob.get("entries")
+            if isinstance(entries, dict):
+                self.entries = {k: v for k, v in entries.items() if isinstance(v, dict)}
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        self.load()
+        with self._lock:
+            entry = self.entries.get(key)
+            if entry is None:
+                self.misses += 1
+                return None
+            self.hits += 1
+            entry["hits"] = int(entry.get("hits") or 0) + 1
+            entry["last_used"] = datetime.now(timezone.utc).isoformat()
+            self._dirty = True
+            # Hand back a copy: a caller that edits its result must not be able
+            # to rewrite what every later cycle reads.
+            return {**entry, "data": copy.deepcopy(entry["data"])}
+
+    def put(self, key: str, *, data: dict[str, Any], call_id: str, task: str) -> None:
+        self.load()
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            self.entries[key] = {
+                "data": copy.deepcopy(data),
+                "task": task,
+                "call_id": call_id,
+                "created": now,
+                "last_used": now,
+                "hits": 0,
+            }
+            self._dirty = True
+
+    def save(self, cfg: RunConfig | None = None) -> None:
+        if cfg is not None and cfg.dry_run:
+            return
+        with self._lock:
+            if not self._dirty:
+                return
+            entries = self.entries
+            if len(entries) > self.max_entries:
+                # Least recently used goes first. This file must not become the
+                # next thing that grows without bound.
+                ordered = sorted(
+                    entries.items(), key=lambda kv: kv[1].get("last_used") or "", reverse=True
+                )
+                entries = dict(ordered[: self.max_entries])
+                self.entries = entries
+            payload = json.dumps(
+                {"version": self.VERSION, "entries": entries}, indent=2, default=str
+            )
+            self._dirty = False
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(self.path)
+
+    @property
+    def stats(self) -> dict[str, int]:
+        return {"hits": self.hits, "misses": self.misses, "entries": len(self.entries)}
+
+
+PROMPT_CACHE = PromptCache()
+
+
+def save_cache(cfg: RunConfig | None = None) -> None:
+    PROMPT_CACHE.save(cfg)
+
+
+def reset_cache(path: Path | None = None) -> PromptCache:
+    """Swap in a fresh cache. Tests only."""
+    global PROMPT_CACHE
+    PROMPT_CACHE = PromptCache(path or LLM_CACHE_FILE)
+    return PROMPT_CACHE
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +555,34 @@ def call_json(
     call_id = str(uuid.uuid4())
     last_raw, last_err = "", None
 
+    model_name = cfg.model if backend.name == "ollama" else backend.name
+    cache_key = ""
+    if getattr(cfg, "llm_cache", False):
+        cache_key = PROMPT_CACHE.key(
+            backend=backend.name, model=model_name, task=task,
+            system=system, prompt=prompt,
+        )
+        hit = PROMPT_CACHE.get(cache_key)
+        if hit is not None:
+            # The model was not asked, so there is no prompt/response pair to
+            # log. Record the hit and point at the call that produced the text,
+            # so the audit trail still answers "where did this come from".
+            audit({
+                "call_id": str(uuid.uuid4()),
+                "attempt": 0,
+                "task": task,
+                "backend": backend.name,
+                "model": model_name,
+                "context": context or {},
+                "cache": "hit",
+                "cache_key": cache_key[:16],
+                "source_call_id": hit.get("call_id"),
+                "parsed_ok": True,
+                "error": None,
+                "elapsed_s": 0.0,
+            })
+            return LLMResult(True, dict(hit["data"]), "", backend.name, cfg.model, 0)
+
     for attempt in range(1, max_attempts + 1):
         attempt_prompt = prompt
         if attempt > 1:
@@ -445,8 +611,9 @@ def call_json(
                 "attempt": attempt,
                 "task": task,
                 "backend": backend.name,
-                "model": cfg.model if backend.name == "ollama" else backend.name,
+                "model": model_name,
                 "context": context or {},
+                "cache": "miss" if cache_key else "off",
                 "system": system,
                 "prompt": attempt_prompt,
                 "response_raw": raw,
@@ -457,6 +624,8 @@ def call_json(
         )
 
         if problem is None:
+            if cache_key:
+                PROMPT_CACHE.put(cache_key, data=parsed, call_id=call_id, task=task)
             return LLMResult(True, parsed, raw, backend.name, cfg.model, attempt)
         last_err = problem
 

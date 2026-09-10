@@ -56,6 +56,8 @@ class RunResult:
     vendors: list[str] = field(default_factory=list)
     vendors_failed: int = 0
     failed_vendors: list[dict] = field(default_factory=list)
+    llm_calls_sent: int = 0
+    llm_calls_cached: int = 0
 
     @property
     def fully_assessed(self) -> bool:
@@ -107,6 +109,12 @@ def assess(cfg: RunConfig) -> RunResult:
     nhi_controls = load_nhi_controls()
     store = FindingStore()
     inventory = NHIInventory()
+
+    from .llm import PROMPT_CACHE
+
+    # Snapshot now and subtract later: the cache counters live as long as the
+    # process, and the monitor runs many cycles in one process.
+    cache_at_start = dict(PROMPT_CACHE.stats)
 
     backend = get_backend(cfg)
     backend_name = backend.name
@@ -272,6 +280,14 @@ def assess(cfg: RunConfig) -> RunResult:
     path = rp.write_report(text, ctx, cfg)
     store.save(cfg)
     inventory.save(cfg)
+    from .llm import save_cache
+
+    save_cache(cfg)
+    now = PROMPT_CACHE.stats
+    cache_stats = {
+        "hits": now["hits"] - cache_at_start["hits"],
+        "misses": now["misses"] - cache_at_start["misses"],
+    }
 
     # -- console summary ----------------------------------------------------
     open_findings = [f for f in all_findings if f.get("state") not in ("closed",)]
@@ -296,6 +312,10 @@ def assess(cfg: RunConfig) -> RunResult:
     print(f"  Information gaps     : {len(all_gaps)}")
     print(f"  NHI findings / gaps  : {nhi_finding_n} / {nhi_gap_n}")
     print(f"  Closed this run      : {len(closed)}")
+    asked = cache_stats["hits"] + cache_stats["misses"]
+    if asked:
+        print(f"  Model calls          : {cache_stats['misses']} sent, "
+              f"{cache_stats['hits']} reused from cache")
     print(f"  Report               : {path if path else '(dry-run, not written)'}")
     print("=" * 68)
     for f in sorted(crit, key=lambda x: x["vendor"]):
@@ -330,6 +350,8 @@ def assess(cfg: RunConfig) -> RunResult:
     result.nhi_gaps = nhi_gap_n
     result.closed = len(closed)
     result.backend = backend_name
+    result.llm_calls_sent = cache_stats["misses"]
+    result.llm_calls_cached = cache_stats["hits"]
     result.report_path = str(path) if path else None
     result.vendors = [v["slug"] for v in vendors]
     return result
