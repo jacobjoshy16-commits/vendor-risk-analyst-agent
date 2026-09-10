@@ -32,6 +32,14 @@ LLM_CACHE_MAX_ENTRIES = int(os.environ.get("VRA_LLM_CACHE_MAX", "5000"))
 FINDINGS_FILE = DATA_DIR / "findings.json"
 NHI_FILE = DATA_DIR / "nhis.json"
 REGISTRY_STATE_FILE = DATA_DIR / "registry_state.json"
+# Entitlement-change events are the only permanent record that a permission
+# ever moved: nhis.json holds current state only. So they are archived out of
+# the hot store rather than deleted — findings.json is fully re-serialised
+# every cycle, and an unbounded array there is both a size and a write-
+# amplification problem. `vra events purge` is the explicit way to destroy them.
+EVENTS_ARCHIVE_DIR = DATA_DIR / "events"
+EVENT_RETENTION_DAYS = int(os.environ.get("VRA_EVENT_RETENTION_DAYS", "90"))
+EVENT_HOT_MAX = int(os.environ.get("VRA_EVENT_HOT_MAX", "5000"))
 MONITOR_STATUS_FILE = DATA_DIR / "monitor.json"
 MONITOR_LOCK_FILE = DATA_DIR / "monitor.lock"
 MONITOR_STOP_FILE = DATA_DIR / "monitor.stop"

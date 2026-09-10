@@ -153,6 +153,35 @@ is recorded as an `entitlement_change` in `data/findings.json`.
 
 Two copies of the monitor cannot run (`data/monitor.lock`).
 
+### How long it keeps watching, and how long it keeps the record
+
+A stored token has **no expiry in this tool** — it is used until you run
+`vra creds rm`. So the failure that matters is revocation, not expiry: the
+tenant stops answering and the inventory freezes. When a configured probe
+cannot run, its identities are kept but marked **last known**, the run reports
+INCOMPLETE and exits non-zero, and the report says which tenant was not reached
+and why. They are never presented as current.
+
+Entitlement changes are the only permanent record that a permission moved —
+`data/nhis.json` holds current state, not history. So the log is **archived,
+not deleted**: every save rolls anything past the retention window out to
+`data/events/events-YYYY-MM.jsonl`, keeping `findings.json` bounded (it is
+re-serialised every cycle, so an unbounded array there costs write bandwidth as
+well as space). At 50 vendors a simulated year of changes leaves 2.7 MB hot and
+6.4 MB archived, with every event still readable.
+
+```bash
+python3 vra.py events                    # counts, sizes, oldest record
+python3 vra.py events show --limit 20    # recent changes
+python3 vra.py events prune              # roll aged events out now
+python3 vra.py events purge --before 2025-01-01 --yes   # destroy them
+```
+
+`purge` is the only path that destroys anything, it refuses without `--yes`,
+and it tells you how many of the doomed events record an identity *gaining* a
+write scope. Tune with `VRA_EVENT_RETENTION_DAYS` (default 90) and
+`VRA_EVENT_HOT_MAX` (default 5000).
+
 ```bash
 python3 vra.py monitor status
 python3 vra.py monitor stop
@@ -273,6 +302,7 @@ Exit codes: `0` clean · `1` open critical · `2` run error.
 | `data/findings.json` | Finding lifecycle — **back this up** |
 | `data/monitor.json` | Daemon heartbeat, last 20 cycles |
 | `data/registry_state.json` | Per-vendor last_assessed + snapshot hashes |
+| `data/events/` | Archived entitlement changes, one JSONL per month |
 | `data/llm_cache.json` | Model answers, keyed by prompt hash (LRU, capped) |
 | `data/snapshots/` | Normalized artifacts + hashes |
 | `pending_review/` | Model proposals (never auto-applied) |

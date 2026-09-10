@@ -31,6 +31,7 @@ SUBCOMMANDS = (
     "report",
     "enrich",
     "portfolio",
+    "events",
 )
 
 
@@ -79,6 +80,10 @@ def main(argv: list[str] | None = None) -> int:
             from vra.portfolio import portfolio_main
 
             return portfolio_main(rest)
+        if cmd == "events":
+            from vra.events import main as events_main
+
+            return events_main(rest)
         if cmd == "nhis":
             from vra.monitor import print_inventory
 
@@ -93,5 +98,21 @@ def main(argv: list[str] | None = None) -> int:
     return cli_main(args)
 
 
+def _run() -> int:
+    try:
+        return main()
+    except BrokenPipeError:
+        # `vra ... | head` closes the pipe early. That is not an error, but
+        # letting it escape prints a traceback over the user's output.
+        try:
+            sys.stdout.close()
+        except BrokenPipeError:
+            pass
+        return 0
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        return 130
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_run())

@@ -9,6 +9,7 @@ is responsible for.
 from __future__ import annotations
 
 import json
+import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,9 @@ from typing import Any
 import yaml
 
 from .config import (
+    EVENT_HOT_MAX,
+    EVENT_RETENTION_DAYS,
+    EVENTS_ARCHIVE_DIR,
     FINDINGS_FILE,
     REGISTRY_STATE_FILE,
     SANDBOX_VENDORS_DIR,
@@ -145,6 +149,7 @@ class FindingStore:
         self.findings: dict[str, dict] = {}
         self.events: list[dict] = []
         self.meta: dict[str, Any] = {}
+        self.rolled = 0
         self.load()
 
     def load(self) -> None:
@@ -159,6 +164,10 @@ class FindingStore:
     def save(self, cfg: RunConfig) -> None:
         if cfg.dry_run:
             return
+        # Every persist is the systemic point where the event log is bounded.
+        # roll_events keeps the running total itself, so a prune done through
+        # `vra events prune` is counted the same as one done by a cycle.
+        self.rolled = self.roll_events()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "meta": {**self.meta, "last_run": datetime.now(timezone.utc).isoformat()},
@@ -166,6 +175,119 @@ class FindingStore:
             "events": self.events,
         }
         self.path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+    # -- event retention ----------------------------------------------------
+    @staticmethod
+    def _event_month(event: dict) -> str:
+        """Archive bucket for an event. Unparseable stamps get their own file."""
+        raw = str(event.get("timestamp") or "")[:7]
+        try:
+            datetime.strptime(raw, "%Y-%m")
+        except ValueError:
+            return "unknown"
+        return raw
+
+    @staticmethod
+    def _event_age_days(event: dict) -> float:
+        """Days since the event. An unparseable stamp counts as ancient."""
+        raw = str(event.get("timestamp") or "")
+        try:
+            stamped = datetime.fromisoformat(raw)
+        except ValueError:
+            return float("inf")
+        if stamped.tzinfo is None:
+            stamped = stamped.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - stamped).total_seconds() / 86400
+
+    def roll_events(
+        self,
+        *,
+        retention_days: int | None = None,
+        hot_max: int | None = None,
+        archive_dir: Path | None = None,
+    ) -> int:
+        """Move aged events out of the hot store into a dated archive.
+
+        Two bounds, because either alone can be defeated: anything older than
+        the retention window rolls, and if a burst still leaves more than
+        ``hot_max`` the oldest roll too.
+
+        The archive is written BEFORE the hot store is trimmed. If the archive
+        write fails the events stay hot — this is the only record that a
+        permission ever changed, so it is never traded for a smaller file.
+        Returns how many were archived.
+        """
+        # Resolved here, not bound as defaults, so the destination and the
+        # thresholds can be redirected without reimporting the module.
+        retention_days = EVENT_RETENTION_DAYS if retention_days is None else retention_days
+        hot_max = EVENT_HOT_MAX if hot_max is None else hot_max
+        archive_dir = archive_dir or EVENTS_ARCHIVE_DIR
+
+        if not self.events:
+            return 0
+
+        ordered = sorted(self.events, key=self._event_age_days, reverse=True)
+        aged = [e for e in ordered if self._event_age_days(e) > retention_days]
+        keep = [e for e in ordered if self._event_age_days(e) <= retention_days]
+        if len(keep) > hot_max:
+            overflow = len(keep) - hot_max
+            aged.extend(keep[:overflow])
+            keep = keep[overflow:]
+        if not aged:
+            return 0
+
+        by_month: dict[str, list[dict]] = {}
+        for event in aged:
+            by_month.setdefault(self._event_month(event), []).append(event)
+
+        try:
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            for month, rows in sorted(by_month.items()):
+                target = archive_dir / f"events-{month}.jsonl"
+                with target.open("a", encoding="utf-8") as fh:
+                    for event in rows:
+                        fh.write(json.dumps(event, default=str, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            # Keep everything. A bounded file is not worth a lost audit record.
+            print(
+                f"vra: could not archive {len(aged)} event(s) ({exc}); "
+                "keeping them in findings.json",
+                file=sys.stderr,
+            )
+            return 0
+
+        # Restore the caller's original ordering for whatever stays hot.
+        kept = set(id(e) for e in keep)
+        self.events = [e for e in self.events if id(e) in kept]
+        self.meta["events_archived_total"] = (
+            int(self.meta.get("events_archived_total") or 0) + len(aged)
+        )
+        return len(aged)
+
+    @staticmethod
+    def archived_events(
+        archive_dir: Path | None = None,
+        *,
+        since: str | None = None,
+    ) -> list[dict]:
+        """Read events back out of the archive, oldest file first."""
+        archive_dir = archive_dir or EVENTS_ARCHIVE_DIR
+        rows: list[dict] = []
+        if not archive_dir.is_dir():
+            return rows
+        for path in sorted(archive_dir.glob("events-*.jsonl")):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if since and str(event.get("timestamp") or "") < since:
+                    continue
+                rows.append(event)
+        return rows
 
     def record_event(self, event: dict) -> dict:
         """Append a structured event. Not a finding — no severity, no due date."""
