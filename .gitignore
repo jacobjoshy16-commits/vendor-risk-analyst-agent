@@ -10,6 +10,11 @@ pending_review/
 # Onboarding artifact cache (fetched copies of vendor trust-center pages).
 artifacts/
 
+# Registers a human writes with `vra connect`. A real vendor portfolio names
+# your suppliers and your tenants — it does not belong in this repo. The demo
+# registers ship in sandbox/registers/ instead.
+vendors/*.yaml
+
 # Python
 __pycache__/
 *.py[cod]

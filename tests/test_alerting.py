@@ -283,10 +283,14 @@ class TestEndToEndAlerting(unittest.TestCase):
         self.addCleanup(lambda: [shutil.rmtree(REPO / n, ignore_errors=True)
                                  for n in ("data", "out", "pending_review")])
 
-        # assess() writes a `state:` block back into every vendors/*.yaml, so a
-        # non-dry-run cycle edits files a human owns. Snapshot and restore them
-        # or running the suite leaves the working tree dirty.
-        self._registers = {p: p.read_bytes() for p in (REPO / "vendors").glob("*.yaml")}
+        # Machine state lives in data/ now, so a cycle no longer edits a
+        # register. Still guard the directory: a test that onboards a vendor
+        # must not leave it behind for the next test to load.
+        self._registers = {
+            p: p.read_bytes()
+            for d in (REPO / "vendors", REPO / "sandbox" / "registers")
+            for p in d.glob("*.yaml")
+        }
         self.addCleanup(self._restore_registers)
 
         llm.reset_cache()
@@ -295,9 +299,10 @@ class TestEndToEndAlerting(unittest.TestCase):
     def _restore_registers(self):
         for path, blob in self._registers.items():
             path.write_bytes(blob)
-        for path in (REPO / "vendors").glob("*.yaml"):
-            if path not in self._registers:
-                path.unlink()  # a test that onboarded a vendor must not leave it
+        for directory in (REPO / "vendors", REPO / "sandbox" / "registers"):
+            for path in directory.glob("*.yaml"):
+                if path not in self._registers:
+                    path.unlink()  # a test that onboarded a vendor must not leave it
 
     def _cycle(self, snapshot):
         from vra.cli import assess

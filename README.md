@@ -215,6 +215,12 @@ an API field.
 **4. Unknown is a question, not a failure.** Unanswered fields are 21-day
 information gaps, not “non-compliant.”
 
+**4a. The register is yours.** A run never rewrites `vendors/*.yaml`. Machine
+bookkeeping goes to `data/registry_state.json`, so your comments survive and a
+cycle leaves no diff. Your registers are gitignored; the three demo vendors
+ship in `sandbox/registers/` and a register of yours shadows a demo one with
+the same slug. Point elsewhere with `VRA_VENDORS_DIR`.
+
 **5. Local by default.** Ollama on the workstation, or the built-in checker.
 
 **6. The model is asked once per distinct prompt.** Narrative and outreach text
@@ -255,6 +261,7 @@ Exit codes: `0` clean · `1` open critical · `2` run error.
 | `data/nhis.json` | Portfolio NHI inventory — **this is the product** |
 | `data/findings.json` | Finding lifecycle — **back this up** |
 | `data/monitor.json` | Daemon heartbeat, last 20 cycles |
+| `data/registry_state.json` | Per-vendor last_assessed + snapshot hashes |
 | `data/llm_cache.json` | Model answers, keyed by prompt hash (LRU, capped) |
 | `data/snapshots/` | Normalized artifacts + hashes |
 | `pending_review/` | Model proposals (never auto-applied) |
@@ -337,7 +344,8 @@ on messy real vendor prose. Run against Ollama before relying on it.
 vra.py                  entry point — connect / monitor / report
 nhi_controls.yaml       8 NHI-* controls — the identity set (800-53 + SOC 2)
 controls.yaml           15 AIV-* controls — the feature set (800-53 + SOC 2)
-vendors/*.yaml          per-vendor register; nhis: is overlay, not the list
+vendors/*.yaml          YOUR registers (gitignored) — `vra connect` writes here
+sandbox/registers/      the three demo registers that ship with the repo
 src/vra/connect.py      the interactive front door
 src/vra/idp.py          IdP connectors (Okta / Auth0) + dispatcher
 src/vra/connectors.py   vendor connectors (Atlassian, Slack, …)

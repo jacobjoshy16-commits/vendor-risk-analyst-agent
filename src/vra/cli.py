@@ -30,7 +30,7 @@ from .nhi import (
     link_cross_plane,
     load_nhi_controls,
 )
-from .register import FindingStore, load_vendors, update_vendor_state
+from .register import FindingStore, RegistryState, load_vendors
 
 
 @dataclass
@@ -109,6 +109,8 @@ def assess(cfg: RunConfig) -> RunResult:
     nhi_controls = load_nhi_controls()
     store = FindingStore()
     inventory = NHIInventory()
+    registry_state = RegistryState()
+    registry_state.adopt_legacy(vendors)
 
     from .llm import PROMPT_CACHE
 
@@ -198,10 +200,8 @@ def assess(cfg: RunConfig) -> RunResult:
             (all_findings if assessment.kind == "finding" else all_gaps).append(stored)
 
         if work.snaps:
-            update_vendor_state(
-                vendor,
-                hashes={s.source: s.sha256 for s in work.snaps if not s.error},
-                cfg=cfg,
+            registry_state.record(
+                slug, hashes={s.source: s.sha256 for s in work.snaps if not s.error}
             )
 
     # -- NHI evaluate after every plane has been collected ------------------
@@ -273,6 +273,7 @@ def assess(cfg: RunConfig) -> RunResult:
     path = rp.write_report(text, ctx, cfg)
     store.save(cfg)
     inventory.save(cfg)
+    registry_state.save(cfg)
     from .llm import save_cache
 
     save_cache(cfg)

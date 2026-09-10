@@ -15,46 +15,123 @@ from typing import Any
 
 import yaml
 
-from .config import FINDINGS_FILE, VENDORS_DIR, RunConfig
+from .config import (
+    FINDINGS_FILE,
+    REGISTRY_STATE_FILE,
+    SANDBOX_VENDORS_DIR,
+    VENDORS_DIR,
+    RunConfig,
+)
 from .evaluate import due_date_for
 
 REQUIRED_KEYS = ("vendor", "slug", "tier")
 
 
+def register_dirs() -> list[Path]:
+    """Where registers are read from, lowest precedence first.
+
+    The shipped demo registers and the ones a human writes live in separate
+    directories so ``vra connect`` cannot collide with a fixture, and so a real
+    portfolio is never committed to this repo.
+    """
+    return [SANDBOX_VENDORS_DIR, VENDORS_DIR]
+
+
 def load_vendors(cfg: RunConfig) -> list[dict]:
-    vendors: list[dict] = []
-    for path in sorted(VENDORS_DIR.glob("*.yaml")):
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError(f"{path} does not contain a mapping")
-        missing = [k for k in REQUIRED_KEYS if k not in data]
-        if missing:
-            raise ValueError(f"{path} missing required keys: {missing}")
-        data["_path"] = str(path)
-        if cfg.vendors and data["slug"] not in cfg.vendors and data["vendor"] not in cfg.vendors:
+    by_slug: dict[str, dict] = {}
+    for directory in register_dirs():
+        if not directory.is_dir():
             continue
-        vendors.append(data)
+        for path in sorted(directory.glob("*.yaml")):
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError(f"{path} does not contain a mapping")
+            missing = [k for k in REQUIRED_KEYS if k not in data]
+            if missing:
+                raise ValueError(f"{path} missing required keys: {missing}")
+            data["_path"] = str(path)
+            # A user register shadows a demo one with the same slug.
+            by_slug[data["slug"]] = data
+
+    vendors = [v for _, v in sorted(by_slug.items())]
+    if cfg.vendors:
+        vendors = [
+            v for v in vendors
+            if v["slug"] in cfg.vendors or v["vendor"] in cfg.vendors
+        ]
     return vendors
 
 
-def update_vendor_state(vendor: dict, *, hashes: dict[str, str], cfg: RunConfig) -> None:
-    """Write back only the machine-owned `state:` block of the vendor YAML.
+class RegistryState:
+    """Machine-owned per-vendor bookkeeping, kept out of the register.
 
-    Rewrites the file with yaml.safe_dump, so comments in the human-authored
-    portion are not preserved. In dry-run this is skipped entirely.
+    ``last_assessed`` and ``snapshot_hashes`` used to be written back into
+    ``vendors/*.yaml`` after every run. Nothing ever read them, but the write
+    round-tripped the file through ``yaml.safe_dump`` — stripping the comments
+    of a file the README says the human owns, and leaving a dirty working tree
+    after every cycle. It lives here instead.
+
+    A legacy ``state:`` block still in a register is read once and carried
+    forward, so upgrading loses nothing. The register itself is never rewritten.
     """
-    if cfg.dry_run:
-        return
-    path = Path(vendor["_path"])
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    state = data.setdefault("state", {}) or {}
-    state["last_assessed"] = datetime.now(timezone.utc).isoformat()
-    state["snapshot_hashes"] = hashes
-    data["state"] = state
-    path.write_text(
-        yaml.safe_dump(data, sort_keys=False, default_flow_style=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+
+    VERSION = 1
+
+    def __init__(self, path: Path = REGISTRY_STATE_FILE):
+        self.path = path
+        self.vendors: dict[str, dict[str, Any]] = {}
+        self._dirty = False
+        self.load()
+
+    def load(self) -> None:
+        if not self.path.exists():
+            return
+        try:
+            blob = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if blob.get("version") != self.VERSION:
+            return
+        vendors = blob.get("vendors")
+        if isinstance(vendors, dict):
+            self.vendors = {k: v for k, v in vendors.items() if isinstance(v, dict)}
+
+    def adopt_legacy(self, vendors: list[dict]) -> None:
+        """Carry a pre-split ``state:`` block forward, without touching the file."""
+        for vendor in vendors:
+            slug = vendor.get("slug")
+            legacy = vendor.get("state")
+            if not slug or slug in self.vendors or not isinstance(legacy, dict):
+                continue
+            if legacy.get("last_assessed") or legacy.get("snapshot_hashes"):
+                self.vendors[slug] = {
+                    "last_assessed": legacy.get("last_assessed"),
+                    "snapshot_hashes": dict(legacy.get("snapshot_hashes") or {}),
+                    "migrated_from_register": True,
+                }
+                self._dirty = True
+
+    def get(self, slug: str) -> dict[str, Any]:
+        return self.vendors.get(slug) or {}
+
+    def record(self, slug: str, *, hashes: dict[str, str]) -> None:
+        self.vendors[slug] = {
+            "last_assessed": datetime.now(timezone.utc).isoformat(),
+            "snapshot_hashes": dict(hashes),
+        }
+        self._dirty = True
+
+    def save(self, cfg: RunConfig) -> None:
+        if cfg.dry_run or not self._dirty:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(
+            {"version": self.VERSION, "vendors": self.vendors}, indent=2, default=str
+        )
+        tmp = self.path.with_name(f".{self.path.name}.tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(self.path)
+        self._dirty = False
 
 
 # ---------------------------------------------------------------------------

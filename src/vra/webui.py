@@ -42,6 +42,7 @@ import argparse
 import hmac
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -652,11 +653,18 @@ class _Handler(BaseHTTPRequestHandler):
 
 def _load_registers() -> list[dict]:
     out = []
-    for path in sorted(VENDORS_DIR.glob("*.yaml")):
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            data["_path"] = str(path)
-            out.append(data)
+    from .register import register_dirs
+
+    seen: dict[str, dict] = {}
+    for directory in register_dirs():
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("*.yaml")):
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data["_path"] = str(path)
+                seen[data.get("slug") or str(path)] = data
+    out.extend(seen[k] for k in sorted(seen))
     return out
 
 
@@ -758,10 +766,17 @@ def _list_vendors() -> list[dict]:
 
 
 def _vendor_yaml(slug: str) -> str | None:
-    path = VENDORS_DIR / f"{slug}.yaml"
-    if not path.exists():
+    from .register import register_dirs
+
+    # A register name is a path segment from a URL, so refuse anything that
+    # could climb out of the directories we are willing to serve.
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", slug or "") or slug.startswith("."):
         return None
-    return path.read_text(encoding="utf-8")
+    for directory in reversed(register_dirs()):  # user register wins
+        path = directory / f"{slug}.yaml"
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    return None
 
 
 def _controls() -> list[dict]:

@@ -13,7 +13,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-VENDORS_DIR = REPO_ROOT / "vendors"
+# Registers a human owns. `vra connect` writes here, and it is gitignored so a
+# real portfolio never lands in the repo.
+VENDORS_DIR = Path(os.environ.get("VRA_VENDORS_DIR") or (REPO_ROOT / "vendors"))
+# Demo registers that ship with the repo. Kept apart from the user's own so
+# connecting a real vendor cannot collide with a fixture.
+SANDBOX_VENDORS_DIR = REPO_ROOT / "sandbox" / "registers"
 CONTROLS_FILE = REPO_ROOT / "controls.yaml"
 NHI_CONTROLS_FILE = REPO_ROOT / "nhi_controls.yaml"
 DATA_DIR = REPO_ROOT / "data"
@@ -26,6 +31,7 @@ LLM_CACHE_FILE = DATA_DIR / "llm_cache.json"
 LLM_CACHE_MAX_ENTRIES = int(os.environ.get("VRA_LLM_CACHE_MAX", "5000"))
 FINDINGS_FILE = DATA_DIR / "findings.json"
 NHI_FILE = DATA_DIR / "nhis.json"
+REGISTRY_STATE_FILE = DATA_DIR / "registry_state.json"
 MONITOR_STATUS_FILE = DATA_DIR / "monitor.json"
 MONITOR_LOCK_FILE = DATA_DIR / "monitor.lock"
 MONITOR_STOP_FILE = DATA_DIR / "monitor.stop"

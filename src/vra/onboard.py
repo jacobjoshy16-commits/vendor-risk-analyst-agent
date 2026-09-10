@@ -289,10 +289,6 @@ def _scaffold(
                 "vendor question. Replace watch paths with live URLs to watch continuously."
             ),
         },
-        "state": {
-            "last_assessed": None,
-            "snapshot_hashes": {},
-        },
     }
 
 

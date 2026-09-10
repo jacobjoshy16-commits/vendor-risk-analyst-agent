@@ -392,7 +392,7 @@ class TestGroundTruthScenario(unittest.TestCase):
         import yaml
         cls.vendors = {
             p.stem: yaml.safe_load(p.read_text())
-            for p in (REPO / "vendors").glob("*.yaml")
+            for p in (REPO / "sandbox" / "registers").glob("*.yaml")
         }
 
     def test_all_registers_load_and_are_wellformed(self):

@@ -227,10 +227,6 @@ def build_stub(
             "base_url": base_url,
             "notes": STUB_NOTES.format(slug=slug),
         },
-        "state": {
-            "last_assessed": None,
-            "snapshot_hashes": {},
-        },
     }
 
 

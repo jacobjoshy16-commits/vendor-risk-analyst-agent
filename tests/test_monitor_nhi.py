@@ -28,7 +28,7 @@ class TestNHIInventory(unittest.TestCase):
         cls.controls = load_nhi_controls()
         cls.vendors = {
             p.stem: yaml.safe_load(p.read_text())
-            for p in (REPO / "vendors").glob("*.yaml")
+            for p in (REPO / "sandbox" / "registers").glob("*.yaml")
         }
 
     def test_nhi_control_set_is_separate_from_aiv(self):
@@ -258,7 +258,7 @@ class TestMonitorDaemon(unittest.TestCase):
     def test_identical_snapshots_are_not_rewritten(self):
         from vra.watch import snapshot_vendor, snapshots_unchanged
 
-        vendor = yaml.safe_load((REPO / "vendors/meridian-revcycle.yaml").read_text())
+        vendor = yaml.safe_load((REPO / "sandbox" / "registers" / "meridian-revcycle.yaml").read_text())
         cfg = RunConfig(offline=True, snapshot_version="v1", dry_run=True)
         snaps = snapshot_vendor(vendor, cfg)
         self.assertTrue(all(not s.error for s in snaps))
