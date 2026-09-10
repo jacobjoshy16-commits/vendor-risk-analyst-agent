@@ -560,19 +560,32 @@ def print_inventory(vendor: str | None = None) -> int:
     if not rows:
         print("No NHIs inventoried yet. Run `python3 vra.py discover` against the IdP, or `monitor --once`.")
         return 0
-    print(f"{'Vendor':<24} {'Identity':<28} {'Kind':<18} {'Write scopes':<28} {'Owner':<22} Source")
-    print("-" * 140)
+    from .nhi import is_stale, staleness_days
+
+    print(f"{'Vendor':<24} {'Identity':<28} {'Kind':<18} {'Write scopes':<28} "
+          f"{'Owner':<22} {'Last seen':<12} Source")
+    print("-" * 155)
+    stale_n = 0
     for r in rows:
         writes = ", ".join(r.get("write_scopes") or []) or "none"
+        source = r.get("source") or ""
+        if is_stale(r):
+            stale_n += 1
+            days = r.get("stale_days") or staleness_days(r)
+            source = f"{source}  ** STALE {days}d **" if days else f"{source}  ** STALE **"
         print(
             f"{(r.get('vendor') or ''):<24} "
             f"{(r.get('name') or r.get('principal') or ''):<28} "
             f"{(r.get('kind') or ''):<18} "
             f"{writes[:28]:<28} "
             f"{(r.get('owner') or 'unknown'):<22} "
-            f"{r.get('source') or ''}"
+            f"{(r.get('last_seen') or '—'):<12} "
+            f"{source}"
         )
     print(f"\n{len(rows)} identit{'y' if len(rows) == 1 else 'ies'}")
+    if stale_n:
+        print(f"{stale_n} shown as STALE — last known, not verified on the most "
+              f"recent cycle. Check the tenant credential.")
     return 0
 
 

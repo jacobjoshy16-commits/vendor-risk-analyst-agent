@@ -65,16 +65,30 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     # ---------------------------------------------------------------- 1
     failed_vendors = ctx.get("failed_vendors") or []
     if failed_vendors:
+        crashed = [f for f in failed_vendors if f.get("kind") != "probe"]
+        unreached = [f for f in failed_vendors if f.get("kind") == "probe"]
         a("> ## \u26a0\ufe0f INCOMPLETE ASSESSMENT")
         a(">")
-        a(f"> **{len(failed_vendors)} of {len(vendors)} vendor(s) in scope could not be "
-          "assessed this run.** The counts below cover only the vendors that were. "
-          "A vendor listed here is **unassessed, not clean** — no finding was raised "
-          "or closed for it, and its previously open findings were held.")
+        a(f"> **{len(failed_vendors)} of {len(vendors)} vendor(s) in scope were not "
+          "fully assessed this run.** The counts below cover only what was actually "
+          "verified. A vendor listed here is **unassessed, not clean** — no finding "
+          "was raised or closed for it, and its previously open findings were held.")
         a(">")
-        for fv in failed_vendors:
+        for fv in crashed:
             a(f"> - **{_esc(fv.get('vendor_name') or fv.get('vendor'))}** "
-              f"(`{fv.get('vendor')}`) — {_esc(fv.get('error') or 'unknown error')}")
+              f"(`{fv.get('vendor')}`) — assessment failed: "
+              f"{_esc(fv.get('error') or 'unknown error')}")
+        for fv in unreached:
+            a(f"> - **{_esc(fv.get('vendor_name') or fv.get('vendor'))}** "
+              f"(`{fv.get('vendor')}`) — **tenant not reached**: "
+              f"{_esc(fv.get('error') or 'probe did not run')}")
+        if unreached:
+            a(">")
+            a("> Identities for a tenant that was not reached are shown below as "
+              "**last known**, carried over from the most recent successful probe. "
+              "They are not evidence of the tenant's current state. A revoked or "
+              "expired API token is the usual cause — re-run "
+              "`python3 vra.py creds test <connector>`.")
         a("")
 
     a("## 1. Portfolio summary")
@@ -372,10 +386,22 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
           "pulled from the API, not typed into YAML._")
         a("")
     else:
-        a("| Vendor | Identity | Kind | Principal | Write scopes | Owner | Source | Flags |")
+        from .nhi import is_stale, staleness_days
+
+        stale_rows = [n for n in nhis if is_stale(n)]
+        if stale_rows:
+            a(f"**\u26a0\ufe0f {len(stale_rows)} of {len(nhis)} identities below are "
+              "LAST KNOWN, not current.** They were not re-observed this cycle, so "
+              "their scopes are whatever the last successful probe saw. Rows are "
+              "marked `stale` with the age of the observation.")
+            a("")
+        a("| Vendor | Identity | Kind | Principal | Write scopes | Owner | Last seen | Flags |")
         a("| --- | --- | --- | --- | --- | --- | --- | --- |")
         for n in nhis:
             flags = []
+            if is_stale(n):
+                days = n.get("stale_days") or staleness_days(n)
+                flags.append(f"**stale {days}d**" if days else "**stale**")
             if n.get("orphan"):
                 flags.append("orphan")
             if n.get("cross_vendor"):
@@ -388,9 +414,15 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
                 f"{_esc(n.get('name') or n.get('principal') or '—')} | "
                 f"`{n.get('kind') or '—'}` | `{_esc(n.get('principal') or '—')}` | "
                 f"`{_esc(writes)}` | {_esc(n.get('owner') or 'unknown')} | "
-                f"{n.get('source') or '—'} | {_esc(', '.join(flags) or '—')} |"
+                f"{n.get('last_seen') or '—'} | {_esc(', '.join(flags) or '—')} |"
             )
         a("")
+        if stale_rows:
+            a("Why an identity goes stale:")
+            a("")
+            for reason in sorted({str(n.get("stale_reason") or "") for n in stale_rows} - {""}):
+                a(f"- {_esc(reason)}")
+            a("")
         nhi_findings = [
             f for f in open_findings
             if str(f.get("control_id") or "").startswith("NHI-")

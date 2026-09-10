@@ -23,6 +23,7 @@ class VendorWork:
     vendor: dict
     error: str | None = None
     probe_failed: bool = False
+    probe_error: str | None = None
     snaps: list = field(default_factory=list)
     diffs: list = field(default_factory=list)
     triage_results: list = field(default_factory=list)
@@ -127,8 +128,8 @@ def collect_vendor(vendor: dict, cfg: RunConfig, portfolio: list[dict], controls
         work.discovered = discovered
         if (vendor.get("probe") or {}).get("enabled") and not pres.ran:
             work.probe_failed = True
-            if pres.error:
-                work.notes.append(f"probe did not run: {pres.error}")
+            work.probe_error = pres.error or "the configured tenant probe did not run"
+            work.notes.append(f"probe did not run: {work.probe_error}")
 
         findings, gaps = ev.evaluate_vendor(vendor, controls, observed)
         work.findings, work.gaps = findings, gaps

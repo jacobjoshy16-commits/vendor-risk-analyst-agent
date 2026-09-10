@@ -180,6 +180,17 @@ def assess(cfg: RunConfig) -> RunResult:
                 "vendor_name": vendor.get("vendor", slug),
                 "error": work.error,
             })
+        elif work.probe_failed:
+            # The vendor itself assessed, but its tenant was not reached — a
+            # revoked token, a 401, an unreachable host. Its identities are
+            # last-known, so this run did not verify them and must not read as
+            # if it had.
+            failed_vendors.append({
+                "vendor": slug,
+                "vendor_name": vendor.get("vendor", slug),
+                "error": work.probe_error or "tenant probe did not run",
+                "kind": "probe",
+            })
 
         for assessment in work.findings + work.gaps:
             evidence: list[dict] = []
@@ -210,7 +221,11 @@ def assess(cfg: RunConfig) -> RunResult:
         slug = vendor["slug"]
         discovered = discovered_by_vendor.get(slug) or []
         if slug in probe_failed:
-            stored_nhis = inventory.for_vendor(slug)
+            reason = next(
+                (f["error"] for f in failed_vendors if f["vendor"] == slug),
+                "tenant probe did not run",
+            )
+            stored_nhis = inventory.mark_stale(slug, reason=reason)
             all_nhis.extend(stored_nhis)
             for rec in store.findings.values():
                 if rec.get("vendor") == slug and rec.get("family") == "nhi" and rec.get("state") != "closed":
@@ -292,10 +307,18 @@ def assess(cfg: RunConfig) -> RunResult:
     print()
     print("=" * 68)
     if failed_vendors:
-        print(f"  !! {len(failed_vendors)} of {len(vendors)} VENDOR(S) NOT ASSESSED — "
-              f"this run is INCOMPLETE")
+        print(f"  !! {len(failed_vendors)} of {len(vendors)} VENDOR(S) NOT FULLY "
+              f"ASSESSED — this run is INCOMPLETE")
         for fv in failed_vendors:
-            print(f"     {fv['vendor_name']}: {fv['error']}")
+            label = "tenant not reached" if fv.get("kind") == "probe" else "failed"
+            print(f"     {fv['vendor_name']} [{label}]: {fv['error']}")
+        print("-" * 68)
+    from .nhi import is_stale
+
+    stale_n = len([n for n in all_nhis if is_stale(n)])
+    if stale_n:
+        print(f"  !! {stale_n} identit{'y is' if stale_n == 1 else 'ies are'} "
+              f"LAST KNOWN, not verified this cycle")
         print("-" * 68)
     print(f"  Vendors assessed     : {len(vendors) - len(failed_vendors)} of {len(vendors)}")
     print(f"  NHIs inventoried     : {len(all_nhis)}")

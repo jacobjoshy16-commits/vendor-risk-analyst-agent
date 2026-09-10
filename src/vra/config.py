@@ -86,6 +86,11 @@ OWNER_BY_SEVERITY = {
 # rather than a remediation deadline.
 GAP_RESPONSE_DAYS = 21
 
+# An identity the current cycle did not re-observe is last-known, not current.
+# Past this many days it is called out in the report and the console, because a
+# revoked API key otherwise leaves a confident-looking inventory frozen in time.
+STALE_AFTER_DAYS = int(os.environ.get("VRA_STALE_AFTER_DAYS", "2"))
+
 FINDING_STATES = ("open", "awaiting_vendor", "accepted_risk", "closed")
 
 # Values that mean "we do not know", as opposed to a failing answer.

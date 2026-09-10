@@ -28,7 +28,13 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import NHI_CONTROLS_FILE, NHI_FILE, UNKNOWN_TOKENS, RunConfig
+from .config import (
+    NHI_CONTROLS_FILE,
+    NHI_FILE,
+    STALE_AFTER_DAYS,
+    UNKNOWN_TOKENS,
+    RunConfig,
+)
 from .evaluate import (
     Assessment,
     Control,
@@ -297,6 +303,22 @@ def tag_cross_vendor(
                 nhi["cross_vendor"] = True
     nhi["declared"] = bool(declared)
     return nhi
+
+
+def staleness_days(nhi: dict) -> int:
+    """Days since this identity was last actually observed. 0 when unknown."""
+    try:
+        seen = date.fromisoformat(str(nhi.get("last_seen"))[:10])
+    except (TypeError, ValueError):
+        return 0
+    return max(0, (date.today() - seen).days)
+
+
+def is_stale(nhi: dict, *, after_days: int = STALE_AFTER_DAYS) -> bool:
+    """True when a row is last-known rather than current."""
+    if nhi.get("stale"):
+        return True
+    return staleness_days(nhi) > after_days
 
 
 def _as_feature(nhi: dict) -> dict:
@@ -613,6 +635,11 @@ class NHIInventory:
         prev_hash = existing.get("entitlement_hash")
         prev_scopes = list(existing.get("scopes") or [])
         existing.update({k: v for k, v in record.items() if k != "first_seen"})
+        # Re-observing an identity makes it current again. Without this the
+        # staleness flag is sticky: one failed probe would mark the portfolio
+        # last-known forever, and the warning would stop meaning anything.
+        for field in ("stale", "stale_reason", "stale_days"):
+            existing.pop(field, None)
         if prev_hash and prev_hash != ehash:
             delta = entitlement_diff(prev_scopes, scopes)
             from .probe import _is_write_scope
@@ -650,6 +677,23 @@ class NHIInventory:
 
     def all(self) -> list[dict]:
         return sorted(self.identities.values(), key=lambda i: i["key"])
+
+    def mark_stale(self, slug: str, *, reason: str) -> list[dict]:
+        """Flag a vendor's identities as last-known rather than current.
+
+        Called when a probe that should have run did not — a revoked token, a
+        401, an unreachable tenant. The rows are kept (absence of evidence is
+        not evidence of removal) but they must never read as freshly observed.
+        """
+        rows = []
+        for row in self.identities.values():
+            if row.get("vendor") != slug:
+                continue
+            row["stale"] = True
+            row["stale_reason"] = reason
+            row["stale_days"] = staleness_days(row)
+            rows.append(row)
+        return rows
 
     def for_vendor(self, slug: str) -> list[dict]:
         return [i for i in self.all() if i["vendor"] == slug]
