@@ -118,6 +118,69 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     # ---------------------------------------------------------------- 2
     a("## 2. Changes detected this run")
     a("")
+
+    # 2.1 — entitlement drift. This is the "a copilot gained users.manage last
+    # Tuesday" case, and it is the one signal an annual review never sees, so it
+    # gets named identities and scopes rather than a count in the summary.
+    events = [e for e in (ctx.get("events") or [])
+              if e.get("kind") == "entitlement_change"]
+    a("### 2.1 Entitlement changes on non-human identities")
+    a("")
+    if not events:
+        a("_No identity gained or lost a scope since the previous cycle._")
+        a("")
+    else:
+        gained_write = [e for e in events if e.get("gained_write_scope")]
+        if gained_write:
+            a(f"> **\u26a0\ufe0f {len(gained_write)} identit"
+              f"{'y' if len(gained_write) == 1 else 'ies'} gained write scope(s) "
+              "this cycle.** A non-human identity whose entitlements grew is a "
+              "privilege change that no annual review would have seen.")
+            a("")
+        a("| Identity | Vendor | Kind | Gained | Removed | Write? |")
+        a("| --- | --- | --- | --- | --- | --- |")
+        for e in events:
+            gained = ", ".join(f"`{x}`" for x in (e.get("added_scopes") or [])) or "—"
+            removed = ", ".join(f"`{x}`" for x in (e.get("removed_scopes") or [])) or "—"
+            flag = "**YES**" if e.get("gained_write_scope") else "no"
+            a(f"| {_esc(e.get('nhi_name') or e.get('nhi_id') or '?')} "
+              f"| {_esc(e.get('vendor_name') or e.get('vendor'))} "
+              f"| `{e.get('nhi_kind') or 'unknown'}` | {gained} | {removed} | {flag} |")
+        a("")
+
+        # Tie each change to the controls it actually tripped, by matching the
+        # identity's principal against the subject recorded on NHI-* findings.
+        nhi_findings = [f for f in findings if f.get("family") == "nhi"]
+        for e in events:
+            related = [
+                f for f in nhi_findings
+                if f.get("vendor") == e.get("vendor")
+                and e.get("principal")
+                and f.get("subject") == e.get("principal")
+            ]
+            name = e.get("nhi_name") or e.get("nhi_id") or "?"
+            a(f"**{_esc(name)}** — `{e.get('vendor')}`")
+            a("")
+            a(f"- **Observed at:** {e.get('timestamp')}")
+            a(f"- **Entitlement hash:** `{(e.get('previous_hash') or '')[:12]}` → "
+              f"`{(e.get('current_hash') or '')[:12]}`")
+            if e.get("added_scopes"):
+                a(f"- **Scopes gained:** {', '.join('`' + x + '`' for x in e['added_scopes'])}")
+            if e.get("removed_scopes"):
+                a(f"- **Scopes removed:** {', '.join('`' + x + '`' for x in e['removed_scopes'])}")
+            if related:
+                a("- **Control failures on this identity this run:**")
+                for f in sorted(related, key=_sev_key):
+                    a(f"  - `{f.get('severity', '?').upper()}` **{f['control_id']}** "
+                      f"— {f.get('citation', '')}")
+            else:
+                a("- **Control failures on this identity this run:** none. The "
+                  "change is recorded for the audit trail; no NHI-* condition "
+                  "was met.")
+            a("")
+
+    a("### 2.2 Watched vendor artifacts")
+    a("")
     if not changed_sources:
         baseline = [t for t in triages if t.get("is_baseline")]
         if baseline:

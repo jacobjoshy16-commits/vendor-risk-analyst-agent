@@ -32,6 +32,7 @@ from .config import NHI_CONTROLS_FILE, NHI_FILE, UNKNOWN_TOKENS, RunConfig
 from .evaluate import (
     Assessment,
     Control,
+    dedupe_evidence,
     evaluate_condition,
     load_controls,
     to_record,
@@ -618,11 +619,16 @@ class NHIInventory:
             change = {
                 "id": f"entitlement:{key}:{ehash[:12]}",
                 "kind": "entitlement_change",
+                "nhi_kind": record.get("kind"),
                 "family": "nhi",
                 "vendor": vendor_slug,
                 "vendor_name": record.get("vendor_name"),
+                "key": key,
                 "nhi_id": record.get("id") or record.get("app_id"),
                 "nhi_name": record.get("display_name"),
+                # The principal is what an NHI-* finding records as its subject,
+                # so the report can tie this change to the findings it caused.
+                "principal": record.get("principal"),
                 "added_scopes": delta["added_scopes"],
                 "removed_scopes": delta["removed_scopes"],
                 "gained_write_scope": any(_is_write_scope(s) for s in delta["added_scopes"]),
@@ -669,11 +675,11 @@ def assessments_to_records(
                     "confidence": 1.0,
                 }
             )
-        rec = to_record(a, evidence=ev)
+        rec = to_record(a, evidence=dedupe_evidence(ev))
         rec["family"] = "nhi"
         out_f.append(rec)
     for a in gaps:
-        rec = to_record(a, evidence=evidence_by_subject.get(a.subject, []))
+        rec = to_record(a, evidence=dedupe_evidence(evidence_by_subject.get(a.subject, [])))
         rec["family"] = "nhi"
         out_g.append(rec)
     return out_f, out_g

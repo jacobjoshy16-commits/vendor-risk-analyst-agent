@@ -188,14 +188,7 @@ def assess(cfg: RunConfig) -> RunResult:
                     "source": meta["provenance"], "excerpt": meta["evidence"],
                     "change_type": "deterministic_observation", "confidence": 1.0,
                 })
-            seen_ev, uniq = set(), []
-            for e in evidence:
-                key = (e["source"], e["excerpt"][:80])
-                if key not in seen_ev:
-                    seen_ev.add(key)
-                    uniq.append(e)
-
-            record = ev.to_record(assessment, evidence=uniq)
+            record = ev.to_record(assessment, evidence=ev.dedupe_evidence(evidence))
             record = analyst.enrich(record, cfg)
             stored, is_new = store.upsert(record)
             stored["poam"] = analyst.build_poam(stored)

@@ -359,6 +359,24 @@ def owner_for(severity: str, kind: str = "finding") -> str:
     return OWNER_BY_SEVERITY.get(severity, "Vendor Management")
 
 
+def dedupe_evidence(evidence: list[dict]) -> list[dict]:
+    """Drop repeated excerpts, keeping order.
+
+    A finding can collect the same tenant observation twice — once from the
+    field-level evidence map and once from the assessment's provenance — and
+    printing it twice makes the report look like two independent sources.
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[dict] = []
+    for item in evidence or []:
+        key = (str(item.get("source") or ""), str(item.get("excerpt") or "")[:80])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
 def to_record(a: Assessment, *, evidence: list[dict] | None = None) -> dict:
     """Convert an assessment into the persisted finding record shape."""
     return {

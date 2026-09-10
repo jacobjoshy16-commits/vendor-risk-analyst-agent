@@ -674,7 +674,10 @@ def _summary() -> dict:
     vendors = _load_registers()
     blob = _findings_blob()
     findings = blob.get("findings", [])
-    open_findings = [f for f in findings if f.get("state") != "closed"]
+    # findings.json holds both kinds. A gap is an unanswered question, not a
+    # control failure, and counting them together tripled the headline number.
+    live = [f for f in findings if f.get("state") != "closed"]
+    open_findings = [f for f in live if f.get("kind") != "gap"]
     blocked = 0
     watch_sources = 0
     for v in vendors:
@@ -695,7 +698,8 @@ def _summary() -> dict:
     return {
         "vendors": len(vendors),
         "open_findings": len(open_findings),
-        "gaps": len([g for g in findings if g.get("kind") == "gap"]),
+        "critical": len([f for f in open_findings if f.get("severity") == "critical"]),
+        "gaps": len([g for g in live if g.get("kind") == "gap"]),
         "blocked_parses": blocked,
         "watch_sources": watch_sources,
         "nhis": nhis,
