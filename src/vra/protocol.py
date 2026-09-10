@@ -121,13 +121,29 @@ def discover_entra(
     transport: Transport,
     page_limit: int = 99,
     max_pages: int = DEFAULT_MAX_PAGES,
+    max_grant_fetches: int = 500,
+    fetch_grants: bool = True,
     **_kwargs: Any,
 ) -> IdPEstate:
+    """Applications, service principals, and the permissions actually granted.
+
+    Entra keeps entitlements on the service principal, in two shapes:
+
+      appRoleAssignments      application permissions ("User.ReadWrite.All"),
+                              recorded as a GUID that only resolves against the
+                              *resource* principal's appRoles catalogue
+      oauth2PermissionGrants  delegated permissions, a space-separated string
+
+    Without both, every Entra identity reads as having no scopes, and NHI-01
+    (agent principal holding write scopes) can never fire — which would make
+    Entra look clean rather than unassessed.
+    """
     base = (base_url or "https://graph.microsoft.com").rstrip("/")
     if "graph.microsoft.com" not in urlparse(base).netloc:
         base = "https://graph.microsoft.com"
     estate = IdPEstate(provider="entra", base_url=base)
     headers = _bearer(token)
+
     apps = _odata_pages(
         transport, f"{base}/v1.0/applications", headers, estate,
         page_limit=page_limit, max_pages=max_pages,
@@ -138,6 +154,130 @@ def discover_entra(
     )
     estate.applications = [_normalise_entra_app(a) for a in apps]
     estate.service_accounts = [_normalise_entra_sp(s) for s in sps]
+
+    if not fetch_grants:
+        return estate
+
+    # An appRoleId is meaningless on its own. Every resource principal
+    # publishes its own catalogue, so build the id -> permission name map from
+    # the service principals we already fetched (Microsoft Graph's own SP
+    # carries the Graph permissions).
+    role_names: dict[str, str] = {}
+    for sp in sps:
+        for role in sp.get("appRoles") or []:
+            role_id = str(role.get("id") or "")
+            value = role.get("value") or role.get("displayName")
+            if role_id and value:
+                role_names[role_id] = str(value)
+
+    # appId is what ties a service principal to its app registration.
+    app_by_client: dict[str, dict] = {}
+    for app in estate.applications:
+        client_id = str(app.get("client_id") or "")
+        if client_id:
+            app_by_client[client_id] = app
+
+    scopes_by_target: dict[str, set[str]] = {}
+    issued_by_target: dict[str, str] = {}
+    names_by_target: dict[str, str] = {}
+
+    def _target_for(sp: dict[str, Any]) -> tuple[str, str]:
+        """Attribute a grant to the app registration when there is one."""
+        app = app_by_client.get(str(sp.get("appId") or ""))
+        if app is not None:
+            return str(app["id"]), str(app.get("label") or "")
+        return str(sp.get("id") or ""), str(sp.get("displayName") or "")
+
+    # -- application permissions, per service principal ----------------------
+    fetched = 0
+    for sp in sps:
+        sp_id = sp.get("id")
+        if not sp_id:
+            continue
+        if fetched >= max_grant_fetches:
+            estate.truncated = True
+            estate.warnings.append(
+                f"stopped appRoleAssignment fetches at {max_grant_fetches} "
+                "(more service principals remain)"
+            )
+            break
+        fetched += 1
+        status, body, _ = _exchange(
+            transport, "GET",
+            f"{base}/v1.0/servicePrincipals/{sp_id}/appRoleAssignments",
+            headers=headers, params={"$top": page_limit},
+        )
+        estate.requests_made += 1
+        if status == 404:
+            continue
+        if status >= 400:
+            estate.warnings.append(f"appRoleAssignments for {sp_id} returned {status}")
+            continue
+        rows = (body or {}).get("value") if isinstance(body, dict) else body
+        target, name = _target_for(sp)
+        if not target:
+            continue
+        for row in rows or []:
+            role_id = str(row.get("appRoleId") or "")
+            resolved = role_names.get(role_id)
+            if resolved is None:
+                # Never drop a permission just because its catalogue is absent.
+                resolved = f"appRole:{role_id}" if role_id else ""
+                if role_id:
+                    estate.warnings.append(
+                        f"appRole {role_id} on {name or target} could not be resolved "
+                        "to a permission name (its resource principal was not returned)"
+                    )
+            if resolved:
+                scopes_by_target.setdefault(target, set()).add(resolved)
+                names_by_target[target] = name
+                issued_by_target.setdefault(target, row.get("createdDateTime") or "")
+
+    # -- delegated permissions, tenant-wide ----------------------------------
+    sp_by_id = {str(sp.get("id")): sp for sp in sps if sp.get("id")}
+    try:
+        grants = _odata_pages(
+            transport, f"{base}/v1.0/oauth2PermissionGrants", headers, estate,
+            page_limit=page_limit, max_pages=max_pages,
+        )
+    except RuntimeError as exc:
+        grants = []
+        estate.warnings.append(f"oauth2PermissionGrants skipped: {exc}")
+    for grant in grants:
+        sp = sp_by_id.get(str(grant.get("clientId") or ""))
+        if sp is None:
+            continue
+        target, name = _target_for(sp)
+        if not target:
+            continue
+        for scope in str(grant.get("scope") or "").split():
+            scopes_by_target.setdefault(target, set()).add(scope)
+        names_by_target[target] = name
+        issued_by_target.setdefault(target, grant.get("createdDateTime") or "")
+
+    # An app registration and its service principal are two Graph objects for
+    # one identity. Keep the registration (it carries the grants attributed
+    # above) and drop the mirror, but keep any principal with no registration
+    # in this tenant — managed identities and gallery apps live only as SPs,
+    # and they are exactly the ones nobody has inventoried.
+    registered = {str(a.get("client_id") or "") for a in estate.applications}
+    estate.service_accounts = [
+        sp for sp in estate.service_accounts
+        if str(sp.get("client_id") or "") not in registered
+    ]
+
+    estate.oauth_grants = [
+        {
+            "app_id": target,
+            "client_name": names_by_target.get(target) or target,
+            "principal": names_by_target.get(target) or target,
+            "scopes": sorted(scopes),
+            "issued": issued_by_target.get(target) or None,
+            "idp": "entra",
+            "discovered_via": "entra_grants",
+        }
+        for target, scopes in sorted(scopes_by_target.items())
+    ]
     return estate
 
 
@@ -199,12 +339,19 @@ def _normalise_entra_app(app: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalise_entra_sp(sp: dict[str, Any]) -> dict[str, Any]:
+    # servicePrincipalType is quotable and tells apart a workload identity
+    # ("Application") from a managed identity. We do not guess "agent" from a
+    # display name — that stays an overlay a human writes in the register.
+    sp_type = str(sp.get("servicePrincipalType") or "Application")
     return {
         "id": sp.get("id") or sp.get("appId"),
+        "client_id": sp.get("appId"),
         "name": sp.get("displayName") or sp.get("appId"),
         "status": "ACTIVE" if sp.get("accountEnabled", True) else "INACTIVE",
         "created": sp.get("createdDateTime"),
         "userType": "servicePrincipal",
+        "app_type": "servicePrincipal",
+        "service_principal_type": sp_type,
         "idp": "entra",
         "discovered_via": "entra_service_principals",
     }

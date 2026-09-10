@@ -42,6 +42,30 @@ DEFAULT_WORKERS = max(1, min(int(os.environ.get("VRA_WORKERS", "4")), 8))
 
 SEVERITIES = ("critical", "high", "medium", "low")
 
+# A scope counts as a write when its name contains any of these. Substrings,
+# so "okta.users.manage" and "User.ReadWrite.All" both match.
+#
+# The tail of this list exists because Entra grants state-changing power under
+# names containing none of the obvious verbs: Sites.FullControl.All,
+# Mail.Send, Directory.AccessAsUser.All. Under-detecting a write scope means
+# NHI-01 stays quiet on an agent that can act, which is the failure this tool
+# exists to prevent — so they are named explicitly.
+WRITE_SCOPE_MARKERS = (
+    "manage",
+    "write",
+    "revoke",
+    "delete",
+    "create",
+    "update",
+    "admin",
+    "fullcontrol",
+    "accessasuser",
+    "mail.send",
+    "impersonat",
+    "owneddevice",
+    "roleassignment",
+)
+
 # Phase 6.3 — due date derived from severity by a table in code.
 DUE_DAYS_BY_SEVERITY = {
     "critical": 7,

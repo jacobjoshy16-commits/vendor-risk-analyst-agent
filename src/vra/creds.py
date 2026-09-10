@@ -44,7 +44,7 @@ def connector_catalog() -> dict[str, dict[str, Any]]:
 def _connectors() -> dict[str, dict[str, Any]]:
     return connector_catalog()
 
-WRITE_SCOPE_MARKERS = ("manage", "write", "revoke", "delete", "create", "update", "admin")
+from .config import WRITE_SCOPE_MARKERS  # noqa: E402  (one definition, in policy)
 
 
 class MemoryKeyring:

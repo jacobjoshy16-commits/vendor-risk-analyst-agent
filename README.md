@@ -98,8 +98,19 @@ Protocol connectors cover a *class* of APIs, not a brand:
 | Connector | What it lists | You give it |
 | --- | --- | --- |
 | `oidc_apps` | Registered apps + granted scopes | Org URL + token. Flavor (Okta / Auth0 / Entra / Ping / OneLogin) is inferred from the hostname. |
+| `entra` | Applications, service principals, **and the permissions actually granted** — appRole assignments resolved from GUID to name, plus delegated `oauth2PermissionGrants` | Graph token. |
 | `scim` | Service accounts from any SCIM 2.0 `/Users` | SCIM base URL + bearer. Humans are skipped. |
 | `generic_rest` | Whatever your endpoint returns | List URL + JSONPath mapping for `id` / `scopes` / `owner`. |
+
+**Microsoft Entra ID** is a first-class target, not a listing. Entra keeps
+entitlements on the service principal in two shapes — `appRoleAssignments`
+(a GUID that only means something against the resource principal's catalogue)
+and `oauth2PermissionGrants` (a space-separated string). Both are pulled, so an
+Entra agent holding `User.ReadWrite.All` is scored by NHI-01 rather than
+reported as having no scopes. An app registration and its service principal are
+collapsed into one identity; a managed identity with no registration is still
+inventoried. A permission whose catalogue is missing is kept as
+`appRole:<guid>` and warned about — never dropped.
 
 Native connectors stay for products that are not a protocol: **GitHub**
 (app installations), **Google Workspace** (directory service accounts),
