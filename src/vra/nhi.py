@@ -117,23 +117,60 @@ def _id_tokens(nhi: dict) -> set[str]:
     return out
 
 
+def match_keys(nhi: dict) -> set[tuple[str, str]]:
+    """Every quotable token this identity can be matched on.
+
+    Two records describe the same principal exactly when these sets intersect,
+    which is what makes ``same_identity`` an equality test rather than a
+    similarity score — and therefore what lets the linker use an index instead
+    of comparing every identity against every other one.
+    """
+    keys: set[tuple[str, str]] = {("id", token) for token in _id_tokens(nhi)}
+    principal = str(nhi.get("principal") or "").lower()
+    if len(principal) >= 4:
+        keys.add(("principal", principal))
+    name = str(nhi.get("name") or "").lower()
+    if len(name) >= 5:
+        keys.add(("name", name))
+    return keys
+
+
 def same_identity(a: dict, b: dict) -> bool:
     """True when two NHI records describe the same principal.
 
     Matches only quotable identifiers: client/app id (any side, any plane),
     principal, or an exact name of at least 5 characters. Does not fuzzy-match.
     """
-    if _id_tokens(a) & _id_tokens(b):
-        return True
-    for key in ("principal",):
-        av, bv = str(a.get(key) or "").lower(), str(b.get(key) or "").lower()
-        if av and bv and av == bv and len(av) >= 4:
-            return True
-    an, bn = str(a.get("name") or "").lower(), str(b.get("name") or "").lower()
-    return bool(an and bn and an == bn and len(an) >= 5)
+    return bool(match_keys(a) & match_keys(b))
 
 
 IDP_PLANES = {"okta", "auth0"}
+
+
+def _link_pair(left: dict, right: dict, slug_a: str, slug_b: str) -> None:
+    """Record that ``left`` (on ``slug_a``) and ``right`` (on ``slug_b``) are one principal."""
+    left["cross_plane"] = True
+    right["cross_plane"] = True
+    left.setdefault("also_seen_on", [])
+    right.setdefault("also_seen_on", [])
+    if slug_b not in left["also_seen_on"]:
+        left["also_seen_on"].append(slug_b)
+    if slug_a not in right["also_seen_on"]:
+        right["also_seen_on"].append(slug_a)
+    plane_a = (left.get("idp") or "").lower()
+    plane_b = (right.get("idp") or "").lower()
+    # Product-plane observation counts as a declaration.
+    if plane_a in IDP_PLANES and plane_b not in IDP_PLANES:
+        left["declared"] = True
+        left["home_vendor"] = left.get("home_vendor") or slug_b
+        left["cross_vendor"] = True
+    elif plane_b in IDP_PLANES and plane_a not in IDP_PLANES:
+        right["declared"] = True
+        right["home_vendor"] = right.get("home_vendor") or slug_a
+        right["cross_vendor"] = True
+    else:
+        left["declared"] = True
+        right["declared"] = True
 
 
 def link_cross_plane(by_vendor: dict[str, list[dict]]) -> None:
@@ -142,36 +179,32 @@ def link_cross_plane(by_vendor: dict[str, list[dict]]) -> None:
     Does not collapse inventory rows. Each plane keeps its quotable id.
     If the home (product) plane also observed it, NHI-06 is satisfied
     without a YAML declaration.
+
+    Matching is exact-token equality (see ``match_keys``), so candidates come
+    from an inverted index rather than from comparing every identity against
+    every other one. The pairwise form was O(V^2 * N^2): ~1s at 20 vendors x 60
+    identities, ~18s at 50 x 100, and unusable beyond that.
     """
     slugs = list(by_vendor)
-    for i, slug_a in enumerate(slugs):
-        for slug_b in slugs[i + 1:]:
-            for left in by_vendor[slug_a]:
-                for right in by_vendor[slug_b]:
-                    if not same_identity(left, right):
-                        continue
-                    left["cross_plane"] = True
-                    right["cross_plane"] = True
-                    left.setdefault("also_seen_on", [])
-                    right.setdefault("also_seen_on", [])
-                    if slug_b not in left["also_seen_on"]:
-                        left["also_seen_on"].append(slug_b)
-                    if slug_a not in right["also_seen_on"]:
-                        right["also_seen_on"].append(slug_a)
-                    plane_a = (left.get("idp") or "").lower()
-                    plane_b = (right.get("idp") or "").lower()
-                    # Product-plane observation counts as a declaration.
-                    if plane_a in IDP_PLANES and plane_b not in IDP_PLANES:
-                        left["declared"] = True
-                        left["home_vendor"] = left.get("home_vendor") or slug_b
-                        left["cross_vendor"] = True
-                    elif plane_b in IDP_PLANES and plane_a not in IDP_PLANES:
-                        right["declared"] = True
-                        right["home_vendor"] = right.get("home_vendor") or slug_a
-                        right["cross_vendor"] = True
-                    else:
-                        left["declared"] = True
-                        right["declared"] = True
+    index: dict[tuple[str, str], list[tuple[int, int, dict]]] = {}
+    for vi, slug in enumerate(slugs):
+        for ni, nhi in enumerate(by_vendor[slug]):
+            for key in match_keys(nhi):
+                index.setdefault(key, []).append((vi, ni, nhi))
+
+    for vi, slug_a in enumerate(slugs):
+        for left in by_vendor[slug_a]:
+            # Only later vendors: a pair is visited once, and two identities
+            # inside one vendor are never linked to each other.
+            candidates: dict[tuple[int, int], tuple[int, int, dict]] = {}
+            for key in match_keys(left):
+                for cand in index.get(key, ()):
+                    if cand[0] > vi:
+                        candidates[(cand[0], cand[1])] = cand
+            # Sorted so home_vendor's first-write-wins picks the same vendor
+            # the nested loops did.
+            for cand_vi, _, right in sorted(candidates.values(), key=lambda c: (c[0], c[1])):
+                _link_pair(left, right, slug_a, slugs[cand_vi])
 
 
 def _tokens_for(vendor: dict) -> list[str]:
@@ -182,8 +215,60 @@ def _tokens_for(vendor: dict) -> list[str]:
     return [t for t in tokens if t and len(t) >= 4]
 
 
-def tag_cross_vendor(nhi: dict, vendor: dict, portfolio: list[dict] | None) -> dict:
-    """Mark identities that belong to a different vendor than the tenant."""
+class PortfolioIndex:
+    """Register NHIs and vendor name-tokens, indexed once instead of per identity.
+
+    ``tag_cross_vendor`` runs for every discovered identity and used to walk the
+    whole portfolio (and every register NHI on it) each time, which made the
+    declaration check O(identities * vendors * register entries).
+    """
+
+    __slots__ = ("tokens", "by_key", "empty")
+
+    def __init__(self, portfolio: list[dict] | None):
+        # Portfolio order is preserved: both lookups below are first-match-wins.
+        self.tokens: list[tuple[str, tuple[str, ...]]] = []
+        self.by_key: dict[tuple[str, str], list[tuple[int, int, str]]] = {}
+        self.empty = not portfolio
+        for pi, other in enumerate(portfolio or ()):
+            slug = other.get("slug") or ""
+            toks = tuple(_tokens_for(other))
+            if toks:
+                self.tokens.append((slug, toks))
+            for ei, entry in enumerate(other.get("nhis") or []):
+                for key in match_keys(entry):
+                    self.by_key.setdefault(key, []).append((pi, ei, slug))
+
+    def home_by_name(self, principal: str, exclude: str) -> str | None:
+        """First portfolio vendor whose name tokens appear in this principal."""
+        for slug, toks in self.tokens:
+            if slug == exclude:
+                continue
+            if any(tok in principal for tok in toks):
+                return slug
+        return None
+
+    def declaring_slugs(self, nhi: dict) -> list[str]:
+        """Slugs whose register declares this identity, in portfolio order."""
+        hits: dict[tuple[int, int], tuple[int, int, str]] = {}
+        for key in match_keys(nhi):
+            for row in self.by_key.get(key, ()):
+                hits[(row[0], row[1])] = row
+        return [slug for _, _, slug in sorted(hits.values(), key=lambda r: (r[0], r[1]))]
+
+
+def tag_cross_vendor(
+    nhi: dict,
+    vendor: dict,
+    portfolio: list[dict] | None,
+    index: PortfolioIndex | None = None,
+) -> dict:
+    """Mark identities that belong to a different vendor than the tenant.
+
+    Pass ``index`` to reuse one build across a whole vendor's identities;
+    without it the index is built per call, which is only sane for a one-off.
+    """
+    index = index if index is not None else PortfolioIndex(portfolio)
     slug = vendor["slug"]
     principal = (nhi.get("principal") or nhi.get("name") or "").lower()
     resides = nhi.get("resides_in")
@@ -192,13 +277,8 @@ def tag_cross_vendor(nhi: dict, vendor: dict, portfolio: list[dict] | None) -> d
     if resides and resides != slug:
         home = resides
 
-    if not home and portfolio:
-        for other in portfolio:
-            if other.get("slug") == slug:
-                continue
-            if any(tok in principal for tok in _tokens_for(other)):
-                home = other["slug"]
-                break
+    if not home and not index.empty:
+        home = index.home_by_name(principal, exclude=slug) or home
 
     nhi["home_vendor"] = home
     nhi["cross_vendor"] = bool((home and home != slug) or (resides and resides != slug))
@@ -207,15 +287,13 @@ def tag_cross_vendor(nhi: dict, vendor: dict, portfolio: list[dict] | None) -> d
         "register",
         "register+observed",
     )
-    if portfolio:
-        for other in portfolio:
-            for entry in other.get("nhis") or []:
-                if same_identity(entry, nhi):
-                    declared = True
-                    if not home and other.get("slug") != slug:
-                        home = other["slug"]
-                        nhi["home_vendor"] = home
-                        nhi["cross_vendor"] = True
+    if not index.empty:
+        for other_slug in index.declaring_slugs(nhi):
+            declared = True
+            if not home and other_slug != slug:
+                home = other_slug
+                nhi["home_vendor"] = home
+                nhi["cross_vendor"] = True
     nhi["declared"] = bool(declared)
     return nhi
 
@@ -299,16 +377,31 @@ def discover_nhis(
             row.setdefault("days_since_rotated", _age_days(row.get("last_rotated")))
             observed.append(row)
 
+    # One index for this vendor's whole identity set, not one per identity.
+    index = PortfolioIndex(portfolio)
+
+    # Observed identities indexed by match key, so pairing the register overlay
+    # against them is a lookup rather than a scan per register row.
+    observed_by_key: dict[tuple[str, str], list[int]] = {}
+    for oi, obs in enumerate(observed):
+        for key in match_keys(obs):
+            observed_by_key.setdefault(key, []).append(oi)
+
     merged: list[dict] = []
     matched: set[int] = set()
     for reg in register:
-        hit = next((o for o in observed if same_identity(reg, o)), None)
-        if hit is not None:
+        # Lowest index wins, matching the original left-to-right scan.
+        hit_idx = min(
+            (oi for key in match_keys(reg) for oi in observed_by_key.get(key, ())),
+            default=None,
+        )
+        if hit_idx is not None:
+            hit = observed[hit_idx]
             item = _overlay(reg, hit)
             matched.add(id(hit))
         else:
             item = dict(reg)
-        merged.append(tag_cross_vendor(item, vendor, portfolio))
+        merged.append(tag_cross_vendor(item, vendor, portfolio, index))
 
     for obs in observed:
         if id(obs) in matched:
@@ -318,7 +411,7 @@ def discover_nhis(
         item["orphan"] = True
         item["vendor"] = vendor["slug"]
         item["vendor_name"] = vendor.get("vendor") or vendor["slug"]
-        item = tag_cross_vendor(item, vendor, portfolio)
+        item = tag_cross_vendor(item, vendor, portfolio, index)
         # Declared on another vendor's register: not an orphan, just visiting.
         if item.get("declared"):
             item["orphan"] = False

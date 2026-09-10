@@ -109,6 +109,9 @@ At this size the monitor also:
 
 - **Keys identities by immutable id**, not display name. A rename does not
   fork history or drop entitlement tracking.
+- **Links identities through an inverted index.** Matching is exact-token
+  equality, so cross-plane linking is near-linear rather than comparing every
+  identity against every other one: 20k identities link in well under a second.
 - **Polls vendors on a bounded worker pool** (`VRA_WORKERS`, default 4).
 - **Isolates failure.** One vendor's 401 or timeout is logged; last-known
   inventory is kept; the other 19 still run.
