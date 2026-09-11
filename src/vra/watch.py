@@ -164,11 +164,22 @@ def _vendor_snapshot_root(slug: str) -> Path:
     return SNAPSHOT_DIR / slug
 
 
+def _run_order(run_dir: Path) -> tuple[str, int]:
+    """Order by stamp, then by collision counter as a number.
+
+    Sorting the names as text puts `-9` after `-12`, and puts a padded `-002`
+    before an unpadded `-2` left by an older version. Both pick a stale
+    baseline to diff against.
+    """
+    stamp, _, counter = run_dir.name.partition("-")
+    return stamp, int(counter) if counter.isdigit() else 0
+
+
 def previous_snapshot_dir(slug: str) -> Path | None:
     root = _vendor_snapshot_root(slug)
     if not root.exists():
         return None
-    runs = sorted(p for p in root.iterdir() if p.is_dir())
+    runs = sorted((p for p in root.iterdir() if p.is_dir()), key=_run_order)
     return runs[-1] if runs else None
 
 

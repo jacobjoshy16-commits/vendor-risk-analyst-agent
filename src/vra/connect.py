@@ -100,7 +100,7 @@ class ConnectResult:
         bits: list[str] = []
         stored = "✓ stored in keychain" if self.stored else "· keychain unchanged"
         if self.connection_ok:
-            conn = f"✓ connection ok"
+            conn = "✓ connection ok"
         elif self.connection_detail:
             conn = f"✗ connection failed — {self.connection_detail}"
         else:

@@ -17,7 +17,6 @@ import argparse
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from .config import DEFAULT_OUT_DIR, RunConfig
 from . import analyst, evaluate as ev, report as rp
@@ -25,12 +24,11 @@ from .llm import get_backend, probe_ollama
 from .nhi import (
     NHIInventory,
     assessments_to_records,
-    discover_nhis,
     evaluate_nhis,
     link_cross_plane,
     load_nhi_controls,
 )
-from .register import FindingStore, RegistryState, load_vendors
+from .register import FindingStore, RegistryState, load_vendors, select_vendors
 
 
 @dataclass
@@ -95,16 +93,17 @@ def run(cfg: RunConfig) -> int:
 
 def assess(cfg: RunConfig) -> RunResult:
     result = RunResult()
-    vendors = load_vendors(cfg)
+    # One parse of the register per run. The unfiltered portfolio is needed
+    # anyway so cross-vendor NHI declarations resolve when this run is scoped
+    # to one vendor, so the scoped list is a filter over it, not a re-read.
+    portfolio = load_vendors(RunConfig())
+    vendors = select_vendors(portfolio, cfg)
     if not vendors:
         print("No vendors matched. Check vendors/ and --vendor filters.", file=sys.stderr)
         result.exit_code = 2
         result.error = "no vendors matched"
         return result
 
-    # Full portfolio (unfiltered) so cross-vendor NHI declarations resolve
-    # even when this run is scoped to one vendor.
-    portfolio = load_vendors(RunConfig())
     controls = ev.load_controls()
     nhi_controls = load_nhi_controls()
     store = FindingStore()
@@ -354,7 +353,15 @@ def assess(cfg: RunConfig) -> RunResult:
     if asked:
         print(f"  Model calls          : {cache_stats['misses']} sent, "
               f"{cache_stats['hits']} reused from cache")
-    print(f"  Report               : {path if path else '(dry-run, not written)'}")
+    if path:
+        report_line = str(path)
+    elif cfg.dry_run:
+        report_line = "(dry-run, not written)"
+    else:
+        # Nothing moved, so no historical copy was kept. Point at the file
+        # that did get refreshed rather than implying none was written.
+        report_line = f"{cfg.out_dir / 'latest.md'} (unchanged since last run)"
+    print(f"  Report               : {report_line}")
     print("=" * 68)
     for f in sorted(crit, key=lambda x: x["vendor"]):
         marker = "NEW " if f["id"] in new_ids else "    "

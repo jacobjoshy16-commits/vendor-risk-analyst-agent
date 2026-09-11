@@ -74,6 +74,11 @@ class LLMResult:
 # ---------------------------------------------------------------------------
 # Audit log
 # ---------------------------------------------------------------------------
+# Cache keys whose hit this process has already recorded. Bounded by the
+# number of distinct prompts, which is bounded by the portfolio.
+_LOGGED_HITS: set[str] = set()
+
+
 def audit(record: dict[str, Any], *, path: Path | None = None, cfg: RunConfig | None = None) -> None:
     # --dry-run promises to persist nothing, and the audit log is on disk like
     # any other artifact. Same gate as the prompt cache's save().
@@ -255,6 +260,7 @@ def reset_cache(path: Path | None = None) -> PromptCache:
     """Swap in a fresh cache. Tests only."""
     global PROMPT_CACHE
     PROMPT_CACHE = PromptCache(path or LLM_CACHE_FILE)
+    _LOGGED_HITS.clear()
     return PROMPT_CACHE
 
 
@@ -571,20 +577,25 @@ def call_json(
             # The model was not asked, so there is no prompt/response pair to
             # log. Record the hit and point at the call that produced the text,
             # so the audit trail still answers "where did this come from".
-            audit({
-                "call_id": str(uuid.uuid4()),
-                "attempt": 0,
-                "task": task,
-                "backend": backend.name,
-                "model": model_name,
-                "context": context or {},
-                "cache": "hit",
-                "cache_key": cache_key[:16],
-                "source_call_id": hit.get("call_id"),
-                "parsed_ok": True,
-                "error": None,
-                "elapsed_s": 0.0,
-            }, cfg=cfg)
+            # Once per key: the monitor re-serves the same hit every cycle for
+            # as long as a finding is unchanged, and the second identical row
+            # answers nothing the first did not.
+            if cache_key not in _LOGGED_HITS:
+                _LOGGED_HITS.add(cache_key)
+                audit({
+                    "call_id": str(uuid.uuid4()),
+                    "attempt": 0,
+                    "task": task,
+                    "backend": backend.name,
+                    "model": model_name,
+                    "context": context or {},
+                    "cache": "hit",
+                    "cache_key": cache_key[:16],
+                    "source_call_id": hit.get("call_id"),
+                    "parsed_ok": True,
+                    "error": None,
+                    "elapsed_s": 0.0,
+                }, cfg=cfg)
             return LLMResult(True, dict(hit["data"]), "", backend.name, cfg.model, 0)
 
     for attempt in range(1, max_attempts + 1):

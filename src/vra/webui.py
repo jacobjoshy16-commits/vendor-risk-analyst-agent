@@ -52,7 +52,7 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 
-from .config import DATA_DIR, VENDORS_DIR, RunConfig
+from .config import DATA_DIR, RunConfig
 from .evaluate import load_controls
 
 PAGE = """<!DOCTYPE html>

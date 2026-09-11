@@ -41,6 +41,16 @@ def register_dirs() -> list[Path]:
     return [SANDBOX_VENDORS_DIR, VENDORS_DIR]
 
 
+def select_vendors(vendors: list[dict], cfg: RunConfig) -> list[dict]:
+    """Apply ``--vendor`` filters to an already-parsed portfolio."""
+    if not cfg.vendors:
+        return list(vendors)
+    return [
+        v for v in vendors
+        if v["slug"] in cfg.vendors or v["vendor"] in cfg.vendors
+    ]
+
+
 def load_vendors(cfg: RunConfig) -> list[dict]:
     by_slug: dict[str, dict] = {}
     for directory in register_dirs():
@@ -57,13 +67,7 @@ def load_vendors(cfg: RunConfig) -> list[dict]:
             # A user register shadows a demo one with the same slug.
             by_slug[data["slug"]] = data
 
-    vendors = [v for _, v in sorted(by_slug.items())]
-    if cfg.vendors:
-        vendors = [
-            v for v in vendors
-            if v["slug"] in cfg.vendors or v["vendor"] in cfg.vendors
-        ]
-    return vendors
+    return select_vendors([v for _, v in sorted(by_slug.items())], cfg)
 
 
 class RegistryState:

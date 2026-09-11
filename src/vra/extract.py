@@ -19,7 +19,6 @@ import html as _html
 import re
 import urllib.parse
 from html.parser import HTMLParser
-from typing import Any
 
 # ---------------------------------------------------------------------------
 # HTML table extraction — tolerant of real-world markup (nested tags inside

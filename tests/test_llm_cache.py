@@ -221,6 +221,16 @@ class TestAuditTrailRecordsHits(_CacheTestCase):
         self.assertTrue(hit["parsed_ok"])
         self.assertNotIn("prompt", hit, "a hit has no prompt to log — none was sent")
 
+    def test_a_repeated_hit_is_not_logged_again(self):
+        """The monitor re-serves the same hit every cycle; one row says it all."""
+        backend = _CountingBackend()
+        for _ in range(5):
+            self.call(backend)
+        rows = [json.loads(line) for line in
+                self._audit.read_text(encoding="utf-8").splitlines() if line.strip()]
+        self.assertEqual(len([r for r in rows if r.get("cache") == "hit"]), 1)
+        self.assertEqual(len([r for r in rows if r.get("cache") == "miss"]), 1)
+
     def test_dry_run_writes_no_audit_log(self):
         """--dry-run says it persists nothing; the log is on disk like the rest."""
         self.call(_CountingBackend(), cfg=RunConfig(dry_run=True))

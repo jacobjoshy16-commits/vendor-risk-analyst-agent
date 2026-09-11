@@ -530,7 +530,7 @@ def _emit_finding(a, f: dict, store, *, is_new: bool) -> None:
     a("")
     a(f"- **Control:** {f['control_question']}")
     a(f"- **Citation:** {f['citation']}")
-    a(f"- **Observed:** " + "; ".join(f"`{k}={v}`" for k, v in f["observed"].items()))
+    a("- **Observed:** " + "; ".join(f"`{k}={v}`" for k, v in f["observed"].items()))
     a(f"- **State:** `{f.get('state', 'open')}` · first seen {f.get('first_seen')} "
       f"({age} day{'s' if age != 1 else ''} old) · due {f.get('due_date')} · owner {f.get('owner')}")
     if not f.get("narrative_model_generated", True):
@@ -700,14 +700,32 @@ def report_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _substance(text: str) -> str:
+    """The report without the header lines that move on every run."""
+    return "\n".join(
+        line for line in text.splitlines()
+        if not line.startswith(("**Generated:**", "**Previous run:**"))
+    )
+
+
 def write_report(text: str, ctx: dict, cfg: RunConfig) -> Path | None:
+    """Write the report. Returns the historical copy's path, if one was kept.
+
+    A poll that changed nothing re-renders a report identical to the last one
+    bar its header. Keeping a timestamped copy of every such run costs the
+    whole report per cycle and buries the runs that did say something, so a
+    repeat only moves ``latest.md``.
+    """
     if cfg.dry_run:
         return None
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = reserve_path(cfg.out_dir / f"vendor-ai-risk-{stamp}.md")
-    path.write_text(text, encoding="utf-8")
     latest = cfg.out_dir / "latest.md"
+    previous = latest.read_text(encoding="utf-8") if latest.is_file() else ""
+    path = None
+    if _substance(previous) != _substance(text):
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        path = reserve_path(cfg.out_dir / f"vendor-ai-risk-{stamp}.md")
+        path.write_text(text, encoding="utf-8")
     latest.write_text(text, encoding="utf-8")
 
     # Machine-readable sidecar for downstream GRC tooling.

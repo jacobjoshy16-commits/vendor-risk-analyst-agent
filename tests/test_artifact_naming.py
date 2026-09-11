@@ -114,6 +114,31 @@ class TestReportsDoNotOverwriteEachOther(unittest.TestCase):
             history = sorted(p.name for p in Path(tmp).glob("vendor-ai-risk-*.md"))
             self.assertEqual(len(history), 2, history)
 
+    def test_a_poll_that_changed_nothing_keeps_no_second_copy(self):
+        """Only the header moves between unchanged cycles — 2 lines of 635."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = RunConfig(out_dir=Path(tmp))
+            body = "# assessment\n\n**Generated:** 2026-09-11 12:00 UTC  \nfindings: 3"
+            first = report_mod.write_report(body, self._ctx(), cfg)
+            repeat = report_mod.write_report(
+                body.replace("12:00", "12:15"), self._ctx(), cfg
+            )
+
+            self.assertIsNotNone(first)
+            self.assertIsNone(repeat, "an unchanged cycle keeps no historical copy")
+            self.assertEqual(len(list(Path(tmp).glob("vendor-ai-risk-*.md"))), 1)
+            # latest.md still moves, so the current view is never stale.
+            self.assertIn("12:15", (Path(tmp) / "latest.md").read_text(encoding="utf-8"))
+
+    def test_a_real_change_is_still_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = RunConfig(out_dir=Path(tmp))
+            report_mod.write_report("# assessment\n\nfindings: 3", self._ctx(), cfg)
+            changed = report_mod.write_report("# assessment\n\nfindings: 4", self._ctx(), cfg)
+
+            self.assertIsNotNone(changed)
+            self.assertEqual(len(list(Path(tmp).glob("vendor-ai-risk-*.md"))), 2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
