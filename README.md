@@ -381,6 +381,13 @@ on messy real vendor prose. Run against Ollama before relying on it.
   parsed table overlays it.
 - A connect stub is enough for NHI discovery. It is **not** a complete AIV-*
   register — those fields stay `unknown` until a human fills them.
+- **NHI-01 cannot fire from IdP discovery alone.** It needs `human_in_loop`,
+  and no directory API reports whether a vendor's agent asks before it acts —
+  Okta, Entra and the rest return identities and scopes, not the vendor
+  product's approval setting. Live discovery therefore gets you as far as an
+  NHI-01 *gap* naming the missing field; `vra enrich <slug>` (or a vendor probe
+  that reads the product's own tenant settings) is what turns it into a
+  critical. The tool will not guess the field from a display name.
 
 ---
 

@@ -518,6 +518,25 @@ def evaluate_nhis(
             unknown_blocks = any(r is None for r in fail_results)
             if any(r is True for r in gap_results) or (unknown_blocks and control.gap_when):
                 conds = control.gap_when or control.fails_when
+                observed_now = _observed(conds, feature, vendor)
+                missing = sorted(
+                    field for field, value in observed_now.items()
+                    if value == "<not recorded>" or _unknown(value)
+                )
+                # Name the field and the remedy. Several of these — notably
+                # human_in_loop — cannot come from an IdP API at all: no
+                # directory reports whether a vendor's agent asks before it
+                # acts. Until a human records it, NHI-01 stays a question
+                # rather than becoming a critical, which is the honest answer
+                # but only useful if the report says what to supply.
+                reason = "required field is unknown; cannot evaluate NHI control"
+                if missing:
+                    reason = (
+                        f"cannot evaluate: {', '.join(missing)} "
+                        f"{'is' if len(missing) == 1 else 'are'} unknown. "
+                        f"No identity-provider API reports this — record it with "
+                        f"`python3 vra.py enrich {vendor['slug']}`."
+                    )
                 gaps.append(
                     Assessment(
                         kind="gap",
@@ -525,8 +544,8 @@ def evaluate_nhis(
                         vendor_name=vendor.get("vendor") or vendor["slug"],
                         feature=name,
                         control=control,
-                        observed=_observed(conds, feature, vendor),
-                        reason="required field is unknown; cannot evaluate NHI control",
+                        observed=observed_now,
+                        reason=reason,
                         subject=subject,
                     )
                 )
