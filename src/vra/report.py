@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,20 @@ def _sev_key(rec: dict) -> tuple[int, str]:
 
 def _esc(text: str) -> str:
     return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def _fenced(text: str) -> list[str]:
+    """Fence quoted vendor text so it cannot break out of its code block.
+
+    The excerpt is the vendor's own wording. A three-backtick fence around
+    text that itself contains three backticks ends early, and the rest lands
+    in the report as live markdown — headings, links, or instructions aimed
+    at whoever (or whatever) reads the report next.
+    """
+    text = str(text)
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return [fence, text, fence]
 
 
 def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
@@ -225,17 +240,13 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
                 if t.get("excerpt_verified", True):
                     a("**Evidence excerpt — checked against the diff, verbatim:**")
                     a("")
-                    a("```")
-                    a(t["evidence_excerpt"])
-                    a("```")
+                    L.extend(_fenced(t["evidence_excerpt"]))
                 else:
                     a("**\u26a0\ufe0f Model excerpt NOT FOUND in the diff** — the model was "
                       "asked to quote a line it was given and did not. This text is the "
                       "model's own and is excluded from every finding's evidence:")
                     a("")
-                    a("```")
-                    a(t["evidence_excerpt"])
-                    a("```")
+                    L.extend(_fenced(t["evidence_excerpt"]))
                 a("")
             if t["ai_relevant"] and t.get("proposed_surface_update"):
                 a("**Proposed register update — NOT APPLIED, awaiting human review:**")

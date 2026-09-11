@@ -42,6 +42,7 @@ from .idp import (
     Transport,
     _exchange,
     next_link,
+    trusted_next,
 )
 
 
@@ -65,18 +66,19 @@ def _items(body: Any, *keys: str) -> list[Any]:
     return []
 
 
-def _json_next(body: Any, headers: dict[str, str], *, base: str) -> str | None:
+def _json_next(
+    body: Any, headers: dict[str, str], *, base: str, estate: IdPEstate | None = None
+) -> str | None:
     """Atlassian admin uses ``links.next``; some lists also send a Link header."""
-    header = next_link(headers, base=base)
+    header = next_link(headers, base=base, estate=estate)
     if header:
         return header
     if not isinstance(body, dict):
         return None
     links = body.get("links") or body.get("meta") or {}
     nxt = links.get("next") if isinstance(links, dict) else None
-    if isinstance(nxt, str) and nxt:
-        return nxt
-    return None
+    # A body-supplied link is as much the vendor's word as a header one.
+    return trusted_next(nxt if isinstance(nxt, str) else None, base=base, estate=estate)
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +186,7 @@ def _paginate_atlassian(
         items.extend(chunk)
         pages += 1
         estate.pages_fetched += 1
-        current = _json_next(body, resp, base=url)
+        current = _json_next(body, resp, base=url, estate=estate)
         query = None
         if not chunk and not current:
             break

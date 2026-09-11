@@ -43,9 +43,12 @@ class SecretInPromptError(RuntimeError):
     """Raised when a raw credential would reach the language-model layer."""
 
 
+# Named so the refusal can say which kind of credential it found without
+# quoting any of it — an exception message travels into logs and tracebacks.
 _SECRET_IN_PROMPT = re.compile(
-    r"(?:SSWS\s+\S+|Bearer\s+[A-Za-z0-9._\-]{20,}|xox[baprs]-[A-Za-z0-9-]+|"
-    r"client_secret\s*[:=]\s*\S+|api_token\s*[:=]\s*\S+)",
+    r"(?P<okta_ssws_token>SSWS\s+\S+)|(?P<bearer_token>Bearer\s+[A-Za-z0-9._\-]{20,})|"
+    r"(?P<slack_token>xox[baprs]-[A-Za-z0-9-]+)|"
+    r"(?P<client_secret>client_secret\s*[:=]\s*\S+)|(?P<api_token>api_token\s*[:=]\s*\S+)",
     re.I,
 )
 
@@ -55,8 +58,9 @@ def assert_prompt_clean(*parts: str) -> None:
     hit = _SECRET_IN_PROMPT.search(blob)
     if hit:
         raise SecretInPromptError(
-            "refusing to send a raw credential to the language model: "
-            + hit.group(0)[:24] + "…"
+            f"refusing to send a raw credential to the language model: "
+            f"what looks like a {hit.lastgroup or 'credential'} appears in the prompt "
+            f"at offset {hit.start()}"
         )
 
 

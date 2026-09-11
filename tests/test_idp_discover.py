@@ -74,9 +74,12 @@ class TestLinkAndProvider(unittest.TestCase):
             )
         }
         self.assertEqual(
-            next_link(headers),
+            next_link(headers, base="https://org.okta.example"),
             "https://org.okta.example/api/v1/apps?after=bbb&limit=200",
         )
+        # No base means no origin to trust the link against, so it is refused
+        # rather than followed with the tenant's token attached.
+        self.assertIsNone(next_link(headers))
 
     def test_infer_provider_from_url_and_block(self):
         self.assertEqual(infer_provider({"provider": "auth0"}), "auth0")

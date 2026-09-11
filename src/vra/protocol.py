@@ -26,6 +26,7 @@ from .idp import (
     discover_auth0,
     discover_okta,
     next_link,
+    trusted_next,
 )
 from .registry import ConnectorManifest, register
 
@@ -454,7 +455,9 @@ def _hal_pages(
         if isinstance(body, dict):
             links = body.get("_links") or {}
             nxt = (links.get("next") or {}).get("href") if isinstance(links.get("next"), dict) else links.get("next")
-        nxt = nxt or next_link(resp, base=url)
+            # A body link is the vendor's word too — same origin rule as the header.
+            nxt = trusted_next(nxt if isinstance(nxt, str) else None, base=url, estate=estate)
+        nxt = nxt or next_link(resp, base=url, estate=estate)
         current = nxt if isinstance(nxt, str) and nxt else None
         query = None
         if not chunk and not current:
@@ -781,7 +784,7 @@ def list_generic_rest(
             "to the JSONPath of the array (e.g. items or $.value)."
         )
         return estate
-    nxt = next_link(resp, base=base_url)
+    nxt = next_link(resp, base=base_url, estate=estate)
     pages = 1
     while nxt and pages < max_pages:
         status, more, resp = _exchange(transport, "GET", nxt, headers=headers)
@@ -794,9 +797,9 @@ def list_generic_rest(
             rows.extend(extra)
         pages += 1
         estate.pages_fetched += 1
-        nxt = next_link(resp, base=base_url)
+        nxt = next_link(resp, base=base_url, estate=estate)
         if isinstance(more, dict) and more.get("@odata.nextLink"):
-            nxt = more["@odata.nextLink"]
+            nxt = trusted_next(more["@odata.nextLink"], base=base_url, estate=estate)
     if nxt:
         estate.truncated = True
 
