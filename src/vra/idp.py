@@ -914,14 +914,26 @@ def discover_estate(
 
     from .registry import known_ids, list_nhis as registry_list
 
-    if provider in known_ids() and provider not in {"okta"}:
-        return registry_list(
-            provider,
-            base_url=base_url,
-            token=token,
-            transport=transport,
-            **extra,
+    known = known_ids()
+    if provider != "okta":
+        if provider in known:
+            return registry_list(
+                provider,
+                base_url=base_url,
+                token=token,
+                transport=transport,
+                **extra,
+            )
+        # Never fall through to the Okta walker for a provider we could not
+        # resolve. That aims one vendor's tenant at another vendor's API and
+        # returns a 404 that reads like a permissions problem, when the real
+        # answer is that we did not know how to walk this provider at all.
+        estate = IdPEstate(provider=provider, base_url=(base_url or "").rstrip("/"))
+        estate.error = (
+            f"no connector registered for provider {provider!r}; "
+            f"known providers: {', '.join(sorted(known))}"
         )
+        return estate
     if not token:
         estate = IdPEstate(provider="okta", base_url=(base_url or "").rstrip("/"))
         estate.error = "no Okta API token"
