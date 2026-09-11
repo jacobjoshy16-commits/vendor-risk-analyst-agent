@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import REPO_ROOT, SNAPSHOT_DIR, RunConfig
+from .config import REPO_ROOT, SNAPSHOT_DIR, RunConfig, reserve_path
 from .extract import (
     decode_bytes,
     detect_trust_platform,
@@ -202,7 +202,9 @@ def store_snapshot(slug: str, snaps: list[SourceSnapshot], cfg: RunConfig) -> Pa
     run_dir = _vendor_snapshot_root(slug) / _utc_stamp()
     if cfg.dry_run:
         return run_dir
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # Two snapshot sets in the same second are two baselines, not one: sharing
+    # a directory would overwrite the older set and corrupt the next diff.
+    run_dir = reserve_path(run_dir, directory=True)
     manifest = {}
     for snap in snaps:
         if snap.error:

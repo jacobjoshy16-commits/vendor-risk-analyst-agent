@@ -48,6 +48,37 @@ DEFAULT_OUT_DIR = REPO_ROOT / "out"
 DEFAULT_MONITOR_INTERVAL = int(os.environ.get("VRA_MONITOR_INTERVAL", "900"))
 DEFAULT_WORKERS = max(1, min(int(os.environ.get("VRA_WORKERS", "4")), 8))
 
+
+def reserve_path(path: Path, *, directory: bool = False) -> Path:
+    """Claim ``path``, or the first free ``name-2``, ``name-3`` … beside it.
+
+    Artifact names are stamped to the second, so two runs inside the same
+    second ask for the same file and the second one used to delete the first
+    one's report. Creation is exclusive (O_EXCL / mkdir), so two processes
+    racing for the same name cannot both win it.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for attempt in range(1, 1000):
+        if attempt == 1:
+            candidate = path
+        else:
+            candidate = path.with_name(f"{path.stem}-{attempt}{path.suffix}")
+        try:
+            if directory:
+                candidate.mkdir()
+            else:
+                candidate.touch(exist_ok=False)
+        except FileExistsError:
+            continue
+        return candidate
+    # 999 artifacts in one second is not a naming problem any more, but the
+    # caller still needs a name it can write to.
+    candidate = path.with_name(f"{path.stem}-{os.getpid()}{path.suffix}")
+    if directory:
+        candidate.mkdir(parents=True, exist_ok=True)
+    return candidate
+
+
 SEVERITIES = ("critical", "high", "medium", "low")
 
 # A scope counts as a write when its name contains any of these. Substrings,

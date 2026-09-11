@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import SEVERITIES, RunConfig
+from .config import SEVERITIES, RunConfig, reserve_path
 
 SEV_ORDER = {s: i for i, s in enumerate(SEVERITIES)}
 
@@ -705,7 +705,7 @@ def write_report(text: str, ctx: dict, cfg: RunConfig) -> Path | None:
         return None
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = cfg.out_dir / f"vendor-ai-risk-{stamp}.md"
+    path = reserve_path(cfg.out_dir / f"vendor-ai-risk-{stamp}.md")
     path.write_text(text, encoding="utf-8")
     latest = cfg.out_dir / "latest.md"
     latest.write_text(text, encoding="utf-8")

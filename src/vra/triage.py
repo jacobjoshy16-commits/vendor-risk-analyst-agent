@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import PENDING_REVIEW_DIR, RunConfig
+from .config import PENDING_REVIEW_DIR, RunConfig, reserve_path
 from .llm import call_json
 from .watch import SourceDiff
 
@@ -255,7 +255,7 @@ def write_pending_review(vendor: dict, results: list[TriageResult], cfg: RunConf
         return None
     PENDING_REVIEW_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = PENDING_REVIEW_DIR / f"{vendor['slug']}-{stamp}.json"
+    path = reserve_path(PENDING_REVIEW_DIR / f"{vendor['slug']}-{stamp}.json")
     payload = {
         "vendor": vendor["vendor"],
         "slug": vendor["slug"],

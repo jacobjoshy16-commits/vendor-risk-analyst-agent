@@ -35,7 +35,7 @@ from typing import Any
 
 import yaml
 
-from .config import PENDING_REVIEW_DIR, REPO_ROOT, RunConfig
+from .config import PENDING_REVIEW_DIR, REPO_ROOT, RunConfig, reserve_path
 from .extract import discover_links, looks_like_pdf
 from .observe import ParseStatus, parse_subprocessors
 from .watch import SOURCE_KINDS, _ingest, fetch, watch_vendor
@@ -404,7 +404,7 @@ def bootstrap_register(
     dest = root / "pending_review" if _root else PENDING_REVIEW_DIR
     dest.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = dest / f"{slug}-bootstrap-{stamp}.json"
+    path = reserve_path(dest / f"{slug}-bootstrap-{stamp}.json")
     payload = {
         "vendor": vendor_name,
         "slug": slug,
@@ -645,7 +645,9 @@ def onboard_vendor(
             outreach_dir = root / "pending_review"
             outreach_dir.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            outreach_path = outreach_dir / f"{slug}-onboarding-outreach-{stamp}.txt"
+            outreach_path = reserve_path(
+                outreach_dir / f"{slug}-onboarding-outreach-{stamp}.txt"
+            )
             draft = draft_blocker_outreach(name, blockers)
             outreach_path.write_text(
                 f"Subject: {draft['subject']}\n\n{draft['body']}\n", encoding="utf-8"
