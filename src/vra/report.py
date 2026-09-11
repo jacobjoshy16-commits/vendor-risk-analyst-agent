@@ -222,11 +222,20 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
             a(f"{t['summary']}")
             a("")
             if t["ai_relevant"] and t.get("evidence_excerpt"):
-                a("**Evidence excerpt (verbatim from diff):**")
-                a("")
-                a("```")
-                a(t["evidence_excerpt"])
-                a("```")
+                if t.get("excerpt_verified", True):
+                    a("**Evidence excerpt — checked against the diff, verbatim:**")
+                    a("")
+                    a("```")
+                    a(t["evidence_excerpt"])
+                    a("```")
+                else:
+                    a("**\u26a0\ufe0f Model excerpt NOT FOUND in the diff** — the model was "
+                      "asked to quote a line it was given and did not. This text is the "
+                      "model's own and is excluded from every finding's evidence:")
+                    a("")
+                    a("```")
+                    a(t["evidence_excerpt"])
+                    a("```")
                 a("")
             if t["ai_relevant"] and t.get("proposed_surface_update"):
                 a("**Proposed register update — NOT APPLIED, awaiting human review:**")
@@ -527,7 +536,8 @@ def _emit_finding(a, f: dict, store, *, is_new: bool) -> None:
     if not f.get("narrative_model_generated", True):
         a("- **Note:** narrative produced by the deterministic template (model unavailable or output rejected).")
     if f.get("evidence"):
-        a("- **Evidence:**")
+        a("- **Evidence** (quoted from the artifact or the tenant API, never "
+          "model prose)**:**")
         for ev in f["evidence"][:3]:
             excerpt = (ev.get("excerpt") or "").strip()
             if excerpt:

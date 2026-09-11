@@ -119,6 +119,28 @@ class TriageResult:
     churn: int = 0
     error: str | None = None
     rejected_fields: list[str] = field(default_factory=list)
+    # False when the model's excerpt could not be found in the diff it was
+    # given. The prompt asks for a verbatim line; this is the check.
+    excerpt_verified: bool = True
+
+
+def verify_excerpt(excerpt: str, diff) -> bool:
+    """True when this text really is a line the diff added.
+
+    The prompt tells the model to quote verbatim. Asking is not a control:
+    a model that paraphrases — or invents — otherwise puts its own prose into
+    a finding's evidence block, under the name of the vendor artifact. So the
+    quote is checked against the source rather than trusted.
+    """
+    text = " ".join(str(excerpt or "").split()).strip().lower()
+    if not text:
+        return True  # nothing claimed, nothing to verify
+    added = [" ".join(str(line).split()).strip().lower()
+             for line in (getattr(diff, "added_lines", None) or [])]
+    if any(text == line for line in added):
+        return True
+    # A quote may be a fragment of a longer added line, but never the reverse.
+    return any(text in line for line in added if line)
 
 
 def _schema_check(obj: dict) -> str | None:
@@ -205,6 +227,9 @@ def triage_diff(vendor: dict, diff: SourceDiff, cfg: RunConfig) -> TriageResult:
     if not ai_relevant:
         change_type, proposed, affected = "none", {}, []
 
+    excerpt = str(data.get("evidence_excerpt", ""))[:1500]
+    verified = verify_excerpt(excerpt, diff)
+
     return TriageResult(
         vendor=vendor["slug"],
         source=diff.source,
@@ -213,12 +238,13 @@ def triage_diff(vendor: dict, diff: SourceDiff, cfg: RunConfig) -> TriageResult:
         summary=str(data.get("summary", ""))[:1000],
         affected_fields=affected,
         proposed_surface_update=proposed,
-        evidence_excerpt=str(data.get("evidence_excerpt", ""))[:1500],
+        evidence_excerpt=excerpt,
         confidence=float(data["confidence"]),
         backend=result.backend,
         llm_ok=True,
         churn=diff.churn,
         rejected_fields=rejected,
+        excerpt_verified=verified,
     )
 
 
