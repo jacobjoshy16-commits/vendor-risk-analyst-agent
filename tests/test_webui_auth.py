@@ -9,8 +9,10 @@ stop that: a per-process token, a pinned Host header, and a same-origin check.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -146,6 +148,77 @@ class TestCrossSiteAndRebinding(unittest.TestCase):
                     {"X-VRA-Token": self.token, "Host": f"{host}:{self.port}"},
                 )
                 self.assertEqual(code, 200)
+
+
+class TestAProxiedConsoleStillWorks(unittest.TestCase):
+    """An end-to-end run found every POST 403ing behind an HTTPS proxy.
+
+    The Origin check demanded an explicit port match against the bound port.
+    A proxied origin is `https://preview.example.com` with no port at all, so
+    it could never match and the console was read-only through a proxy.
+    """
+
+    PROXY = "preview.example.com"
+
+    def setUp(self):
+        patch = unittest.mock.patch.dict(
+            os.environ, {"VRA_WEBUI_ALLOWED_HOSTS": self.PROXY}
+        )
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.server = start_server("127.0.0.1", 0, background=True)
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.port = self.server.server_address[1]
+        self.base = f"http://127.0.0.1:{self.port}"
+        self.token = self.server.auth_token
+
+    def _post(self, origin):
+        return _post(f"{self.base}/api/monitor/stop", {},
+                     {"X-VRA-Token": self.token, "Origin": origin,
+                      "Host": f"{self.PROXY}:{self.port}"})[0]
+
+    def test_an_allowlisted_proxy_origin_without_a_port_is_accepted(self):
+        self.assertEqual(self._post(f"https://{self.PROXY}"), 200)
+
+    def test_the_same_proxy_with_an_explicit_port_is_accepted(self):
+        self.assertEqual(self._post(f"https://{self.PROXY}:443"), 200)
+
+    def test_a_host_not_in_the_allowlist_is_still_refused(self):
+        self.assertEqual(self._post("https://evil.example"), 403)
+
+    def test_loopback_is_still_pinned_to_the_bound_port(self):
+        """On 127.0.0.1 the port is the only thing separating consoles."""
+        code, _ = _post(f"{self.base}/api/monitor/stop", {},
+                        {"X-VRA-Token": self.token,
+                         "Origin": f"http://127.0.0.1:{self.port}"})
+        self.assertEqual(code, 200)
+        code, _ = _post(f"{self.base}/api/monitor/stop", {},
+                        {"X-VRA-Token": self.token,
+                         "Origin": "http://127.0.0.1:9999"})
+        self.assertEqual(code, 403)
+
+    def test_a_proxied_origin_still_needs_the_token(self):
+        code, _ = _post(f"{self.base}/api/monitor/stop", {},
+                        {"Origin": f"https://{self.PROXY}",
+                         "Host": f"{self.PROXY}:{self.port}"})
+        self.assertEqual(code, 401)
+
+
+class TestConsoleReportsTheRealBackend(unittest.TestCase):
+    def test_no_cycle_yet_says_unknown_rather_than_guessing(self):
+        from vra import webui
+
+        with unittest.mock.patch.object(webui, "_monitor", return_value={}):
+            self.assertIn("unknown", webui._summary()["backend"])
+
+    def test_the_backend_comes_from_the_last_cycle(self):
+        from vra import webui
+
+        with unittest.mock.patch.object(
+            webui, "_monitor", return_value={"last_cycle": {"backend": "ollama"}}
+        ):
+            self.assertEqual(webui._summary()["backend"], "ollama")
 
 
 if __name__ == "__main__":

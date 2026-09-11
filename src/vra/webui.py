@@ -460,16 +460,28 @@ class _Handler(BaseHTTPRequestHandler):
         return host in allowed
 
     def _origin_ok(self) -> bool:
-        """A cross-site page must not drive the console. No Origin = not a browser."""
+        """A cross-site page must not drive the console. No Origin = not a browser.
+
+        Loopback origins are pinned to the bound port, because on 127.0.0.1 the
+        port is the only thing separating this console from anything else the
+        user happens to be running. A named host is different: it is only in
+        ``allowed_hosts`` because someone put it in VRA_WEBUI_ALLOWED_HOSTS, and
+        behind an HTTPS proxy its Origin carries no explicit port at all —
+        demanding one made every POST 403 through a proxy.
+        """
         origin = self.headers.get("Origin")
         if not origin:
             return True
-        parsed = urlparse(origin)
-        host = (parsed.hostname or "").lower()
         allowed = getattr(self.server, "allowed_hosts", None)
         if not allowed:
             return True
-        return host in allowed and str(parsed.port or "") == str(self.server.server_address[1])
+        parsed = urlparse(origin)
+        host = (parsed.hostname or "").lower()
+        if host not in allowed:
+            return False
+        if host in LOOPBACK_HOSTS:
+            return str(parsed.port or "") == str(self.server.server_address[1])
+        return True
 
     def _authorized(self) -> bool:
         if not self._host_ok():
@@ -712,7 +724,10 @@ def _summary() -> dict:
         "watch_sources": watch_sources,
         "nhis": nhis,
         "model": os.environ.get("VRA_MODEL", "qwen2.5:7b-instruct"),
-        "backend": "offline-heuristic",
+        # Report the backend the last cycle actually used, not a hardcoded
+        # guess. Absent a run, say so rather than naming one.
+        "backend": ((_monitor().get("last_cycle") or {}).get("backend")
+                    or "unknown (no cycle recorded yet)"),
     }
 
 
