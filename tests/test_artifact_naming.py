@@ -59,6 +59,24 @@ class TestReservePath(unittest.TestCase):
             # the newer set.
             self.assertEqual(sorted([second, first]), [first, second])
 
+    def test_the_newest_of_a_dozen_same_second_sets_is_the_one_sorting_last(self):
+        """`previous_snapshot_dir` sorts by name, so `-9` must not beat `-12`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "acme"
+            made = [
+                reserve_path(root / "20260911T120000Z", directory=True) for _ in range(12)
+            ]
+            newest = sorted(p for p in root.iterdir() if p.is_dir())[-1]
+            self.assertEqual(newest, made[-1], "sorting picked a stale baseline")
+
+    def test_a_later_second_still_sorts_after_a_suffixed_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "acme"
+            reserve_path(root / "20260911T120000Z", directory=True)
+            suffixed = reserve_path(root / "20260911T120000Z", directory=True)
+            later = reserve_path(root / "20260911T120001Z", directory=True)
+            self.assertEqual(sorted([later, suffixed])[-1], later)
+
 
 class TestReportsDoNotOverwriteEachOther(unittest.TestCase):
     def _ctx(self) -> dict:

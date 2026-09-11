@@ -50,33 +50,27 @@ DEFAULT_WORKERS = max(1, min(int(os.environ.get("VRA_WORKERS", "4")), 8))
 
 
 def reserve_path(path: Path, *, directory: bool = False) -> Path:
-    """Claim ``path``, or the first free ``name-2``, ``name-3`` … beside it.
+    """Claim ``path``, or the first free ``name-002`` beside it.
 
-    Artifact names are stamped to the second, so two runs inside the same
-    second ask for the same file and the second one used to delete the first
-    one's report. Creation is exclusive (O_EXCL / mkdir), so two processes
-    racing for the same name cannot both win it.
+    Names are stamped to the second, so two runs in the same second ask for
+    the same one and the later used to delete the earlier's evidence.
+    Creation is exclusive (O_EXCL / mkdir), so racing processes cannot both
+    win a name, and the counter never gives up — a name that is handed back
+    is always one this call owns. It is zero-padded because snapshot sets are
+    ordered by sorting their names: ``-9`` must not sort newer than ``-12``.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    for attempt in range(1, 1000):
-        if attempt == 1:
-            candidate = path
-        else:
-            candidate = path.with_name(f"{path.stem}-{attempt}{path.suffix}")
+    candidate, taken = path, 1
+    while True:
         try:
             if directory:
                 candidate.mkdir()
             else:
                 candidate.touch(exist_ok=False)
+            return candidate
         except FileExistsError:
-            continue
-        return candidate
-    # 999 artifacts in one second is not a naming problem any more, but the
-    # caller still needs a name it can write to.
-    candidate = path.with_name(f"{path.stem}-{os.getpid()}{path.suffix}")
-    if directory:
-        candidate.mkdir(parents=True, exist_ok=True)
-    return candidate
+            taken += 1
+            candidate = path.with_name(f"{path.stem}-{taken:03d}{path.suffix}")
 
 
 SEVERITIES = ("critical", "high", "medium", "low")

@@ -74,7 +74,11 @@ class LLMResult:
 # ---------------------------------------------------------------------------
 # Audit log
 # ---------------------------------------------------------------------------
-def audit(record: dict[str, Any], *, path: Path | None = None) -> None:
+def audit(record: dict[str, Any], *, path: Path | None = None, cfg: RunConfig | None = None) -> None:
+    # --dry-run promises to persist nothing, and the audit log is on disk like
+    # any other artifact. Same gate as the prompt cache's save().
+    if cfg is not None and cfg.dry_run:
+        return
     # Resolved here, not bound as a default, so the destination can be
     # redirected (tests, an alternate data dir) without reimporting.
     path = path or LLM_AUDIT_LOG
@@ -580,7 +584,7 @@ def call_json(
                 "parsed_ok": True,
                 "error": None,
                 "elapsed_s": 0.0,
-            })
+            }, cfg=cfg)
             return LLMResult(True, dict(hit["data"]), "", backend.name, cfg.model, 0)
 
     for attempt in range(1, max_attempts + 1):
@@ -620,7 +624,8 @@ def call_json(
                 "parsed_ok": problem is None,
                 "error": problem,
                 "elapsed_s": elapsed,
-            }
+            },
+            cfg=cfg,
         )
 
         if problem is None:

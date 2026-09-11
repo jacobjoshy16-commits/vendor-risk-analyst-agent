@@ -86,7 +86,6 @@ _READY = False
 # the full set rather than read a half-built one: a missing auth0 entry used
 # to send an Auth0 tenant down the Okta walker.
 _LOCK = threading.RLock()
-_LOADING: int | None = None
 
 
 def register(
@@ -109,28 +108,24 @@ def _ensure() -> None:
     """Register every built-in connector exactly once, atomically.
 
     ``_READY`` is published only after the last ``register_all`` returns, so
-    no reader can observe a partial registry. ``_LOADING`` lets the thread
-    doing the work re-enter (a ``register_all`` that calls back in here) with
-    the lock held, without recursing into registration again.
+    no reader can observe a partial registry. The imports stay outside the
+    lock: they are idempotent, and holding this lock while the import
+    machinery takes its own is how the two deadlock.
     """
-    global _READY, _LOADING
+    global _READY
     if _READY:
         return
-    with _LOCK:
-        if _READY or _LOADING == threading.get_ident():
-            return
-        _LOADING = threading.get_ident()
-        try:
-            from . import connectors as _connectors
-            from . import natives as _natives
-            from . import protocol as _protocol
+    from . import connectors as _connectors
+    from . import natives as _natives
+    from . import protocol as _protocol
 
-            _protocol.register_all()
-            _natives.register_all()
-            _connectors.register_all()
-            _READY = True
-        finally:
-            _LOADING = None
+    with _LOCK:
+        if _READY:
+            return
+        _protocol.register_all()
+        _natives.register_all()
+        _connectors.register_all()
+        _READY = True
 
 
 def all_manifests(*, menu: bool = False) -> list[ConnectorManifest]:

@@ -221,6 +221,11 @@ class TestAuditTrailRecordsHits(_CacheTestCase):
         self.assertTrue(hit["parsed_ok"])
         self.assertNotIn("prompt", hit, "a hit has no prompt to log — none was sent")
 
+    def test_dry_run_writes_no_audit_log(self):
+        """--dry-run says it persists nothing; the log is on disk like the rest."""
+        self.call(_CountingBackend(), cfg=RunConfig(dry_run=True))
+        self.assertFalse(self._audit.exists())
+
 
 class TestAssessReusesAcrossCycles(unittest.TestCase):
     """The whole point: an unchanged finding costs no model calls next cycle."""
