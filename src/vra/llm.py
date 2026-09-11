@@ -524,7 +524,7 @@ def get_backend(cfg: RunConfig) -> Backend:
 
 def probe_ollama(cfg: RunConfig) -> bool:
     """True if an Ollama daemon is reachable and has the configured model."""
-    if cfg.offline:
+    if cfg.offline or cfg.llm_unavailable:
         return False
     try:
         import requests

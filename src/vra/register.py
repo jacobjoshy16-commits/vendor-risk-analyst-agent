@@ -320,6 +320,20 @@ class FindingStore:
 
         # Preserve human-owned lifecycle fields; refresh observed detail.
         existing["last_seen"] = today
+        # Re-observing a closed finding means the condition came back. Leaving
+        # it closed would hide a live failure behind a stale resolution — and a
+        # finding auto-closed by a cycle that simply could not see the tenant
+        # would never reopen once the tenant was reachable again.
+        # accepted_risk is a human decision and is never overridden here.
+        if existing.get("state") == "closed":
+            existing["state"] = "open"
+            existing["reopened_date"] = today
+            existing.pop("closed_date", None)
+            existing.pop("closure_reason", None)
+            existing.setdefault("state_history", []).append(
+                {"date": today, "state": "open",
+                 "note": "reopened: condition observed again"}
+            )
         # `due_date` is deliberately NOT refreshed. to_record() derives it from
         # date.today(), so copying it here pushed the deadline forward on every
         # cycle — with a 15-minute monitor a critical finding could never go
@@ -387,6 +401,23 @@ class FindingStore:
                 finding.setdefault("state_history", []).append(
                     {"date": today, "state": "closed", "note": "auto-closed: condition resolved"}
                 )
+                # An auto-closure is a machine decision about a control failure.
+                # Record it, so the trail shows why a critical stopped being
+                # reported rather than it simply vanishing from the report.
+                self.record_event({
+                    "id": f"closure:{fid}:{today}",
+                    "kind": "finding_auto_closed",
+                    "family": finding.get("family") or "aiv",
+                    "vendor": finding.get("vendor"),
+                    "vendor_name": finding.get("vendor_name"),
+                    "finding_id": fid,
+                    "control_id": finding.get("control_id"),
+                    "severity": finding.get("severity"),
+                    "feature": finding.get("feature"),
+                    "first_seen": finding.get("first_seen"),
+                    "reason": finding["closure_reason"],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
                 closed.append(finding)
             elif self.is_overdue(finding) and not finding.get("escalated"):
                 finding["escalated"] = True

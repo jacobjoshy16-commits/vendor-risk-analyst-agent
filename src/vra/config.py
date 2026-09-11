@@ -147,7 +147,13 @@ class RunConfig:
         default_factory=lambda: os.environ.get("VRA_LLM_CACHE", "1") not in ("0", "false", "no")
     )
 
+    # Set when no local model is reachable. Distinct from `offline`, which
+    # means "touch no network at all" and also gates the tenant probe, the
+    # artifact fetch, and live discovery. Conflating the two let a missing
+    # Ollama silently disable vendor API access.
+    llm_unavailable: bool = False
+
     @property
     def llm_enabled(self) -> bool:
-        """Offline mode swaps the Ollama backend for a deterministic stub."""
-        return not self.offline
+        """True when a real model should be used rather than the heuristic."""
+        return not (self.offline or self.llm_unavailable)

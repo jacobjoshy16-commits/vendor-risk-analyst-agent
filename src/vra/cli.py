@@ -123,11 +123,16 @@ def assess(cfg: RunConfig) -> RunResult:
     if backend_name == "ollama" and not probe_ollama(cfg):
         print(
             f"! Ollama not reachable at {cfg.ollama_host} (or model '{cfg.model}' not pulled).\n"
-            f"  Falling back to the deterministic offline heuristic. Run with --offline to silence "
-            f"this, or start Ollama and `ollama pull {cfg.model}`.",
+            f"  Falling back to the deterministic offline heuristic for narrative and\n"
+            f"  triage text. Tenant probes and artifact fetches still run — pass --offline\n"
+            f"  if you also want no network. Start Ollama and `ollama pull {cfg.model}` to\n"
+            f"  use the model.",
             file=sys.stderr,
         )
-        cfg.offline = True
+        # Only the model is unavailable. Setting cfg.offline here would also
+        # switch off the tenant probe and the artifact fetch, so a missing
+        # local model would silently stop the vendor API being read at all.
+        cfg.llm_unavailable = True
         backend_name = get_backend(cfg).name
 
     from .pool import worker_count
@@ -227,8 +232,13 @@ def assess(cfg: RunConfig) -> RunResult:
             )
             stored_nhis = inventory.mark_stale(slug, reason=reason)
             all_nhis.extend(stored_nhis)
+            # Hold EVERY open finding for this vendor, not just the NHI-* ones.
+            # An AIV-* finding can rest on probe evidence too, and a probe that
+            # did not run produces no assessment to re-raise it — so without
+            # this it looks "no longer observed" and reconcile closes it as
+            # resolved. Absence of evidence is not evidence of remediation.
             for rec in store.findings.values():
-                if rec.get("vendor") == slug and rec.get("family") == "nhi" and rec.get("state") != "closed":
+                if rec.get("vendor") == slug and rec.get("state") != "closed":
                     seen_ids.add(rec["id"])
             continue
         stored_nhis, entitlement_events = inventory.upsert_many(slug, discovered)

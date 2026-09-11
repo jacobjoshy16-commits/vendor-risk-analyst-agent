@@ -58,8 +58,12 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     a(f"**Snapshot set:** `{cfg.snapshot_version}`  ")
     a(f"**Previous run:** {store.last_run or 'none — this is the baseline run'}  ")
     a(f"**Model backend:** `{backend}`" + ("  _(deterministic heuristic, not a language model)_" if backend != "ollama" else f" — model `{cfg.model}`"))
-    a(f"**Mode:** {'dry-run (nothing persisted)' if cfg.dry_run else 'persisted'}"
-      f"{', offline' if cfg.offline else ''}")
+    mode = "dry-run (nothing persisted)" if cfg.dry_run else "persisted"
+    if cfg.offline:
+        mode += ", offline (no network)"
+    elif cfg.llm_unavailable:
+        mode += ", network live but no local model (heuristic text)"
+    a(f"**Mode:** {mode}")
     a("")
 
     # ---------------------------------------------------------------- 1
