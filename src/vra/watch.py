@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import REPO_ROOT, SNAPSHOT_DIR, RunConfig
+from .config import REPO_ROOT, SNAPSHOT_DIR, RunConfig, reserve_path
 from .extract import (
     decode_bytes,
     detect_trust_platform,
@@ -164,11 +164,22 @@ def _vendor_snapshot_root(slug: str) -> Path:
     return SNAPSHOT_DIR / slug
 
 
+def _run_order(run_dir: Path) -> tuple[str, int]:
+    """Order by stamp, then by collision counter as a number.
+
+    Sorting the names as text puts `-9` after `-12`, and puts a padded `-002`
+    before an unpadded `-2` left by an older version. Both pick a stale
+    baseline to diff against.
+    """
+    stamp, _, counter = run_dir.name.partition("-")
+    return stamp, int(counter) if counter.isdigit() else 0
+
+
 def previous_snapshot_dir(slug: str) -> Path | None:
     root = _vendor_snapshot_root(slug)
     if not root.exists():
         return None
-    runs = sorted(p for p in root.iterdir() if p.is_dir())
+    runs = sorted((p for p in root.iterdir() if p.is_dir()), key=_run_order)
     return runs[-1] if runs else None
 
 
@@ -202,7 +213,9 @@ def store_snapshot(slug: str, snaps: list[SourceSnapshot], cfg: RunConfig) -> Pa
     run_dir = _vendor_snapshot_root(slug) / _utc_stamp()
     if cfg.dry_run:
         return run_dir
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # Two snapshot sets in the same second are two baselines, not one: sharing
+    # a directory would overwrite the older set and corrupt the next diff.
+    run_dir = reserve_path(run_dir, directory=True)
     manifest = {}
     for snap in snaps:
         if snap.error:

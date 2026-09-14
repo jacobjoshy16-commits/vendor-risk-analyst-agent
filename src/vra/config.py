@@ -13,15 +13,33 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-VENDORS_DIR = REPO_ROOT / "vendors"
+# Registers a human owns. `vra connect` writes here, and it is gitignored so a
+# real portfolio never lands in the repo.
+VENDORS_DIR = Path(os.environ.get("VRA_VENDORS_DIR") or (REPO_ROOT / "vendors"))
+# Demo registers that ship with the repo. Kept apart from the user's own so
+# connecting a real vendor cannot collide with a fixture.
+SANDBOX_VENDORS_DIR = REPO_ROOT / "sandbox" / "registers"
 CONTROLS_FILE = REPO_ROOT / "controls.yaml"
 NHI_CONTROLS_FILE = REPO_ROOT / "nhi_controls.yaml"
 DATA_DIR = REPO_ROOT / "data"
 SNAPSHOT_DIR = DATA_DIR / "snapshots"
 PENDING_REVIEW_DIR = REPO_ROOT / "pending_review"
 LLM_AUDIT_LOG = DATA_DIR / "llm_audit.jsonl"
+LLM_CACHE_FILE = DATA_DIR / "llm_cache.json"
+# The monitor re-derives every open finding on every cycle. Without a cache it
+# re-asks the model for narrative and outreach text that cannot have changed.
+LLM_CACHE_MAX_ENTRIES = int(os.environ.get("VRA_LLM_CACHE_MAX", "5000"))
 FINDINGS_FILE = DATA_DIR / "findings.json"
 NHI_FILE = DATA_DIR / "nhis.json"
+REGISTRY_STATE_FILE = DATA_DIR / "registry_state.json"
+# Entitlement-change events are the only permanent record that a permission
+# ever moved: nhis.json holds current state only. So they are archived out of
+# the hot store rather than deleted — findings.json is fully re-serialised
+# every cycle, and an unbounded array there is both a size and a write-
+# amplification problem. `vra events purge` is the explicit way to destroy them.
+EVENTS_ARCHIVE_DIR = DATA_DIR / "events"
+EVENT_RETENTION_DAYS = int(os.environ.get("VRA_EVENT_RETENTION_DAYS", "90"))
+EVENT_HOT_MAX = int(os.environ.get("VRA_EVENT_HOT_MAX", "5000"))
 MONITOR_STATUS_FILE = DATA_DIR / "monitor.json"
 MONITOR_LOCK_FILE = DATA_DIR / "monitor.lock"
 MONITOR_STOP_FILE = DATA_DIR / "monitor.stop"
@@ -30,7 +48,56 @@ DEFAULT_OUT_DIR = REPO_ROOT / "out"
 DEFAULT_MONITOR_INTERVAL = int(os.environ.get("VRA_MONITOR_INTERVAL", "900"))
 DEFAULT_WORKERS = max(1, min(int(os.environ.get("VRA_WORKERS", "4")), 8))
 
+
+def reserve_path(path: Path, *, directory: bool = False) -> Path:
+    """Claim ``path``, or the first free ``name-002`` beside it.
+
+    Names are stamped to the second, so two runs in the same second ask for
+    the same one and the later used to delete the earlier's evidence.
+    Creation is exclusive (O_EXCL / mkdir), so racing processes cannot both
+    win a name, and the counter never gives up — a name that is handed back
+    is always one this call owns. It is zero-padded because snapshot sets are
+    ordered by sorting their names: ``-9`` must not sort newer than ``-12``.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    candidate, taken = path, 1
+    while True:
+        try:
+            if directory:
+                candidate.mkdir()
+            else:
+                candidate.touch(exist_ok=False)
+            return candidate
+        except FileExistsError:
+            taken += 1
+            candidate = path.with_name(f"{path.stem}-{taken:03d}{path.suffix}")
+
+
 SEVERITIES = ("critical", "high", "medium", "low")
+
+# A scope counts as a write when its name contains any of these. Substrings,
+# so "okta.users.manage" and "User.ReadWrite.All" both match.
+#
+# The tail of this list exists because Entra grants state-changing power under
+# names containing none of the obvious verbs: Sites.FullControl.All,
+# Mail.Send, Directory.AccessAsUser.All. Under-detecting a write scope means
+# NHI-01 stays quiet on an agent that can act, which is the failure this tool
+# exists to prevent — so they are named explicitly.
+WRITE_SCOPE_MARKERS = (
+    "manage",
+    "write",
+    "revoke",
+    "delete",
+    "create",
+    "update",
+    "admin",
+    "fullcontrol",
+    "accessasuser",
+    "mail.send",
+    "impersonat",
+    "owneddevice",
+    "roleassignment",
+)
 
 # Phase 6.3 — due date derived from severity by a table in code.
 DUE_DAYS_BY_SEVERITY = {
@@ -51,6 +118,16 @@ OWNER_BY_SEVERITY = {
 # Information gaps are outreach, not remediation. They get a response-by date
 # rather than a remediation deadline.
 GAP_RESPONSE_DAYS = 21
+
+# An identity the current cycle did not re-observe is last-known, not current.
+# Past this many days it is called out in the report and the console, because a
+# revoked API key otherwise leaves a confident-looking inventory frozen in time.
+STALE_AFTER_DAYS = int(os.environ.get("VRA_STALE_AFTER_DAYS", "2"))
+
+# NHI-03 asks whether a vendor rotates its non-human credentials at least
+# annually. The token this tool stores is itself such a credential, so it is
+# held to the same rule rather than exempted.
+CREDENTIAL_MAX_AGE_DAYS = int(os.environ.get("VRA_CREDENTIAL_MAX_AGE_DAYS", "365"))
 
 FINDING_STATES = ("open", "awaiting_vendor", "accepted_risk", "closed")
 
@@ -78,15 +155,30 @@ class RunConfig:
     )
     monitor_once: bool = False
     allow_env_creds: bool = False
-    webui_host: str = field(default_factory=lambda: os.environ.get("VRA_WEBUI_HOST", "0.0.0.0"))
+    # Loopback by default. The console has no multi-user model and exposes
+    # POST routes that spawn processes and read local files, so binding it to
+    # every interface is opt-in (VRA_WEBUI_HOST=0.0.0.0 or --host), not the
+    # default. See webui.start_server for the token and Host/Origin checks.
+    webui_host: str = field(default_factory=lambda: os.environ.get("VRA_WEBUI_HOST", "127.0.0.1"))
     webui_port: int = field(
         default_factory=lambda: int(os.environ.get("VRA_WEBUI_PORT", "8765"))
     )
     workers: int = field(
         default_factory=lambda: max(1, min(int(os.environ.get("VRA_WORKERS", "4")), 8))
     )
+    # Reuse a previous model answer when the prompt is byte-identical. Set
+    # VRA_LLM_CACHE=0 to force every cycle to re-ask.
+    llm_cache: bool = field(
+        default_factory=lambda: os.environ.get("VRA_LLM_CACHE", "1") not in ("0", "false", "no")
+    )
+
+    # Set when no local model is reachable. Distinct from `offline`, which
+    # means "touch no network at all" and also gates the tenant probe, the
+    # artifact fetch, and live discovery. Conflating the two let a missing
+    # Ollama silently disable vendor API access.
+    llm_unavailable: bool = False
 
     @property
     def llm_enabled(self) -> bool:
-        """Offline mode swaps the Ollama backend for a deterministic stub."""
-        return not self.offline
+        """True when a real model should be used rather than the heuristic."""
+        return not (self.offline or self.llm_unavailable)

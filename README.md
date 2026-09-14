@@ -68,7 +68,14 @@ Paste API token (hidden)  > ••••••••
 
 **`monitor`** turns itself on. It finds Ollama if you have it, otherwise uses
 the built-in checker. It re-checks every 15 minutes. The local console opens
-on port 8765. Every vendor you connected is picked up on the next cycle.
+on `127.0.0.1:8765` and prints a URL with a one-time token — open that exact
+URL; the console 401s without it. Every vendor you connected is picked up on
+the next cycle.
+
+The console is loopback-only by default because its POST routes start
+processes and read local paths. `--host 0.0.0.0` still works for a preview
+proxy, warns when it does, and needs the proxy hostname in
+`VRA_WEBUI_ALLOWED_HOSTS`.
 
 **`report`** prints the finding summary and opens `out/latest.md`. One place
 to look. At ~20 vendors / ~60 identities, start with the portfolio rollup
@@ -91,8 +98,19 @@ Protocol connectors cover a *class* of APIs, not a brand:
 | Connector | What it lists | You give it |
 | --- | --- | --- |
 | `oidc_apps` | Registered apps + granted scopes | Org URL + token. Flavor (Okta / Auth0 / Entra / Ping / OneLogin) is inferred from the hostname. |
+| `entra` | Applications, service principals, **and the permissions actually granted** — appRole assignments resolved from GUID to name, plus delegated `oauth2PermissionGrants` | Graph token. |
 | `scim` | Service accounts from any SCIM 2.0 `/Users` | SCIM base URL + bearer. Humans are skipped. |
 | `generic_rest` | Whatever your endpoint returns | List URL + JSONPath mapping for `id` / `scopes` / `owner`. |
+
+**Microsoft Entra ID** is a first-class target, not a listing. Entra keeps
+entitlements on the service principal in two shapes — `appRoleAssignments`
+(a GUID that only means something against the resource principal's catalogue)
+and `oauth2PermissionGrants` (a space-separated string). Both are pulled, so an
+Entra agent holding `User.ReadWrite.All` is scored by NHI-01 rather than
+reported as having no scopes. An app registration and its service principal are
+collapsed into one identity; a managed identity with no registration is still
+inventoried. A permission whose catalogue is missing is kept as
+`appRole:<guid>` and warned about — never dropped.
 
 Native connectors stay for products that are not a protocol: **GitHub**
 (app installations), **Google Workspace** (directory service accounts),
@@ -102,6 +120,9 @@ At this size the monitor also:
 
 - **Keys identities by immutable id**, not display name. A rename does not
   fork history or drop entitlement tracking.
+- **Links identities through an inverted index.** Matching is exact-token
+  equality, so cross-plane linking is near-linear rather than comparing every
+  identity against every other one: 20k identities link in well under a second.
 - **Polls vendors on a bounded worker pool** (`VRA_WORKERS`, default 4).
 - **Isolates failure.** One vendor's 401 or timeout is logged; last-known
   inventory is kept; the other 19 still run.
@@ -131,6 +152,40 @@ same principal seen on your IdP and on the vendor API is linked
 is recorded as an `entitlement_change` in `data/findings.json`.
 
 Two copies of the monitor cannot run (`data/monitor.lock`).
+
+### How long it keeps watching, and how long it keeps the record
+
+A stored token has **no expiry in this tool** — it is used until you run
+`vra creds rm`. Its age is tracked, though: `vra creds list` shows when each
+secret was stored and flags anything past `VRA_CREDENTIAL_MAX_AGE_DAYS`
+(default 365), and a run says so in its summary. NHI-03 asks vendors to rotate
+non-human credentials at least annually; this token is one, so it is held to
+the same rule rather than exempted. Re-running `vra creds set <connector>`
+restarts the clock. So the failure that matters is revocation, not expiry: the
+tenant stops answering and the inventory freezes. When a configured probe
+cannot run, its identities are kept but marked **last known**, the run reports
+INCOMPLETE and exits non-zero, and the report says which tenant was not reached
+and why. They are never presented as current.
+
+Entitlement changes are the only permanent record that a permission moved —
+`data/nhis.json` holds current state, not history. So the log is **archived,
+not deleted**: every save rolls anything past the retention window out to
+`data/events/events-YYYY-MM.jsonl`, keeping `findings.json` bounded (it is
+re-serialised every cycle, so an unbounded array there costs write bandwidth as
+well as space). At 50 vendors a simulated year of changes leaves 2.7 MB hot and
+6.4 MB archived, with every event still readable.
+
+```bash
+python3 vra.py events                    # counts, sizes, oldest record
+python3 vra.py events show --limit 20    # recent changes
+python3 vra.py events prune              # roll aged events out now
+python3 vra.py events purge --before 2025-01-01 --yes   # destroy them
+```
+
+`purge` is the only path that destroys anything, it refuses without `--yes`,
+and it tells you how many of the doomed events record an identity *gaining* a
+write scope. Tune with `VRA_EVENT_RETENTION_DAYS` (default 90) and
+`VRA_EVENT_HOT_MAX` (default 5000).
 
 ```bash
 python3 vra.py monitor status
@@ -175,7 +230,10 @@ control that does not.
 | AIV-15 | medium | Feature disableable at tenant level | CM-7, AC-3 | CC6.3 |
 
 Edit `nhi_controls.yaml` / `controls.yaml` without touching code. Due dates:
-critical 7 days, high 30, medium 60, low 90, gaps 21.
+critical 7 days, high 30, medium 60, low 90, gaps 21 — counted from the day
+the finding was **first raised**, not from the current cycle, so a finding the
+monitor re-sees every 15 minutes still goes overdue and escalates. Re-rating a
+control in YAML moves the deadline; it does not restart the clock.
 
 AIV-07 and NHI-01 are AND conditions: acting **and** no human in the loop.
 An agent that acts under review is not a finding.
@@ -202,7 +260,20 @@ an API field.
 **4. Unknown is a question, not a failure.** Unanswered fields are 21-day
 information gaps, not “non-compliant.”
 
+**4a. The register is yours.** A run never rewrites `vendors/*.yaml`. Machine
+bookkeeping goes to `data/registry_state.json`, so your comments survive and a
+cycle leaves no diff. Your registers are gitignored; the three demo vendors
+ship in `sandbox/registers/` and a register of yours shadows a demo one with
+the same slug. Point elsewhere with `VRA_VENDORS_DIR`.
+
 **5. Local by default.** Ollama on the workstation, or the built-in checker.
+
+**6. The model is asked once per distinct prompt.** Narrative and outreach text
+is cached in `data/llm_cache.json`, keyed by a hash of the exact
+backend/model/task/system/prompt. A finding the monitor re-sees unchanged costs
+zero model calls; change anything that reaches the prompt and that entry — only
+that entry — is regenerated. Only the hash is stored, never the prompt text.
+Set `VRA_LLM_CACHE=0` to re-ask every cycle.
 
 ---
 
@@ -222,7 +293,7 @@ Then the three commands above. To replay the planted sandbox scenario:
 ```bash
 python3 vra.py --offline --snapshot v1          # sandbox baseline
 python3 vra.py --offline --snapshot v2          # planted change → exit 1
-python3 -m unittest tests.test_vra tests.test_monitor_nhi tests.test_real_world_vendors tests.test_idp_discover tests.test_creds tests.test_connect
+python3 -m unittest discover -s tests -t .   # every test module, incl. new ones
 ```
 
 Exit codes: `0` clean · `1` open critical · `2` run error.
@@ -235,6 +306,9 @@ Exit codes: `0` clean · `1` open critical · `2` run error.
 | `data/nhis.json` | Portfolio NHI inventory — **this is the product** |
 | `data/findings.json` | Finding lifecycle — **back this up** |
 | `data/monitor.json` | Daemon heartbeat, last 20 cycles |
+| `data/registry_state.json` | Per-vendor last_assessed + snapshot hashes |
+| `data/events/` | Archived entitlement changes, one JSONL per month |
+| `data/llm_cache.json` | Model answers, keyed by prompt hash (LRU, capped) |
 | `data/snapshots/` | Normalized artifacts + hashes |
 | `pending_review/` | Model proposals (never auto-applied) |
 
@@ -307,6 +381,13 @@ on messy real vendor prose. Run against Ollama before relying on it.
   parsed table overlays it.
 - A connect stub is enough for NHI discovery. It is **not** a complete AIV-*
   register — those fields stay `unknown` until a human fills them.
+- **NHI-01 cannot fire from IdP discovery alone.** It needs `human_in_loop`,
+  and no directory API reports whether a vendor's agent asks before it acts —
+  Okta, Entra and the rest return identities and scopes, not the vendor
+  product's approval setting. Live discovery therefore gets you as far as an
+  NHI-01 *gap* naming the missing field; `vra enrich <slug>` (or a vendor probe
+  that reads the product's own tenant settings) is what turns it into a
+  critical. The tool will not guess the field from a display name.
 
 ---
 
@@ -316,7 +397,8 @@ on messy real vendor prose. Run against Ollama before relying on it.
 vra.py                  entry point — connect / monitor / report
 nhi_controls.yaml       8 NHI-* controls — the identity set (800-53 + SOC 2)
 controls.yaml           15 AIV-* controls — the feature set (800-53 + SOC 2)
-vendors/*.yaml          per-vendor register; nhis: is overlay, not the list
+vendors/*.yaml          YOUR registers (gitignored) — `vra connect` writes here
+sandbox/registers/      the three demo registers that ship with the repo
 src/vra/connect.py      the interactive front door
 src/vra/idp.py          IdP connectors (Okta / Auth0) + dispatcher
 src/vra/connectors.py   vendor connectors (Atlassian, Slack, …)

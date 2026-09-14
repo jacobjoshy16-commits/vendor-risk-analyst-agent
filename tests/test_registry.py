@@ -66,12 +66,17 @@ class TestProtocolConnectors(unittest.TestCase):
         self.assertIsNone(err)
         assert estate is not None
         self.assertEqual(estate.provider, "entra")
-        self.assertEqual(len(estate.applications), 2)
-        self.assertEqual(len(estate.service_accounts), 1)
+
+        labels = {a["label"] for a in estate.applications}
+        self.assertIn("Access Copilot", labels, "page 1")
+        self.assertIn("Billing Bot", labels, "page 2 — reached only via @odata.nextLink")
+        self.assertIn("Reporting Reader", labels)
+
         nhis = _extract_nhis(estate.to_probe_blob())
         ids = {n["id"] for n in nhis}
         self.assertIn("app-copilot-01", ids)
-        self.assertIn("sp-writer-01", ids)
+        # A managed identity has no app registration, so it stays a principal.
+        self.assertIn("sp-rovo-writer", ids)
 
     def test_scim_keeps_service_accounts_skips_humans(self):
         estate, err = discover_from_recorded(REPO / "sandbox/probe/idp/scim_pages.json")

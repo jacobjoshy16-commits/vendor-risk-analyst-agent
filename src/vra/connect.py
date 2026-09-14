@@ -100,7 +100,7 @@ class ConnectResult:
         bits: list[str] = []
         stored = "✓ stored in keychain" if self.stored else "· keychain unchanged"
         if self.connection_ok:
-            conn = f"✓ connection ok"
+            conn = "✓ connection ok"
         elif self.connection_detail:
             conn = f"✗ connection failed — {self.connection_detail}"
         else:
@@ -226,10 +226,6 @@ def build_stub(
             "provider": provider,
             "base_url": base_url,
             "notes": STUB_NOTES.format(slug=slug),
-        },
-        "state": {
-            "last_assessed": None,
-            "snapshot_hashes": {},
         },
     }
 

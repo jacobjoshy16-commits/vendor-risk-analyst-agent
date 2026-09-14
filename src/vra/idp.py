@@ -20,7 +20,6 @@ estate, the inventory, or the report. The model is not on this path.
 from __future__ import annotations
 
 import json
-import os
 import random
 import re
 import time
@@ -264,7 +263,53 @@ def _with_params(url: str, params: dict[str, Any] | None) -> str:
     return urlunparse(parsed._replace(query=urlencode(sorted(merged.items()))))
 
 
-def next_link(headers: dict[str, str], *, base: str = "") -> str | None:
+def _origin(url: str) -> tuple[str, str, int] | None:
+    """scheme/host/port, with the default port made explicit. None if not HTTP."""
+    try:
+        parsed = urlparse(url or "")
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    return (
+        parsed.scheme,
+        parsed.hostname.lower(),
+        parsed.port or (443 if parsed.scheme == "https" else 80),
+    )
+
+
+def trusted_next(
+    url: str | None, *, base: str, estate: "IdPEstate | None" = None
+) -> str | None:
+    """Accept a next-page URL only on the origin we authenticated to.
+
+    A next link arrives inside the vendor's own response — a Link header, a
+    ``_links.next``, an ``@odata.nextLink``. Every walker sends this tenant's
+    Authorization header with the follow-up request, so a compromised or
+    hostile API that answers one page with a link to another host would be
+    handed the tenant's token. It is refused.
+
+    Refusing also means the listing stopped early, so the estate is marked
+    truncated rather than passed off as a complete read of the tenant.
+    """
+    if not url:
+        return None
+    if _origin(url) is not None and _origin(url) == _origin(base):
+        return url
+    if estate is not None:
+        host = urlparse(url).netloc or "an unparsable URL"
+        estate.warnings.append(
+            f"refused a next-page link pointing at {host!r}, which is not the "
+            "origin this token authenticates to. The listing is incomplete; "
+            "the token was not sent there."
+        )
+        estate.truncated = True
+    return None
+
+
+def next_link(
+    headers: dict[str, str], *, base: str = "", estate: "IdPEstate | None" = None
+) -> str | None:
     raw = headers.get("Link") or headers.get("link") or ""
     if not raw:
         return None
@@ -272,9 +317,9 @@ def next_link(headers: dict[str, str], *, base: str = "") -> str | None:
         match = _LINK_NEXT.search(part)
         if match:
             href = match.group(1).strip()
-            if href.startswith("http"):
-                return href
-            return urljoin(base.rstrip("/") + "/", href.lstrip("/"))
+            if not href.startswith("http"):
+                href = urljoin(base.rstrip("/") + "/", href.lstrip("/"))
+            return trusted_next(href, base=base, estate=estate)
     return None
 
 
@@ -536,7 +581,7 @@ def _paginate_okta_list(
         items.extend(page_items)
         pages += 1
         estate.pages_fetched += 1
-        url = next_link(resp_headers, base=base)
+        url = next_link(resp_headers, base=base, estate=estate)
         query = None
         if not page_items and not url:
             break
@@ -914,14 +959,26 @@ def discover_estate(
 
     from .registry import known_ids, list_nhis as registry_list
 
-    if provider in known_ids() and provider not in {"okta"}:
-        return registry_list(
-            provider,
-            base_url=base_url,
-            token=token,
-            transport=transport,
-            **extra,
+    known = known_ids()
+    if provider != "okta":
+        if provider in known:
+            return registry_list(
+                provider,
+                base_url=base_url,
+                token=token,
+                transport=transport,
+                **extra,
+            )
+        # Never fall through to the Okta walker for a provider we could not
+        # resolve. That aims one vendor's tenant at another vendor's API and
+        # returns a 404 that reads like a permissions problem, when the real
+        # answer is that we did not know how to walk this provider at all.
+        estate = IdPEstate(provider=provider, base_url=(base_url or "").rstrip("/"))
+        estate.error = (
+            f"no connector registered for provider {provider!r}; "
+            f"known providers: {', '.join(sorted(known))}"
         )
+        return estate
     if not token:
         estate = IdPEstate(provider="okta", base_url=(base_url or "").rstrip("/"))
         estate.error = "no Okta API token"

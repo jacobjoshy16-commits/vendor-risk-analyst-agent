@@ -14,6 +14,7 @@ connectors cover one product.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -80,6 +81,11 @@ _MANIFESTS: dict[str, ConnectorManifest] = {}
 _LISTERS: dict[str, ListNhis] = {}
 _PINGS: dict[str, PingFn] = {}
 _READY = False
+# Registration is lazy and the poll pool is threaded, so a second thread can
+# ask for a connector while the first is still registering. It must wait for
+# the full set rather than read a half-built one: a missing auth0 entry used
+# to send an Auth0 tenant down the Okta walker.
+_LOCK = threading.RLock()
 
 
 def register(
@@ -89,31 +95,43 @@ def register(
     ping: PingFn | None = None,
 ) -> ConnectorManifest:
     """Register (or replace) a connector. Idempotent on the same id."""
-    _MANIFESTS[manifest.id] = manifest
-    if list_nhis is not None:
-        _LISTERS[manifest.id] = list_nhis
-    if ping is not None:
-        _PINGS[manifest.id] = ping
+    with _LOCK:
+        _MANIFESTS[manifest.id] = manifest
+        if list_nhis is not None:
+            _LISTERS[manifest.id] = list_nhis
+        if ping is not None:
+            _PINGS[manifest.id] = ping
     return manifest
 
 
 def _ensure() -> None:
+    """Register every built-in connector exactly once, atomically.
+
+    ``_READY`` is published only after the last ``register_all`` returns, so
+    no reader can observe a partial registry. The imports stay outside the
+    lock: they are idempotent, and holding this lock while the import
+    machinery takes its own is how the two deadlock.
+    """
     global _READY
     if _READY:
         return
-    _READY = True
     from . import connectors as _connectors
     from . import natives as _natives
     from . import protocol as _protocol
 
-    _protocol.register_all()
-    _natives.register_all()
-    _connectors.register_all()
+    with _LOCK:
+        if _READY:
+            return
+        _protocol.register_all()
+        _natives.register_all()
+        _connectors.register_all()
+        _READY = True
 
 
 def all_manifests(*, menu: bool = False) -> list[ConnectorManifest]:
     _ensure()
-    rows = list(_MANIFESTS.values())
+    with _LOCK:
+        rows = list(_MANIFESTS.values())
     if menu:
         rows = [m for m in rows if m.show_in_menu]
     return sorted(rows, key=lambda m: m.id)
@@ -121,7 +139,8 @@ def all_manifests(*, menu: bool = False) -> list[ConnectorManifest]:
 
 def known_ids() -> set[str]:
     _ensure()
-    return set(_MANIFESTS)
+    with _LOCK:
+        return set(_MANIFESTS)
 
 
 def get_manifest(connector_id: str) -> ConnectorManifest:
@@ -151,7 +170,9 @@ def infer_from_url(url: str) -> str | None:
     _ensure()
     host = (urlparse(url).netloc or url).lower()
     blob = (url or "").lower()
-    for manifest in _MANIFESTS.values():
+    with _LOCK:
+        manifests = list(_MANIFESTS.values())
+    for manifest in manifests:
         for hint in manifest.url_hosts:
             if hint and (hint in host or hint in blob):
                 return manifest.id

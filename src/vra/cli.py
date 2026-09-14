@@ -17,7 +17,6 @@ import argparse
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from .config import DEFAULT_OUT_DIR, RunConfig
 from . import analyst, evaluate as ev, report as rp
@@ -25,12 +24,11 @@ from .llm import get_backend, probe_ollama
 from .nhi import (
     NHIInventory,
     assessments_to_records,
-    discover_nhis,
     evaluate_nhis,
     link_cross_plane,
     load_nhi_controls,
 )
-from .register import FindingStore, load_vendors, update_vendor_state
+from .register import FindingStore, RegistryState, load_vendors, select_vendors
 
 
 @dataclass
@@ -54,6 +52,15 @@ class RunResult:
     error: str | None = None
     report_path: str | None = None
     vendors: list[str] = field(default_factory=list)
+    vendors_failed: int = 0
+    failed_vendors: list[dict] = field(default_factory=list)
+    llm_calls_sent: int = 0
+    llm_calls_cached: int = 0
+
+    @property
+    def fully_assessed(self) -> bool:
+        """False when any vendor in scope could not be assessed this run."""
+        return self.vendors_failed == 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,31 +93,45 @@ def run(cfg: RunConfig) -> int:
 
 def assess(cfg: RunConfig) -> RunResult:
     result = RunResult()
-    vendors = load_vendors(cfg)
+    # One parse of the register per run. The unfiltered portfolio is needed
+    # anyway so cross-vendor NHI declarations resolve when this run is scoped
+    # to one vendor, so the scoped list is a filter over it, not a re-read.
+    portfolio = load_vendors(RunConfig())
+    vendors = select_vendors(portfolio, cfg)
     if not vendors:
         print("No vendors matched. Check vendors/ and --vendor filters.", file=sys.stderr)
         result.exit_code = 2
         result.error = "no vendors matched"
         return result
 
-    # Full portfolio (unfiltered) so cross-vendor NHI declarations resolve
-    # even when this run is scoped to one vendor.
-    portfolio = load_vendors(RunConfig())
     controls = ev.load_controls()
     nhi_controls = load_nhi_controls()
     store = FindingStore()
     inventory = NHIInventory()
+    registry_state = RegistryState()
+    registry_state.adopt_legacy(vendors)
+
+    from .llm import PROMPT_CACHE
+
+    # Snapshot now and subtract later: the cache counters live as long as the
+    # process, and the monitor runs many cycles in one process.
+    cache_at_start = dict(PROMPT_CACHE.stats)
 
     backend = get_backend(cfg)
     backend_name = backend.name
     if backend_name == "ollama" and not probe_ollama(cfg):
         print(
             f"! Ollama not reachable at {cfg.ollama_host} (or model '{cfg.model}' not pulled).\n"
-            f"  Falling back to the deterministic offline heuristic. Run with --offline to silence "
-            f"this, or start Ollama and `ollama pull {cfg.model}`.",
+            f"  Falling back to the deterministic offline heuristic for narrative and\n"
+            f"  triage text. Tenant probes and artifact fetches still run — pass --offline\n"
+            f"  if you also want no network. Start Ollama and `ollama pull {cfg.model}` to\n"
+            f"  use the model.",
             file=sys.stderr,
         )
-        cfg.offline = True
+        # Only the model is unavailable. Setting cfg.offline here would also
+        # switch off the tenant probe and the artifact fetch, so a missing
+        # local model would silently stop the vendor API being read at all.
+        cfg.llm_unavailable = True
         backend_name = get_backend(cfg).name
 
     from .pool import worker_count
@@ -132,6 +153,7 @@ def assess(cfg: RunConfig) -> RunResult:
     nhi_gap_n = 0
     discovered_by_vendor: dict[str, list[dict]] = {}
     probe_failed: set[str] = set()
+    failed_vendors: list[dict] = []
 
     from .collect import collect_all
 
@@ -154,6 +176,25 @@ def assess(cfg: RunConfig) -> RunResult:
         discovered_by_vendor[slug] = work.discovered
         if work.probe_failed or work.error:
             probe_failed.add(slug)
+        if work.error:
+            # A vendor that raised was NOT assessed. It must never be counted
+            # toward a clean run — see the summary and exit code below.
+            failed_vendors.append({
+                "vendor": slug,
+                "vendor_name": vendor.get("vendor", slug),
+                "error": work.error,
+            })
+        elif work.probe_failed:
+            # The vendor itself assessed, but its tenant was not reached — a
+            # revoked token, a 401, an unreachable host. Its identities are
+            # last-known, so this run did not verify them and must not read as
+            # if it had.
+            failed_vendors.append({
+                "vendor": slug,
+                "vendor_name": vendor.get("vendor", slug),
+                "error": work.probe_error or "tenant probe did not run",
+                "kind": "probe",
+            })
 
         for assessment in work.findings + work.gaps:
             evidence: list[dict] = []
@@ -164,14 +205,7 @@ def assess(cfg: RunConfig) -> RunResult:
                     "source": meta["provenance"], "excerpt": meta["evidence"],
                     "change_type": "deterministic_observation", "confidence": 1.0,
                 })
-            seen_ev, uniq = set(), []
-            for e in evidence:
-                key = (e["source"], e["excerpt"][:80])
-                if key not in seen_ev:
-                    seen_ev.add(key)
-                    uniq.append(e)
-
-            record = ev.to_record(assessment, evidence=uniq)
+            record = ev.to_record(assessment, evidence=ev.dedupe_evidence(evidence))
             record = analyst.enrich(record, cfg)
             stored, is_new = store.upsert(record)
             stored["poam"] = analyst.build_poam(stored)
@@ -181,10 +215,8 @@ def assess(cfg: RunConfig) -> RunResult:
             (all_findings if assessment.kind == "finding" else all_gaps).append(stored)
 
         if work.snaps:
-            update_vendor_state(
-                vendor,
-                hashes={s.source: s.sha256 for s in work.snaps if not s.error},
-                cfg=cfg,
+            registry_state.record(
+                slug, hashes={s.source: s.sha256 for s in work.snaps if not s.error}
             )
 
     # -- NHI evaluate after every plane has been collected ------------------
@@ -193,10 +225,19 @@ def assess(cfg: RunConfig) -> RunResult:
         slug = vendor["slug"]
         discovered = discovered_by_vendor.get(slug) or []
         if slug in probe_failed:
-            stored_nhis = inventory.for_vendor(slug)
+            reason = next(
+                (f["error"] for f in failed_vendors if f["vendor"] == slug),
+                "tenant probe did not run",
+            )
+            stored_nhis = inventory.mark_stale(slug, reason=reason)
             all_nhis.extend(stored_nhis)
+            # Hold EVERY open finding for this vendor, not just the NHI-* ones.
+            # An AIV-* finding can rest on probe evidence too, and a probe that
+            # did not run produces no assessment to re-raise it — so without
+            # this it looks "no longer observed" and reconcile closes it as
+            # resolved. Absence of evidence is not evidence of remediation.
             for rec in store.findings.values():
-                if rec.get("vendor") == slug and rec.get("family") == "nhi" and rec.get("state") != "closed":
+                if rec.get("vendor") == slug and rec.get("state") != "closed":
                     seen_ids.add(rec["id"])
             continue
         stored_nhis, entitlement_events = inventory.upsert_many(slug, discovered)
@@ -234,7 +275,12 @@ def assess(cfg: RunConfig) -> RunResult:
             (all_findings if rec["kind"] == "finding" else all_gaps).append(stored)
 
     # -- Phase 7: lifecycle reconciliation ---------------------------------
-    closed = store.reconcile(seen_ids, {v["slug"] for v in vendors}, cfg)
+    # A vendor that failed to collect produced no assessments, so every one of
+    # its open findings would look "no longer observed". Absence of evidence is
+    # not evidence of remediation: hold it out of reconciliation entirely.
+    failed_slugs = {f["vendor"] for f in failed_vendors}
+    reconcile_scope = {v["slug"] for v in vendors} - failed_slugs
+    closed = store.reconcile(seen_ids, reconcile_scope, cfg)
 
     from .portfolio import build_portfolio
 
@@ -244,12 +290,22 @@ def assess(cfg: RunConfig) -> RunResult:
         "nhis": all_nhis, "new_ids": new_ids, "closed": closed, "store": store,
         "backend": backend_name, "events": store.events,
         "portfolio": build_portfolio(inventory, store),
+        "failed_vendors": failed_vendors,
     }
 
     text = rp.build_report(ctx, cfg)
     path = rp.write_report(text, ctx, cfg)
     store.save(cfg)
     inventory.save(cfg)
+    registry_state.save(cfg)
+    from .llm import save_cache
+
+    save_cache(cfg)
+    now = PROMPT_CACHE.stats
+    cache_stats = {
+        "hits": now["hits"] - cache_at_start["hits"],
+        "misses": now["misses"] - cache_at_start["misses"],
+    }
 
     # -- console summary ----------------------------------------------------
     open_findings = [f for f in all_findings if f.get("state") not in ("closed",)]
@@ -259,7 +315,32 @@ def assess(cfg: RunConfig) -> RunResult:
 
     print()
     print("=" * 68)
-    print(f"  Vendors assessed     : {len(vendors)}")
+    if failed_vendors:
+        print(f"  !! {len(failed_vendors)} of {len(vendors)} VENDOR(S) NOT FULLY "
+              f"ASSESSED — this run is INCOMPLETE")
+        for fv in failed_vendors:
+            label = "tenant not reached" if fv.get("kind") == "probe" else "failed"
+            print(f"     {fv['vendor_name']} [{label}]: {fv['error']}")
+        print("-" * 68)
+    try:
+        from .creds import ageing_credentials
+
+        ageing = ageing_credentials()
+    except Exception:  # a keychain we cannot read must not fail the run
+        ageing = []
+    if ageing:
+        print(f"  !! {len(ageing)} stored credential(s) past the rotation age — "
+              f"run `python3 vra.py creds list`")
+        print("-" * 68)
+
+    from .nhi import is_stale
+
+    stale_n = len([n for n in all_nhis if is_stale(n)])
+    if stale_n:
+        print(f"  !! {stale_n} identit{'y is' if stale_n == 1 else 'ies are'} "
+              f"LAST KNOWN, not verified this cycle")
+        print("-" * 68)
+    print(f"  Vendors assessed     : {len(vendors) - len(failed_vendors)} of {len(vendors)}")
     print(f"  NHIs inventoried     : {len(all_nhis)}")
     print(f"  AI-relevant changes  : {len(ai_changes)}")
     print(f"  Open findings        : {len(open_findings)}  "
@@ -268,14 +349,39 @@ def assess(cfg: RunConfig) -> RunResult:
     print(f"  Information gaps     : {len(all_gaps)}")
     print(f"  NHI findings / gaps  : {nhi_finding_n} / {nhi_gap_n}")
     print(f"  Closed this run      : {len(closed)}")
-    print(f"  Report               : {path if path else '(dry-run, not written)'}")
+    asked = cache_stats["hits"] + cache_stats["misses"]
+    if asked:
+        print(f"  Model calls          : {cache_stats['misses']} sent, "
+              f"{cache_stats['hits']} reused from cache")
+    if path:
+        report_line = str(path)
+    elif cfg.dry_run:
+        report_line = "(dry-run, not written)"
+    else:
+        # Nothing moved, so no historical copy was kept. Point at the file
+        # that did get refreshed rather than implying none was written.
+        report_line = f"{cfg.out_dir / 'latest.md'} (unchanged since last run)"
+    print(f"  Report               : {report_line}")
     print("=" * 68)
     for f in sorted(crit, key=lambda x: x["vendor"]):
         marker = "NEW " if f["id"] in new_ids else "    "
         print(f"  {marker}CRITICAL {f['control_id']}  {f['vendor_name']} — {f['feature']}")
     print()
 
-    result.exit_code = 1 if (crit and cfg.fail_on_critical) else 0
+    # An unassessed vendor outranks a clean scoreboard: exit 0 must keep meaning
+    # "every vendor in scope was assessed and nothing critical is open".
+    if failed_vendors:
+        result.exit_code = 2
+        result.error = (
+            f"{len(failed_vendors)} vendor(s) not assessed: "
+            + "; ".join(f"{f['vendor']}: {f['error']}" for f in failed_vendors)
+        )
+    elif crit and cfg.fail_on_critical:
+        result.exit_code = 1
+    else:
+        result.exit_code = 0
+    result.vendors_failed = len(failed_vendors)
+    result.failed_vendors = failed_vendors
     result.vendor_count = len(vendors)
     result.feature_count = sum(len(v.get("ai_surface") or []) for v in vendors)
     result.nhi_count = len(all_nhis)
@@ -289,6 +395,8 @@ def assess(cfg: RunConfig) -> RunResult:
     result.nhi_gaps = nhi_gap_n
     result.closed = len(closed)
     result.backend = backend_name
+    result.llm_calls_sent = cache_stats["misses"]
+    result.llm_calls_cached = cache_stats["hits"]
     result.report_path = str(path) if path else None
     result.vendors = [v["slug"] for v in vendors]
     return result

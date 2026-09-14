@@ -327,6 +327,15 @@ class TestReportAndEnrich(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _register_state() -> dict[str, bytes]:
+    """Bytes of every register on disk, so a test can assert nothing moved."""
+    out: dict[str, bytes] = {}
+    for directory in (REPO / "vendors", REPO / "sandbox" / "registers"):
+        for path in sorted(directory.glob("*.yaml")):
+            out[str(path)] = path.read_bytes()
+    return out
+
+
 class TestEntryDispatch(unittest.TestCase):
     def test_vra_py_knows_the_new_commands(self):
         import importlib.util
@@ -344,6 +353,7 @@ class TestEntryDispatch(unittest.TestCase):
         import shutil
 
         use_memory_keyring()
+        before = _register_state()
         tmp = Path(tempfile.mkdtemp())
         try:
             # Exercise the CLI parser; write into a temp tree via connect()
@@ -357,7 +367,10 @@ class TestEntryDispatch(unittest.TestCase):
                 "--dry-run",
             ])
             self.assertEqual(code, 0)
-            self.assertFalse((REPO / "vendors" / "okta.yaml").exists())
+            # The property is "--dry-run changed nothing", not "no such file":
+            # a real user may well have connected okta already.
+            self.assertEqual(_register_state(), before,
+                             "--dry-run must not create or modify a register")
         finally:
             reset_memory_keyring()
             shutil.rmtree(tmp, ignore_errors=True)

@@ -23,6 +23,7 @@ class VendorWork:
     vendor: dict
     error: str | None = None
     probe_failed: bool = False
+    probe_error: str | None = None
     snaps: list = field(default_factory=list)
     diffs: list = field(default_factory=list)
     triage_results: list = field(default_factory=list)
@@ -38,6 +39,32 @@ class VendorWork:
     gaps: list = field(default_factory=list)
     log_line: str = ""
     notes: list[str] = field(default_factory=list)
+
+
+def evidence_from_triage(tr) -> tuple[list[tuple[str, dict]], str | None]:
+    """Evidence rows a triage result may contribute, and any note to log.
+
+    A finding's evidence block is quoted material: lines from the vendor's own
+    artifact or fields from the tenant API. A model excerpt earns a place there
+    only by being checked against the diff it was drawn from — otherwise it is
+    the model's prose wearing the artifact's name, which is how a fabricated
+    quote ends up displacing a real one under a heading promising verbatim.
+    """
+    if not tr.ai_relevant:
+        return [], None
+    if not tr.excerpt_verified:
+        return [], (
+            f"{tr.source}: model evidence_excerpt is not a line in the diff; "
+            "dropped from evidence (the text is kept in pending_review/)"
+        )
+    row = {
+        "source": tr.source,
+        "excerpt": tr.evidence_excerpt,
+        "change_type": tr.change_type,
+        "confidence": tr.confidence,
+        "quoted": True,
+    }
+    return [(fld, dict(row)) for fld in (tr.affected_fields or ["_general"])], None
 
 
 def collect_vendor(vendor: dict, cfg: RunConfig, portfolio: list[dict], controls) -> VendorWork:
@@ -73,16 +100,16 @@ def collect_vendor(vendor: dict, cfg: RunConfig, portfolio: list[dict], controls
                 "old_hash": diff.old_hash, "new_hash": diff.new_hash,
                 "added": len(diff.added_lines), "removed": len(diff.removed_lines),
                 "evidence_excerpt": tr.evidence_excerpt,
+                "excerpt_verified": tr.excerpt_verified,
                 "affected_fields": tr.affected_fields,
                 "proposed_surface_update": tr.proposed_surface_update,
                 "error": tr.error,
             })
-            if tr.ai_relevant:
-                for fld in tr.affected_fields or ["_general"]:
-                    evidence_by_field.setdefault(fld, []).append(
-                        {"source": tr.source, "excerpt": tr.evidence_excerpt,
-                         "change_type": tr.change_type, "confidence": tr.confidence}
-                    )
+            rows, note = evidence_from_triage(tr)
+            if note:
+                work.notes.append(note)
+            for fld, row in rows:
+                evidence_by_field.setdefault(fld, []).append(row)
         work.triage_results = triage_results
         work.evidence_by_field = evidence_by_field
         work.pending = write_pending_review(vendor, triage_results, cfg)
@@ -127,8 +154,8 @@ def collect_vendor(vendor: dict, cfg: RunConfig, portfolio: list[dict], controls
         work.discovered = discovered
         if (vendor.get("probe") or {}).get("enabled") and not pres.ran:
             work.probe_failed = True
-            if pres.error:
-                work.notes.append(f"probe did not run: {pres.error}")
+            work.probe_error = pres.error or "the configured tenant probe did not run"
+            work.notes.append(f"probe did not run: {work.probe_error}")
 
         findings, gaps = ev.evaluate_vendor(vendor, controls, observed)
         work.findings, work.gaps = findings, gaps

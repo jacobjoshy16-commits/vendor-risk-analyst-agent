@@ -21,7 +21,6 @@ from typing import Any
 from .config import REPO_ROOT, RunConfig
 from .idp import (
     IdPEstate,
-    discover_estate,
     discover_from_recorded,
     discover_from_vendor,
     infer_provider,

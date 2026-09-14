@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Import every module
+        # A NameError inside a function body survives import, so this is a
+        # floor, not a ceiling — the scenario job below is what catches those.
+        run: |
+          python -c "
+          import pathlib, importlib, sys
+          sys.path.insert(0, 'src')
+          for p in sorted(pathlib.Path('src/vra').glob('*.py')):
+              if p.stem != '__init__':
+                  importlib.import_module(f'vra.{p.stem}')
+          print('all modules import')
+          "
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -t . -v
+
+  scenario:
+    # The unit suite can be green while the product is broken. This runs the
+    # documented sandbox path end to end and asserts on exit codes, which is
+    # what a silent all-green regression actually looks like.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: v1 baseline must be clean (exit 0)
+        run: |
+          set +e
+          python3 vra.py --offline --snapshot v1
+          code=$?
+          set -e
+          echo "v1 exit=$code"
+          if [ "$code" -ne 0 ]; then
+            echo "::error::v1 baseline should exit 0 (clean), got $code"
+            exit 1
+          fi
+
+      - name: v2 planted change must raise criticals (exit 1)
+        run: |
+          set +e
+          python3 vra.py --offline --snapshot v2 | tee /tmp/v2.log
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "v2 exit=$code"
+          if [ "$code" -ne 1 ]; then
+            echo "::error::v2 should exit 1 (open critical), got $code"
+            exit 1
+          fi
+          for control in AIV-07 NHI-01 AIV-03; do
+            grep -q "CRITICAL $control" /tmp/v2.log || {
+              echo "::error::v2 did not raise $control"; exit 1; }
+          done
+
+      - name: No vendor may fail to assess
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          blob = json.load(open("out/latest.json"))
+          failed = blob.get("failed_vendors") or []
+          if failed:
+              for f in failed:
+                  print(f"::error::vendor not assessed: {f['vendor']}: {f['error']}")
+              sys.exit(1)
+          print("every vendor assessed")
+          PY

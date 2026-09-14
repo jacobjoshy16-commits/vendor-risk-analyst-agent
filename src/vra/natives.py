@@ -91,7 +91,7 @@ def discover_github(
         items.extend(chunk)
         pages += 1
         estate.pages_fetched += 1
-        url = next_link(resp, base=api)
+        url = next_link(resp, base=api, estate=estate)
         query = None
         if not chunk and not url:
             break

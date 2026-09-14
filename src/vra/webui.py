@@ -7,7 +7,7 @@ trust-center URL, see what platform it is, whether the subprocessor list parses
 scaffolded register, and run the first assessment — all without hand-writing a
 YAML file or memorizing the schema.
 
-    python3 vra.py webui --host 0.0.0.0 --port 8765
+    python3 vra.py webui --port 8765
 
 Endpoints:
 
@@ -25,23 +25,34 @@ Endpoints:
     POST /api/monitor/stop         signal the monitor to exit
 
 The server only ever talks to the local filesystem and (unless the UI checkbox
-"offline" is unchecked) makes no network calls. Bind to 0.0.0.0 so the preview
-proxy can reach it.
+"offline" is unchecked) makes no network calls.
+
+Access control. Every route needs a per-process token, printed in the startup
+URL, sent by the page as ``X-VRA-Token`` (``?t=`` also accepted for curl). The
+POST routes spawn processes, read local paths, and drive network fetches, so
+the server also pins the ``Host`` header to the address it bound and rejects a
+cross-site ``Origin`` — together those stop CSRF and DNS-rebinding from a page
+the user happens to be browsing. It binds loopback unless asked otherwise;
+``--host 0.0.0.0`` (for a preview proxy) still works and warns.
 """
 
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import os
+import re
+import secrets
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import yaml
 
-from .config import DATA_DIR, VENDORS_DIR, RunConfig
+from .config import DATA_DIR, RunConfig
 from .evaluate import load_controls
 
 PAGE = """<!DOCTYPE html>
@@ -203,8 +214,12 @@ function badge(kind, text) {
   return `<span class="badge ${cls}">${esc(text)}</span>`;
 }
 
+const VRA_TOKEN = "__VRA_TOKEN__";
+
 async function j(method, url, body) {
-  const r = await fetch(url, {method, headers: body ? {"Content-Type":"application/json"} : {},
+  const headers = {"X-VRA-Token": VRA_TOKEN};
+  if (body) headers["Content-Type"] = "application/json";
+  const r = await fetch(url, {method, headers,
                               body: body ? JSON.stringify(body) : undefined});
   if (!r.ok) { let t = ""; try { t = await r.text(); } catch {} throw new Error(t || r.statusText); }
   return r.json();
@@ -422,14 +437,79 @@ class _Handler(BaseHTTPRequestHandler):
         self._json({"error": message}, code)
 
     def log_message(self, fmt: str, *args: Any) -> None:  # quieter console
-        print(f"[webui] {self.address_string()} {fmt % args}")
+        # Never echo the token: this line lands in monitor.log, which people paste.
+        line = (fmt % args).replace(getattr(self.server, "auth_token", "") or "\0", "<token>")
+        print(f"[webui] {self.address_string()} {line}")
+
+    # --- access control ----------------------------------------------------
+    def _token_ok(self) -> bool:
+        expected = getattr(self.server, "auth_token", "") or ""
+        if not expected:  # explicitly disabled (tests)
+            return True
+        sent = self.headers.get("X-VRA-Token") or ""
+        if not sent:
+            sent = (parse_qs(urlparse(self.path).query).get("t") or [""])[0]
+        return hmac.compare_digest(sent, expected)
+
+    def _host_ok(self) -> bool:
+        """Pin the Host header so a rebound DNS name cannot reach this server."""
+        allowed = getattr(self.server, "allowed_hosts", None)
+        if not allowed:
+            return True
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        return host in allowed
+
+    def _origin_ok(self) -> bool:
+        """A cross-site page must not drive the console. No Origin = not a browser.
+
+        Loopback origins are pinned to the bound port, because on 127.0.0.1 the
+        port is the only thing separating this console from anything else the
+        user happens to be running. A named host is different: it is only in
+        ``allowed_hosts`` because someone put it in VRA_WEBUI_ALLOWED_HOSTS, and
+        behind an HTTPS proxy its Origin carries no explicit port at all —
+        demanding one made every POST 403 through a proxy.
+        """
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        allowed = getattr(self.server, "allowed_hosts", None)
+        if not allowed:
+            return True
+        parsed = urlparse(origin)
+        host = (parsed.hostname or "").lower()
+        if host not in allowed:
+            return False
+        if host in LOOPBACK_HOSTS:
+            return str(parsed.port or "") == str(self.server.server_address[1])
+        return True
+
+    def _authorized(self) -> bool:
+        if not self._host_ok():
+            self._error("Host header does not match the address this console bound", 403)
+            return False
+        if not self._origin_ok():
+            self._error("cross-site request refused", 403)
+            return False
+        if not self._token_ok():
+            self._error(
+                "missing or bad console token; open the URL printed at startup "
+                "(or send it as the X-VRA-Token header)",
+                401,
+            )
+            return False
+        return True
 
     # --- routing -----------------------------------------------------------
     def do_GET(self) -> None:
         path = urlparse(self.path).path.rstrip("/") or "/"
+        if not self._authorized():
+            return
         try:
             if path == "/":
-                return self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
+                page = PAGE.replace(
+                    "__VRA_TOKEN__", getattr(self.server, "auth_token", "") or ""
+                )
+                return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
             if path == "/api/summary":
                 return self._json(_summary())
             if path == "/api/vendors":
@@ -452,6 +532,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path.rstrip("/")
+        if not self._authorized():
+            return
         try:
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
@@ -583,11 +665,18 @@ class _Handler(BaseHTTPRequestHandler):
 
 def _load_registers() -> list[dict]:
     out = []
-    for path in sorted(VENDORS_DIR.glob("*.yaml")):
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            data["_path"] = str(path)
-            out.append(data)
+    from .register import register_dirs
+
+    seen: dict[str, dict] = {}
+    for directory in register_dirs():
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("*.yaml")):
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data["_path"] = str(path)
+                seen[data.get("slug") or str(path)] = data
+    out.extend(seen[k] for k in sorted(seen))
     return out
 
 
@@ -605,7 +694,10 @@ def _summary() -> dict:
     vendors = _load_registers()
     blob = _findings_blob()
     findings = blob.get("findings", [])
-    open_findings = [f for f in findings if f.get("state") != "closed"]
+    # findings.json holds both kinds. A gap is an unanswered question, not a
+    # control failure, and counting them together tripled the headline number.
+    live = [f for f in findings if f.get("state") != "closed"]
+    open_findings = [f for f in live if f.get("kind") != "gap"]
     blocked = 0
     watch_sources = 0
     for v in vendors:
@@ -626,12 +718,16 @@ def _summary() -> dict:
     return {
         "vendors": len(vendors),
         "open_findings": len(open_findings),
-        "gaps": len([g for g in findings if g.get("kind") == "gap"]),
+        "critical": len([f for f in open_findings if f.get("severity") == "critical"]),
+        "gaps": len([g for g in live if g.get("kind") == "gap"]),
         "blocked_parses": blocked,
         "watch_sources": watch_sources,
         "nhis": nhis,
         "model": os.environ.get("VRA_MODEL", "qwen2.5:7b-instruct"),
-        "backend": "offline-heuristic",
+        # Report the backend the last cycle actually used, not a hardcoded
+        # guess. Absent a run, say so rather than naming one.
+        "backend": ((_monitor().get("last_cycle") or {}).get("backend")
+                    or "unknown (no cycle recorded yet)"),
     }
 
 
@@ -685,10 +781,17 @@ def _list_vendors() -> list[dict]:
 
 
 def _vendor_yaml(slug: str) -> str | None:
-    path = VENDORS_DIR / f"{slug}.yaml"
-    if not path.exists():
+    from .register import register_dirs
+
+    # A register name is a path segment from a URL, so refuse anything that
+    # could climb out of the directories we are willing to serve.
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", slug or "") or slug.startswith("."):
         return None
-    return path.read_text(encoding="utf-8")
+    for directory in reversed(register_dirs()):  # user register wins
+        path = directory / f"{slug}.yaml"
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    return None
 
 
 def _controls() -> list[dict]:
@@ -721,11 +824,55 @@ def build_parser() -> argparse.ArgumentParser:
 
 class _Server(ThreadingHTTPServer):
     allow_reuse_address = True
+    auth_token: str = ""
+    allowed_hosts: frozenset[str] = frozenset()
 
 
-def start_server(host: str, port: int, background: bool = False) -> ThreadingHTTPServer:
-    """Bind the console. ``background=True`` serves on a daemon thread (monitor --webui)."""
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def console_url(server: ThreadingHTTPServer, host: str | None = None) -> str:
+    """The URL to actually open — the token is part of it."""
+    bound_host, port = server.server_address[0], server.server_address[1]
+    shown = host or bound_host
+    if shown in ("0.0.0.0", "::", ""):
+        shown = "127.0.0.1"
+    token = getattr(server, "auth_token", "") or ""
+    return f"http://{shown}:{port}/" + (f"?t={token}" if token else "")
+
+
+def start_server(
+    host: str,
+    port: int,
+    background: bool = False,
+    *,
+    token: str | None = None,
+) -> ThreadingHTTPServer:
+    """Bind the console. ``background=True`` serves on a daemon thread (monitor --webui).
+
+    A per-process token guards every route; pass ``token=""`` to disable it
+    (tests only). ``allowed_hosts`` pins the Host header so a rebound DNS name
+    pointing at this port is refused.
+    """
     server = _Server((host, port), _Handler)
+    server.auth_token = secrets.token_urlsafe(32) if token is None else token
+
+    hosts = set(LOOPBACK_HOSTS)
+    if host and host not in ("0.0.0.0", "::", ""):
+        hosts.add(host.lower())
+    extra = os.environ.get("VRA_WEBUI_ALLOWED_HOSTS", "")
+    hosts.update(h.strip().lower() for h in extra.split(",") if h.strip())
+    server.allowed_hosts = frozenset(hosts)
+
+    if host in ("0.0.0.0", "::"):
+        print(
+            f"vra webui: WARNING — bound to {host}, so this console is reachable from "
+            "the network. It can read local files and start processes. The token is "
+            "required, but prefer 127.0.0.1 unless a proxy needs it. Add any proxy "
+            "hostname to VRA_WEBUI_ALLOWED_HOSTS.",
+            file=sys.stderr,
+        )
+
     if background:
         thread = threading.Thread(target=server.serve_forever, name="vra-webui", daemon=True)
         thread.start()
@@ -735,8 +882,7 @@ def start_server(host: str, port: int, background: bool = False) -> ThreadingHTT
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     server = start_server(args.host, args.port)
-    host, port = server.server_address
-    print(f"vra webui: console on http://{host}:{port}  (Ctrl-C to stop)")
+    print(f"vra webui: console on {console_url(server, args.host)}  (Ctrl-C to stop)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

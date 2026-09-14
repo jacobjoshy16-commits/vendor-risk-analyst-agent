@@ -1,13 +1,20 @@
 {
   "provider": "entra",
   "base_url": "https://graph.microsoft.com",
+  "flavor": "entra",
   "pages": [
     {
       "method": "GET",
       "url": "https://graph.microsoft.com/v1.0/applications?%24top=99",
+      "status": 200,
       "body": {
         "value": [
-          {"id": "app-copilot-01", "appId": "11111111-aaaa-bbbb-cccc-222222222222", "displayName": "Access Copilot", "createdDateTime": "2025-12-01T00:00:00Z"}
+          {
+            "id": "app-copilot-01",
+            "appId": "11111111-aaaa-bbbb-cccc-222222222222",
+            "displayName": "Access Copilot",
+            "createdDateTime": "2025-12-01T00:00:00Z"
+          }
         ],
         "@odata.nextLink": "https://graph.microsoft.com/v1.0/applications?$skiptoken=page2"
       }
@@ -15,18 +22,214 @@
     {
       "method": "GET",
       "url": "https://graph.microsoft.com/v1.0/applications?$skiptoken=page2",
+      "status": 200,
       "body": {
         "value": [
-          {"id": "app-billing-02", "appId": "33333333-aaaa-bbbb-cccc-444444444444", "displayName": "Billing Bot", "createdDateTime": "2026-01-15T00:00:00Z"}
+          {
+            "id": "app-billing-02",
+            "appId": "33333333-aaaa-bbbb-cccc-444444444444",
+            "displayName": "Billing Bot",
+            "createdDateTime": "2026-01-15T00:00:00Z"
+          },
+          {
+            "id": "app-reporting-03",
+            "appId": "77777777-aaaa-bbbb-cccc-888888888888",
+            "displayName": "Reporting Reader",
+            "createdDateTime": "2026-02-20T00:00:00Z"
+          }
         ]
       }
     },
     {
       "method": "GET",
       "url": "https://graph.microsoft.com/v1.0/servicePrincipals?%24top=99",
+      "status": 200,
       "body": {
         "value": [
-          {"id": "sp-writer-01", "appId": "55555555-aaaa-bbbb-cccc-666666666666", "displayName": "Rovo Writer", "accountEnabled": true, "createdDateTime": "2026-02-01T00:00:00Z"}
+          {
+            "id": "sp-msgraph-00",
+            "appId": "00000003-0000-0000-c000-000000000000",
+            "displayName": "Microsoft Graph",
+            "accountEnabled": true,
+            "servicePrincipalType": "Application",
+            "appRoles": [
+              {
+                "id": "741f803b-c850-494e-b5df-cde7c675a1ca",
+                "value": "User.ReadWrite.All",
+                "displayName": "Read and write all users' full profiles"
+              },
+              {
+                "id": "19dbc75e-c2e2-444c-a770-ec69d8559fc7",
+                "value": "Directory.ReadWrite.All",
+                "displayName": "Read and write directory data"
+              },
+              {
+                "id": "62a82d76-70ea-41e2-9197-370581804d09",
+                "value": "Group.ReadWrite.All",
+                "displayName": "Read and write all groups"
+              },
+              {
+                "id": "b633e1c5-b582-4048-a93e-9f11b44c7e96",
+                "value": "Mail.Send",
+                "displayName": "Send mail as any user"
+              },
+              {
+                "id": "7ab1d382-f21e-4acd-a863-ba3e13f7da61",
+                "value": "Directory.Read.All",
+                "displayName": "Read directory data"
+              }
+            ]
+          },
+          {
+            "id": "sp-copilot-01",
+            "appId": "11111111-aaaa-bbbb-cccc-222222222222",
+            "displayName": "Access Copilot",
+            "accountEnabled": true,
+            "servicePrincipalType": "Application",
+            "createdDateTime": "2025-12-01T00:00:00Z"
+          },
+          {
+            "id": "sp-billing-02",
+            "appId": "33333333-aaaa-bbbb-cccc-444444444444",
+            "displayName": "Billing Bot",
+            "accountEnabled": true,
+            "servicePrincipalType": "Application",
+            "createdDateTime": "2026-01-15T00:00:00Z"
+          },
+          {
+            "id": "sp-reporting-03",
+            "appId": "77777777-aaaa-bbbb-cccc-888888888888",
+            "displayName": "Reporting Reader",
+            "accountEnabled": true,
+            "servicePrincipalType": "Application",
+            "createdDateTime": "2026-02-20T00:00:00Z"
+          },
+          {
+            "id": "sp-rovo-writer",
+            "appId": "55555555-aaaa-bbbb-cccc-666666666666",
+            "displayName": "Rovo Writer",
+            "accountEnabled": true,
+            "servicePrincipalType": "ManagedIdentity",
+            "createdDateTime": "2026-02-01T00:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/servicePrincipals/sp-msgraph-00/appRoleAssignments?%24top=99",
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/servicePrincipals/sp-copilot-01/appRoleAssignments?%24top=99",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "ara-1",
+            "appRoleId": "741f803b-c850-494e-b5df-cde7c675a1ca",
+            "resourceId": "sp-msgraph-00",
+            "principalId": "sp-copilot-01",
+            "principalDisplayName": "Access Copilot",
+            "resourceDisplayName": "Microsoft Graph",
+            "createdDateTime": "2026-03-01T09:12:00Z"
+          },
+          {
+            "id": "ara-2",
+            "appRoleId": "62a82d76-70ea-41e2-9197-370581804d09",
+            "resourceId": "sp-msgraph-00",
+            "principalId": "sp-copilot-01",
+            "principalDisplayName": "Access Copilot",
+            "resourceDisplayName": "Microsoft Graph",
+            "createdDateTime": "2026-03-01T09:12:00Z"
+          },
+          {
+            "id": "ara-3",
+            "appRoleId": "99999999-dead-beef-0000-999999999999",
+            "resourceId": "sp-unknown-resource",
+            "principalId": "sp-copilot-01",
+            "createdDateTime": "2026-03-01T09:12:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/servicePrincipals/sp-billing-02/appRoleAssignments?%24top=99",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "ara-4",
+            "appRoleId": "b633e1c5-b582-4048-a93e-9f11b44c7e96",
+            "resourceId": "sp-msgraph-00",
+            "principalId": "sp-billing-02",
+            "resourceDisplayName": "Microsoft Graph",
+            "createdDateTime": "2026-01-20T00:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/servicePrincipals/sp-reporting-03/appRoleAssignments?%24top=99",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "ara-5",
+            "appRoleId": "7ab1d382-f21e-4acd-a863-ba3e13f7da61",
+            "resourceId": "sp-msgraph-00",
+            "principalId": "sp-reporting-03",
+            "resourceDisplayName": "Microsoft Graph",
+            "createdDateTime": "2026-02-25T00:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/servicePrincipals/sp-rovo-writer/appRoleAssignments?%24top=99",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "ara-6",
+            "appRoleId": "19dbc75e-c2e2-444c-a770-ec69d8559fc7",
+            "resourceId": "sp-msgraph-00",
+            "principalId": "sp-rovo-writer",
+            "resourceDisplayName": "Microsoft Graph",
+            "createdDateTime": "2026-02-05T00:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/oauth2PermissionGrants?%24top=99",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "grant-1",
+            "clientId": "sp-copilot-01",
+            "consentType": "AllPrincipals",
+            "resourceId": "sp-msgraph-00",
+            "scope": "openid profile User.Read Directory.Read.All",
+            "createdDateTime": "2025-12-02T00:00:00Z"
+          },
+          {
+            "id": "grant-2",
+            "clientId": "sp-reporting-03",
+            "consentType": "AllPrincipals",
+            "resourceId": "sp-msgraph-00",
+            "scope": "openid profile Reports.Read.All",
+            "createdDateTime": "2026-02-21T00:00:00Z"
+          }
         ]
       }
     }

@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import SEVERITIES, RunConfig
+from .config import SEVERITIES, RunConfig, reserve_path
 
 SEV_ORDER = {s: i for i, s in enumerate(SEVERITIES)}
 
@@ -26,6 +27,20 @@ def _sev_key(rec: dict) -> tuple[int, str]:
 
 def _esc(text: str) -> str:
     return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def _fenced(text: str) -> list[str]:
+    """Fence quoted vendor text so it cannot break out of its code block.
+
+    The excerpt is the vendor's own wording. A three-backtick fence around
+    text that itself contains three backticks ends early, and the rest lands
+    in the report as live markdown — headings, links, or instructions aimed
+    at whoever (or whatever) reads the report next.
+    """
+    text = str(text)
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return [fence, text, fence]
 
 
 def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
@@ -58,13 +73,48 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     a(f"**Snapshot set:** `{cfg.snapshot_version}`  ")
     a(f"**Previous run:** {store.last_run or 'none — this is the baseline run'}  ")
     a(f"**Model backend:** `{backend}`" + ("  _(deterministic heuristic, not a language model)_" if backend != "ollama" else f" — model `{cfg.model}`"))
-    a(f"**Mode:** {'dry-run (nothing persisted)' if cfg.dry_run else 'persisted'}"
-      f"{', offline' if cfg.offline else ''}")
+    mode = "dry-run (nothing persisted)" if cfg.dry_run else "persisted"
+    if cfg.offline:
+        mode += ", offline (no network)"
+    elif cfg.llm_unavailable:
+        mode += ", network live but no local model (heuristic text)"
+    a(f"**Mode:** {mode}")
     a("")
 
     # ---------------------------------------------------------------- 1
+    failed_vendors = ctx.get("failed_vendors") or []
+    if failed_vendors:
+        crashed = [f for f in failed_vendors if f.get("kind") != "probe"]
+        unreached = [f for f in failed_vendors if f.get("kind") == "probe"]
+        a("> ## \u26a0\ufe0f INCOMPLETE ASSESSMENT")
+        a(">")
+        a(f"> **{len(failed_vendors)} of {len(vendors)} vendor(s) in scope were not "
+          "fully assessed this run.** The counts below cover only what was actually "
+          "verified. A vendor listed here is **unassessed, not clean** — no finding "
+          "was raised or closed for it, and its previously open findings were held.")
+        a(">")
+        for fv in crashed:
+            a(f"> - **{_esc(fv.get('vendor_name') or fv.get('vendor'))}** "
+              f"(`{fv.get('vendor')}`) — assessment failed: "
+              f"{_esc(fv.get('error') or 'unknown error')}")
+        for fv in unreached:
+            a(f"> - **{_esc(fv.get('vendor_name') or fv.get('vendor'))}** "
+              f"(`{fv.get('vendor')}`) — **tenant not reached**: "
+              f"{_esc(fv.get('error') or 'probe did not run')}")
+        if unreached:
+            a(">")
+            a("> Identities for a tenant that was not reached are shown below as "
+              "**last known**, carried over from the most recent successful probe. "
+              "They are not evidence of the tenant's current state. A revoked or "
+              "expired API token is the usual cause — re-run "
+              "`python3 vra.py creds test <connector>`.")
+        a("")
+
     a("## 1. Portfolio summary")
     a("")
+    if failed_vendors:
+        a(f"- **\u26a0\ufe0f Vendors NOT assessed:** {len(failed_vendors)} "
+          f"(of {len(vendors)} in scope)")
     nhis = ctx.get("nhis") or []
     portfolio = ctx.get("portfolio")
     if portfolio:
@@ -101,6 +151,69 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
     # ---------------------------------------------------------------- 2
     a("## 2. Changes detected this run")
     a("")
+
+    # 2.1 — entitlement drift. This is the "a copilot gained users.manage last
+    # Tuesday" case, and it is the one signal an annual review never sees, so it
+    # gets named identities and scopes rather than a count in the summary.
+    events = [e for e in (ctx.get("events") or [])
+              if e.get("kind") == "entitlement_change"]
+    a("### 2.1 Entitlement changes on non-human identities")
+    a("")
+    if not events:
+        a("_No identity gained or lost a scope since the previous cycle._")
+        a("")
+    else:
+        gained_write = [e for e in events if e.get("gained_write_scope")]
+        if gained_write:
+            a(f"> **\u26a0\ufe0f {len(gained_write)} identit"
+              f"{'y' if len(gained_write) == 1 else 'ies'} gained write scope(s) "
+              "this cycle.** A non-human identity whose entitlements grew is a "
+              "privilege change that no annual review would have seen.")
+            a("")
+        a("| Identity | Vendor | Kind | Gained | Removed | Write? |")
+        a("| --- | --- | --- | --- | --- | --- |")
+        for e in events:
+            gained = ", ".join(f"`{x}`" for x in (e.get("added_scopes") or [])) or "—"
+            removed = ", ".join(f"`{x}`" for x in (e.get("removed_scopes") or [])) or "—"
+            flag = "**YES**" if e.get("gained_write_scope") else "no"
+            a(f"| {_esc(e.get('nhi_name') or e.get('nhi_id') or '?')} "
+              f"| {_esc(e.get('vendor_name') or e.get('vendor'))} "
+              f"| `{e.get('nhi_kind') or 'unknown'}` | {gained} | {removed} | {flag} |")
+        a("")
+
+        # Tie each change to the controls it actually tripped, by matching the
+        # identity's principal against the subject recorded on NHI-* findings.
+        nhi_findings = [f for f in findings if f.get("family") == "nhi"]
+        for e in events:
+            related = [
+                f for f in nhi_findings
+                if f.get("vendor") == e.get("vendor")
+                and e.get("principal")
+                and f.get("subject") == e.get("principal")
+            ]
+            name = e.get("nhi_name") or e.get("nhi_id") or "?"
+            a(f"**{_esc(name)}** — `{e.get('vendor')}`")
+            a("")
+            a(f"- **Observed at:** {e.get('timestamp')}")
+            a(f"- **Entitlement hash:** `{(e.get('previous_hash') or '')[:12]}` → "
+              f"`{(e.get('current_hash') or '')[:12]}`")
+            if e.get("added_scopes"):
+                a(f"- **Scopes gained:** {', '.join('`' + x + '`' for x in e['added_scopes'])}")
+            if e.get("removed_scopes"):
+                a(f"- **Scopes removed:** {', '.join('`' + x + '`' for x in e['removed_scopes'])}")
+            if related:
+                a("- **Control failures on this identity this run:**")
+                for f in sorted(related, key=_sev_key):
+                    a(f"  - `{f.get('severity', '?').upper()}` **{f['control_id']}** "
+                      f"— {f.get('citation', '')}")
+            else:
+                a("- **Control failures on this identity this run:** none. The "
+                  "change is recorded for the audit trail; no NHI-* condition "
+                  "was met.")
+            a("")
+
+    a("### 2.2 Watched vendor artifacts")
+    a("")
     if not changed_sources:
         baseline = [t for t in triages if t.get("is_baseline")]
         if baseline:
@@ -124,11 +237,16 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
             a(f"{t['summary']}")
             a("")
             if t["ai_relevant"] and t.get("evidence_excerpt"):
-                a("**Evidence excerpt (verbatim from diff):**")
-                a("")
-                a("```")
-                a(t["evidence_excerpt"])
-                a("```")
+                if t.get("excerpt_verified", True):
+                    a("**Evidence excerpt — checked against the diff, verbatim:**")
+                    a("")
+                    L.extend(_fenced(t["evidence_excerpt"]))
+                else:
+                    a("**\u26a0\ufe0f Model excerpt NOT FOUND in the diff** — the model was "
+                      "asked to quote a line it was given and did not. This text is the "
+                      "model's own and is excluded from every finding's evidence:")
+                    a("")
+                    L.extend(_fenced(t["evidence_excerpt"]))
                 a("")
             if t["ai_relevant"] and t.get("proposed_surface_update"):
                 a("**Proposed register update — NOT APPLIED, awaiting human review:**")
@@ -217,7 +335,7 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
         for p in parses:
             status = p["status"]
             mark = {"parsed": "✅ parsed", "blocked": "🚧 blocked", "empty": "⚠️ empty",
-                    "parse_failed": "⛔ parse_failed", "error": "⛔ error",
+                    "parse_failed": "❌ parse_failed", "error": "⛔ error",
                     "missing": "⚠️ missing", "not_attempted": "—"}.get(status, status)
             a(f"| {_esc(p['vendor_name'])} | `{p['source']}` | {mark} | "
               f"{_esc(p.get('platform') or '—')} | {p['rows']} |")
@@ -292,10 +410,22 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
           "pulled from the API, not typed into YAML._")
         a("")
     else:
-        a("| Vendor | Identity | Kind | Principal | Write scopes | Owner | Source | Flags |")
+        from .nhi import is_stale, staleness_days
+
+        stale_rows = [n for n in nhis if is_stale(n)]
+        if stale_rows:
+            a(f"**\u26a0\ufe0f {len(stale_rows)} of {len(nhis)} identities below are "
+              "LAST KNOWN, not current.** They were not re-observed this cycle, so "
+              "their scopes are whatever the last successful probe saw. Rows are "
+              "marked `stale` with the age of the observation.")
+            a("")
+        a("| Vendor | Identity | Kind | Principal | Write scopes | Owner | Last seen | Flags |")
         a("| --- | --- | --- | --- | --- | --- | --- | --- |")
         for n in nhis:
             flags = []
+            if is_stale(n):
+                days = n.get("stale_days") or staleness_days(n)
+                flags.append(f"**stale {days}d**" if days else "**stale**")
             if n.get("orphan"):
                 flags.append("orphan")
             if n.get("cross_vendor"):
@@ -308,9 +438,15 @@ def build_report(ctx: dict[str, Any], cfg: RunConfig) -> str:
                 f"{_esc(n.get('name') or n.get('principal') or '—')} | "
                 f"`{n.get('kind') or '—'}` | `{_esc(n.get('principal') or '—')}` | "
                 f"`{_esc(writes)}` | {_esc(n.get('owner') or 'unknown')} | "
-                f"{n.get('source') or '—'} | {_esc(', '.join(flags) or '—')} |"
+                f"{n.get('last_seen') or '—'} | {_esc(', '.join(flags) or '—')} |"
             )
         a("")
+        if stale_rows:
+            a("Why an identity goes stale:")
+            a("")
+            for reason in sorted({str(n.get("stale_reason") or "") for n in stale_rows} - {""}):
+                a(f"- {_esc(reason)}")
+            a("")
         nhi_findings = [
             f for f in open_findings
             if str(f.get("control_id") or "").startswith("NHI-")
@@ -405,13 +541,14 @@ def _emit_finding(a, f: dict, store, *, is_new: bool) -> None:
     a("")
     a(f"- **Control:** {f['control_question']}")
     a(f"- **Citation:** {f['citation']}")
-    a(f"- **Observed:** " + "; ".join(f"`{k}={v}`" for k, v in f["observed"].items()))
+    a("- **Observed:** " + "; ".join(f"`{k}={v}`" for k, v in f["observed"].items()))
     a(f"- **State:** `{f.get('state', 'open')}` · first seen {f.get('first_seen')} "
       f"({age} day{'s' if age != 1 else ''} old) · due {f.get('due_date')} · owner {f.get('owner')}")
     if not f.get("narrative_model_generated", True):
         a("- **Note:** narrative produced by the deterministic template (model unavailable or output rejected).")
     if f.get("evidence"):
-        a("- **Evidence:**")
+        a("- **Evidence** (quoted from the artifact or the tenant API, never "
+          "model prose)**:**")
         for ev in f["evidence"][:3]:
             excerpt = (ev.get("excerpt") or "").strip()
             if excerpt:
@@ -574,14 +711,32 @@ def report_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _substance(text: str) -> str:
+    """The report without the header lines that move on every run."""
+    return "\n".join(
+        line for line in text.splitlines()
+        if not line.startswith(("**Generated:**", "**Previous run:**"))
+    )
+
+
 def write_report(text: str, ctx: dict, cfg: RunConfig) -> Path | None:
+    """Write the report. Returns the historical copy's path, if one was kept.
+
+    A poll that changed nothing re-renders a report identical to the last one
+    bar its header. Keeping a timestamped copy of every such run costs the
+    whole report per cycle and buries the runs that did say something, so a
+    repeat only moves ``latest.md``.
+    """
     if cfg.dry_run:
         return None
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = cfg.out_dir / f"vendor-ai-risk-{stamp}.md"
-    path.write_text(text, encoding="utf-8")
     latest = cfg.out_dir / "latest.md"
+    previous = latest.read_text(encoding="utf-8") if latest.is_file() else ""
+    path = None
+    if _substance(previous) != _substance(text):
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        path = reserve_path(cfg.out_dir / f"vendor-ai-risk-{stamp}.md")
+        path.write_text(text, encoding="utf-8")
     latest.write_text(text, encoding="utf-8")
 
     # Machine-readable sidecar for downstream GRC tooling.
@@ -596,6 +751,8 @@ def write_report(text: str, ctx: dict, cfg: RunConfig) -> Path | None:
                 "gaps": ctx["gaps"],
                 "changes": ctx["triages"],
                 "probes": ctx["probes"],
+                "failed_vendors": ctx.get("failed_vendors", []),
+                "complete": not ctx.get("failed_vendors"),
                 "subprocessor_parses": ctx.get("parses", []),
                 "nhis": ctx.get("nhis", []),
                 "events": ctx.get("events", []),

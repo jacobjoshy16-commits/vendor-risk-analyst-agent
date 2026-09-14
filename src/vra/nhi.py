@@ -28,10 +28,17 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import NHI_CONTROLS_FILE, NHI_FILE, UNKNOWN_TOKENS, RunConfig
+from .config import (
+    NHI_CONTROLS_FILE,
+    NHI_FILE,
+    STALE_AFTER_DAYS,
+    UNKNOWN_TOKENS,
+    RunConfig,
+)
 from .evaluate import (
     Assessment,
     Control,
+    dedupe_evidence,
     evaluate_condition,
     load_controls,
     to_record,
@@ -117,23 +124,60 @@ def _id_tokens(nhi: dict) -> set[str]:
     return out
 
 
+def match_keys(nhi: dict) -> set[tuple[str, str]]:
+    """Every quotable token this identity can be matched on.
+
+    Two records describe the same principal exactly when these sets intersect,
+    which is what makes ``same_identity`` an equality test rather than a
+    similarity score — and therefore what lets the linker use an index instead
+    of comparing every identity against every other one.
+    """
+    keys: set[tuple[str, str]] = {("id", token) for token in _id_tokens(nhi)}
+    principal = str(nhi.get("principal") or "").lower()
+    if len(principal) >= 4:
+        keys.add(("principal", principal))
+    name = str(nhi.get("name") or "").lower()
+    if len(name) >= 5:
+        keys.add(("name", name))
+    return keys
+
+
 def same_identity(a: dict, b: dict) -> bool:
     """True when two NHI records describe the same principal.
 
     Matches only quotable identifiers: client/app id (any side, any plane),
     principal, or an exact name of at least 5 characters. Does not fuzzy-match.
     """
-    if _id_tokens(a) & _id_tokens(b):
-        return True
-    for key in ("principal",):
-        av, bv = str(a.get(key) or "").lower(), str(b.get(key) or "").lower()
-        if av and bv and av == bv and len(av) >= 4:
-            return True
-    an, bn = str(a.get("name") or "").lower(), str(b.get("name") or "").lower()
-    return bool(an and bn and an == bn and len(an) >= 5)
+    return bool(match_keys(a) & match_keys(b))
 
 
 IDP_PLANES = {"okta", "auth0"}
+
+
+def _link_pair(left: dict, right: dict, slug_a: str, slug_b: str) -> None:
+    """Record that ``left`` (on ``slug_a``) and ``right`` (on ``slug_b``) are one principal."""
+    left["cross_plane"] = True
+    right["cross_plane"] = True
+    left.setdefault("also_seen_on", [])
+    right.setdefault("also_seen_on", [])
+    if slug_b not in left["also_seen_on"]:
+        left["also_seen_on"].append(slug_b)
+    if slug_a not in right["also_seen_on"]:
+        right["also_seen_on"].append(slug_a)
+    plane_a = (left.get("idp") or "").lower()
+    plane_b = (right.get("idp") or "").lower()
+    # Product-plane observation counts as a declaration.
+    if plane_a in IDP_PLANES and plane_b not in IDP_PLANES:
+        left["declared"] = True
+        left["home_vendor"] = left.get("home_vendor") or slug_b
+        left["cross_vendor"] = True
+    elif plane_b in IDP_PLANES and plane_a not in IDP_PLANES:
+        right["declared"] = True
+        right["home_vendor"] = right.get("home_vendor") or slug_a
+        right["cross_vendor"] = True
+    else:
+        left["declared"] = True
+        right["declared"] = True
 
 
 def link_cross_plane(by_vendor: dict[str, list[dict]]) -> None:
@@ -142,36 +186,32 @@ def link_cross_plane(by_vendor: dict[str, list[dict]]) -> None:
     Does not collapse inventory rows. Each plane keeps its quotable id.
     If the home (product) plane also observed it, NHI-06 is satisfied
     without a YAML declaration.
+
+    Matching is exact-token equality (see ``match_keys``), so candidates come
+    from an inverted index rather than from comparing every identity against
+    every other one. The pairwise form was O(V^2 * N^2): ~1s at 20 vendors x 60
+    identities, ~18s at 50 x 100, and unusable beyond that.
     """
     slugs = list(by_vendor)
-    for i, slug_a in enumerate(slugs):
-        for slug_b in slugs[i + 1:]:
-            for left in by_vendor[slug_a]:
-                for right in by_vendor[slug_b]:
-                    if not same_identity(left, right):
-                        continue
-                    left["cross_plane"] = True
-                    right["cross_plane"] = True
-                    left.setdefault("also_seen_on", [])
-                    right.setdefault("also_seen_on", [])
-                    if slug_b not in left["also_seen_on"]:
-                        left["also_seen_on"].append(slug_b)
-                    if slug_a not in right["also_seen_on"]:
-                        right["also_seen_on"].append(slug_a)
-                    plane_a = (left.get("idp") or "").lower()
-                    plane_b = (right.get("idp") or "").lower()
-                    # Product-plane observation counts as a declaration.
-                    if plane_a in IDP_PLANES and plane_b not in IDP_PLANES:
-                        left["declared"] = True
-                        left["home_vendor"] = left.get("home_vendor") or slug_b
-                        left["cross_vendor"] = True
-                    elif plane_b in IDP_PLANES and plane_a not in IDP_PLANES:
-                        right["declared"] = True
-                        right["home_vendor"] = right.get("home_vendor") or slug_a
-                        right["cross_vendor"] = True
-                    else:
-                        left["declared"] = True
-                        right["declared"] = True
+    index: dict[tuple[str, str], list[tuple[int, int, dict]]] = {}
+    for vi, slug in enumerate(slugs):
+        for ni, nhi in enumerate(by_vendor[slug]):
+            for key in match_keys(nhi):
+                index.setdefault(key, []).append((vi, ni, nhi))
+
+    for vi, slug_a in enumerate(slugs):
+        for left in by_vendor[slug_a]:
+            # Only later vendors: a pair is visited once, and two identities
+            # inside one vendor are never linked to each other.
+            candidates: dict[tuple[int, int], tuple[int, int, dict]] = {}
+            for key in match_keys(left):
+                for cand in index.get(key, ()):
+                    if cand[0] > vi:
+                        candidates[(cand[0], cand[1])] = cand
+            # Sorted so home_vendor's first-write-wins picks the same vendor
+            # the nested loops did.
+            for cand_vi, _, right in sorted(candidates.values(), key=lambda c: (c[0], c[1])):
+                _link_pair(left, right, slug_a, slugs[cand_vi])
 
 
 def _tokens_for(vendor: dict) -> list[str]:
@@ -182,8 +222,60 @@ def _tokens_for(vendor: dict) -> list[str]:
     return [t for t in tokens if t and len(t) >= 4]
 
 
-def tag_cross_vendor(nhi: dict, vendor: dict, portfolio: list[dict] | None) -> dict:
-    """Mark identities that belong to a different vendor than the tenant."""
+class PortfolioIndex:
+    """Register NHIs and vendor name-tokens, indexed once instead of per identity.
+
+    ``tag_cross_vendor`` runs for every discovered identity and used to walk the
+    whole portfolio (and every register NHI on it) each time, which made the
+    declaration check O(identities * vendors * register entries).
+    """
+
+    __slots__ = ("tokens", "by_key", "empty")
+
+    def __init__(self, portfolio: list[dict] | None):
+        # Portfolio order is preserved: both lookups below are first-match-wins.
+        self.tokens: list[tuple[str, tuple[str, ...]]] = []
+        self.by_key: dict[tuple[str, str], list[tuple[int, int, str]]] = {}
+        self.empty = not portfolio
+        for pi, other in enumerate(portfolio or ()):
+            slug = other.get("slug") or ""
+            toks = tuple(_tokens_for(other))
+            if toks:
+                self.tokens.append((slug, toks))
+            for ei, entry in enumerate(other.get("nhis") or []):
+                for key in match_keys(entry):
+                    self.by_key.setdefault(key, []).append((pi, ei, slug))
+
+    def home_by_name(self, principal: str, exclude: str) -> str | None:
+        """First portfolio vendor whose name tokens appear in this principal."""
+        for slug, toks in self.tokens:
+            if slug == exclude:
+                continue
+            if any(tok in principal for tok in toks):
+                return slug
+        return None
+
+    def declaring_slugs(self, nhi: dict) -> list[str]:
+        """Slugs whose register declares this identity, in portfolio order."""
+        hits: dict[tuple[int, int], tuple[int, int, str]] = {}
+        for key in match_keys(nhi):
+            for row in self.by_key.get(key, ()):
+                hits[(row[0], row[1])] = row
+        return [slug for _, _, slug in sorted(hits.values(), key=lambda r: (r[0], r[1]))]
+
+
+def tag_cross_vendor(
+    nhi: dict,
+    vendor: dict,
+    portfolio: list[dict] | None,
+    index: PortfolioIndex | None = None,
+) -> dict:
+    """Mark identities that belong to a different vendor than the tenant.
+
+    Pass ``index`` to reuse one build across a whole vendor's identities;
+    without it the index is built per call, which is only sane for a one-off.
+    """
+    index = index if index is not None else PortfolioIndex(portfolio)
     slug = vendor["slug"]
     principal = (nhi.get("principal") or nhi.get("name") or "").lower()
     resides = nhi.get("resides_in")
@@ -192,13 +284,8 @@ def tag_cross_vendor(nhi: dict, vendor: dict, portfolio: list[dict] | None) -> d
     if resides and resides != slug:
         home = resides
 
-    if not home and portfolio:
-        for other in portfolio:
-            if other.get("slug") == slug:
-                continue
-            if any(tok in principal for tok in _tokens_for(other)):
-                home = other["slug"]
-                break
+    if not home and not index.empty:
+        home = index.home_by_name(principal, exclude=slug) or home
 
     nhi["home_vendor"] = home
     nhi["cross_vendor"] = bool((home and home != slug) or (resides and resides != slug))
@@ -207,17 +294,31 @@ def tag_cross_vendor(nhi: dict, vendor: dict, portfolio: list[dict] | None) -> d
         "register",
         "register+observed",
     )
-    if portfolio:
-        for other in portfolio:
-            for entry in other.get("nhis") or []:
-                if same_identity(entry, nhi):
-                    declared = True
-                    if not home and other.get("slug") != slug:
-                        home = other["slug"]
-                        nhi["home_vendor"] = home
-                        nhi["cross_vendor"] = True
+    if not index.empty:
+        for other_slug in index.declaring_slugs(nhi):
+            declared = True
+            if not home and other_slug != slug:
+                home = other_slug
+                nhi["home_vendor"] = home
+                nhi["cross_vendor"] = True
     nhi["declared"] = bool(declared)
     return nhi
+
+
+def staleness_days(nhi: dict) -> int:
+    """Days since this identity was last actually observed. 0 when unknown."""
+    try:
+        seen = date.fromisoformat(str(nhi.get("last_seen"))[:10])
+    except (TypeError, ValueError):
+        return 0
+    return max(0, (date.today() - seen).days)
+
+
+def is_stale(nhi: dict, *, after_days: int = STALE_AFTER_DAYS) -> bool:
+    """True when a row is last-known rather than current."""
+    if nhi.get("stale"):
+        return True
+    return staleness_days(nhi) > after_days
 
 
 def _as_feature(nhi: dict) -> dict:
@@ -299,16 +400,31 @@ def discover_nhis(
             row.setdefault("days_since_rotated", _age_days(row.get("last_rotated")))
             observed.append(row)
 
+    # One index for this vendor's whole identity set, not one per identity.
+    index = PortfolioIndex(portfolio)
+
+    # Observed identities indexed by match key, so pairing the register overlay
+    # against them is a lookup rather than a scan per register row.
+    observed_by_key: dict[tuple[str, str], list[int]] = {}
+    for oi, obs in enumerate(observed):
+        for key in match_keys(obs):
+            observed_by_key.setdefault(key, []).append(oi)
+
     merged: list[dict] = []
     matched: set[int] = set()
     for reg in register:
-        hit = next((o for o in observed if same_identity(reg, o)), None)
-        if hit is not None:
+        # Lowest index wins, matching the original left-to-right scan.
+        hit_idx = min(
+            (oi for key in match_keys(reg) for oi in observed_by_key.get(key, ())),
+            default=None,
+        )
+        if hit_idx is not None:
+            hit = observed[hit_idx]
             item = _overlay(reg, hit)
             matched.add(id(hit))
         else:
             item = dict(reg)
-        merged.append(tag_cross_vendor(item, vendor, portfolio))
+        merged.append(tag_cross_vendor(item, vendor, portfolio, index))
 
     for obs in observed:
         if id(obs) in matched:
@@ -318,7 +434,7 @@ def discover_nhis(
         item["orphan"] = True
         item["vendor"] = vendor["slug"]
         item["vendor_name"] = vendor.get("vendor") or vendor["slug"]
-        item = tag_cross_vendor(item, vendor, portfolio)
+        item = tag_cross_vendor(item, vendor, portfolio, index)
         # Declared on another vendor's register: not an orphan, just visiting.
         if item.get("declared"):
             item["orphan"] = False
@@ -402,6 +518,25 @@ def evaluate_nhis(
             unknown_blocks = any(r is None for r in fail_results)
             if any(r is True for r in gap_results) or (unknown_blocks and control.gap_when):
                 conds = control.gap_when or control.fails_when
+                observed_now = _observed(conds, feature, vendor)
+                missing = sorted(
+                    field for field, value in observed_now.items()
+                    if value == "<not recorded>" or _unknown(value)
+                )
+                # Name the field and the remedy. Several of these — notably
+                # human_in_loop — cannot come from an IdP API at all: no
+                # directory reports whether a vendor's agent asks before it
+                # acts. Until a human records it, NHI-01 stays a question
+                # rather than becoming a critical, which is the honest answer
+                # but only useful if the report says what to supply.
+                reason = "required field is unknown; cannot evaluate NHI control"
+                if missing:
+                    reason = (
+                        f"cannot evaluate: {', '.join(missing)} "
+                        f"{'is' if len(missing) == 1 else 'are'} unknown. "
+                        f"No identity-provider API reports this — record it with "
+                        f"`python3 vra.py enrich {vendor['slug']}`."
+                    )
                 gaps.append(
                     Assessment(
                         kind="gap",
@@ -409,8 +544,8 @@ def evaluate_nhis(
                         vendor_name=vendor.get("vendor") or vendor["slug"],
                         feature=name,
                         control=control,
-                        observed=_observed(conds, feature, vendor),
-                        reason="required field is unknown; cannot evaluate NHI control",
+                        observed=observed_now,
+                        reason=reason,
                         subject=subject,
                     )
                 )
@@ -519,17 +654,27 @@ class NHIInventory:
         prev_hash = existing.get("entitlement_hash")
         prev_scopes = list(existing.get("scopes") or [])
         existing.update({k: v for k, v in record.items() if k != "first_seen"})
+        # Re-observing an identity makes it current again. Without this the
+        # staleness flag is sticky: one failed probe would mark the portfolio
+        # last-known forever, and the warning would stop meaning anything.
+        for field in ("stale", "stale_reason", "stale_days"):
+            existing.pop(field, None)
         if prev_hash and prev_hash != ehash:
             delta = entitlement_diff(prev_scopes, scopes)
             from .probe import _is_write_scope
             change = {
                 "id": f"entitlement:{key}:{ehash[:12]}",
                 "kind": "entitlement_change",
+                "nhi_kind": record.get("kind"),
                 "family": "nhi",
                 "vendor": vendor_slug,
                 "vendor_name": record.get("vendor_name"),
+                "key": key,
                 "nhi_id": record.get("id") or record.get("app_id"),
                 "nhi_name": record.get("display_name"),
+                # The principal is what an NHI-* finding records as its subject,
+                # so the report can tie this change to the findings it caused.
+                "principal": record.get("principal"),
                 "added_scopes": delta["added_scopes"],
                 "removed_scopes": delta["removed_scopes"],
                 "gained_write_scope": any(_is_write_scope(s) for s in delta["added_scopes"]),
@@ -551,6 +696,23 @@ class NHIInventory:
 
     def all(self) -> list[dict]:
         return sorted(self.identities.values(), key=lambda i: i["key"])
+
+    def mark_stale(self, slug: str, *, reason: str) -> list[dict]:
+        """Flag a vendor's identities as last-known rather than current.
+
+        Called when a probe that should have run did not — a revoked token, a
+        401, an unreachable tenant. The rows are kept (absence of evidence is
+        not evidence of removal) but they must never read as freshly observed.
+        """
+        rows = []
+        for row in self.identities.values():
+            if row.get("vendor") != slug:
+                continue
+            row["stale"] = True
+            row["stale_reason"] = reason
+            row["stale_days"] = staleness_days(row)
+            rows.append(row)
+        return rows
 
     def for_vendor(self, slug: str) -> list[dict]:
         return [i for i in self.all() if i["vendor"] == slug]
@@ -576,11 +738,11 @@ def assessments_to_records(
                     "confidence": 1.0,
                 }
             )
-        rec = to_record(a, evidence=ev)
+        rec = to_record(a, evidence=dedupe_evidence(ev))
         rec["family"] = "nhi"
         out_f.append(rec)
     for a in gaps:
-        rec = to_record(a, evidence=evidence_by_subject.get(a.subject, []))
+        rec = to_record(a, evidence=dedupe_evidence(evidence_by_subject.get(a.subject, [])))
         rec["family"] = "nhi"
         out_g.append(rec)
     return out_f, out_g

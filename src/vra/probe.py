@@ -26,11 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import REPO_ROOT, RunConfig
-
-# Scopes that let an AI component change state rather than just read it.
-WRITE_SCOPE_MARKERS = ("manage", "write", "revoke", "delete", "create", "update", "admin")
-
+from .config import REPO_ROOT, WRITE_SCOPE_MARKERS, RunConfig
 
 @dataclass
 class ProbeResult:
@@ -156,9 +152,12 @@ def _extract_nhis(data: dict) -> list[dict]:
             nhi["human_in_loop"] = bool(agent_mode.get("per_action_approval"))
         nhis.append(nhi)
 
-    # Grants whose app_id is not in the applications list still count.
+    # Grants whose app_id is not in the applications list still count. A grant
+    # attributed to a service account is the exception: that account emits its
+    # own row below, with fuller metadata, so it must not appear twice.
+    service_ids = {s.get("id") for s in (data.get("service_accounts") or []) if s.get("id")}
     for app_id, grants in grants_by_app.items():
-        if app_id in seen_apps:
+        if app_id in seen_apps or app_id in service_ids:
             continue
         scopes = sorted({s for g in grants for s in (g.get("scopes") or [])})
         principal = next((g.get("client_name") or g.get("principal") for g in grants), None)
@@ -215,22 +214,32 @@ def _extract_nhis(data: dict) -> list[dict]:
             continue
         name = svc.get("name") or str(svc_id)
         status = str(svc.get("status") or "ACTIVE").upper()
+        # On Entra the service principal IS the principal that holds
+        # permissions, so a grant can land here rather than on an application.
+        svc_grants = grants_by_app.get(svc_id, [])
+        svc_scopes = sorted({s for g in svc_grants for s in (g.get("scopes") or [])})
+        issued = next((g.get("issued") for g in svc_grants if g.get("issued")), None)
         nhis.append(
             {
                 "id": svc_id,
                 "app_id": svc_id,
+                "client_id": svc.get("client_id"),
                 "name": name,
                 "kind": "service_account",
                 "status": "active" if status == "ACTIVE" else "disabled",
                 "principal": name,
-                "scopes": [],
-                "write_scopes": [],
+                "scopes": svc_scopes,
+                "write_scopes": sorted({s for s in svc_scopes if _is_write_scope(s)}),
                 "created": svc.get("created"),
+                "last_rotated": issued,
                 "ai_component": False,
                 "source": "observed",
                 "idp": svc.get("idp") or idp,
                 "discovered_via": svc.get("discovered_via") or "okta_users",
-                "evidence": f"idp service-account user {svc_id} ({name})",
+                "evidence": (
+                    f"idp service-account {svc_id} ({name})"
+                    + (f" scopes={', '.join(svc_scopes)}" if svc_scopes else "")
+                ),
             }
         )
     return nhis
