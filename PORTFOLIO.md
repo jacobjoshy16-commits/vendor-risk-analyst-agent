@@ -71,10 +71,15 @@ auditor and a chatbot you have to double-check.
 
 It also runs entirely on the machine. Vendor risk data does not leave it by default.
 
-## Proof it works
+## How it was tested
 
-- **22 out of 22** expected behaviors caught in a controlled test scenario. Zero
-  misses, zero false alarms.
+The sandbox is a controlled scenario: three fictional vendors, with a known change
+planted in two of them. The third is a **negative control** — its documents change,
+but nothing about its AI does. A detector that flags the third one is a detector
+nobody will trust, so proving it stays quiet matters as much as proving it fires.
+
+- **22 out of 22** expected behaviors caught. Zero misses, zero false alarms —
+  including staying silent on the negative control.
 - **383 automated tests**, including tests whose only job is to verify the AI cannot
   create a finding.
 - **Four real defects found during my own validation** — including a false alarm the
