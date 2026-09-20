@@ -1,0 +1,950 @@
+# NERC CIP control set — substation supply-chain and access management.
+#
+# This file cites NERC Reliability Standards and NOTHING ELSE. No NIST SP
+# 800-53, no SOC 2 TSC. A utility compliance lead is audited against NERC; a
+# control that cites three frameworks to say one thing is longer to read and
+# no more defensible. The AIV-* and NHI-* sets in controls.yaml /
+# nhi_controls.yaml keep their 800-53 + SOC 2 citations and are unaffected.
+#
+# ---------------------------------------------------------------------------
+# WHAT EACH STANDARD ACTUALLY DOES (this mapping is the point of the file)
+# ---------------------------------------------------------------------------
+#
+#   CIP-013  Supply chain risk management. A PLAN standard: develop a plan
+#            (R1), implement it (R2), review and get CIP Senior Manager
+#            approval every 15 calendar months (R3). CIP-013 does NOT impose
+#            the per-installation firmware check. It requires that your
+#            procurement PROCESS address it (R1.2.5).
+#
+#   CIP-010  Configuration change management. R1 Part 1.6 is the operational
+#            control that actually requires verifying the identity of the
+#            software source (1.6.1) and the integrity of the software
+#            obtained (1.6.2) before deviating from baseline. THIS is the
+#            requirement a firmware verification tool evidences.
+#
+#   CIP-005  Electronic Security Perimeter. R2.4 requires methods for
+#            DETERMINING active vendor remote access sessions; R2.5 requires
+#            methods to DISABLE them. CIP-013 R1.2.6 requires your plan to
+#            address coordination of these controls — the technical control
+#            itself lives here.
+#
+#   CIP-004  Personnel and training. Governs WHO may hold the access that
+#            CIP-005 perimeters: training (R2), personnel risk assessment
+#            (R3), access authorization and periodic verification (R4),
+#            access revocation (R5).
+#
+#   CIP-002  Not encoded as controls. Its output — the High / Medium / Low
+#            BES Cyber System impact rating — is carried on every asset and
+#            drives `applies_when`. CIP-013 obligations attach to high and
+#            medium impact BES Cyber Systems; applying them to a low-impact
+#            substation is a false positive an auditor will catch.
+#
+# ---------------------------------------------------------------------------
+# CITATION VERIFICATION
+# ---------------------------------------------------------------------------
+# NERC revises these standards and part numbering shifts between revisions.
+# Every control therefore carries an explicit, pinned `standard` + `version` +
+# `requirement` + `part`, plus `citation_verified`. Until a human checks each
+# citation against the enforceable standard on nerc.com and sets
+# `citation_verified: true` with their name, the audit evidence pack prints a
+# prominent UNVERIFIED banner. The tool does not silently assert a revision
+# number it cannot check. tests/test_cip_controls.py enforces that the fields
+# are present on every control.
+#
+# ---------------------------------------------------------------------------
+# EVALUATION SEMANTICS — identical to controls.yaml (src/vra/evaluate.py)
+# ---------------------------------------------------------------------------
+#   applies_when: ALL must hold or the control is skipped entirely
+#   fails_when:   ALL must hold (AND) for the control to FAIL
+#   gap_when:     ANY holds and the control did not fail -> information gap
+#   severity:     from this file only. The model never sets it.
+#   subject:      which collection the control is evaluated against —
+#                 procurement | firmware_deployment | vendor_access |
+#                 vendor_personnel
+#
+# Boolean verification fields (signature_verified, integrity_verified, ...)
+# are NOT typed into YAML. They are computed by src/vra/cipcrypto.py performing
+# real Ed25519 signature verification and real SHA-256 hashing against the
+# actual firmware bytes on disk, then materialised onto the subject. A finding
+# here traces to a cryptographic operation, not to a field somebody asserted.
+
+# ===========================================================================
+# CIP-010 R1.6 — software source identity and software integrity
+# The load-bearing technical controls. These are what the demo performs.
+# ===========================================================================
+
+- id: CIP-01
+  subject: firmware_deployment
+  question: >
+    Was the integrity of the firmware obtained from the software source verified
+    before it was deployed to the BES Cyber Asset?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-010"
+      version: "4"
+      requirement: "R1"
+      part: "1.6.2"
+      text: "Verify the integrity of the software obtained from the software source."
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: verification_method_available
+      equals: true
+  fails_when:
+    - field: integrity_verified
+      equals: false
+  gap_when:
+    - field: integrity_verified
+      is_unknown: true
+  severity: critical
+  remediation: >
+    Do not deploy. Quarantine the binary, re-obtain the package from the vendor's
+    authenticated distribution channel, and re-run verification. If the device was
+    already flashed, treat it as a potential compromise of the BES Cyber Asset and
+    initiate the CIP-008 incident response process.
+  compensating_control: >
+    Isolate the affected asset from the Electronic Security Perimeter and revert to
+    the last baseline-verified firmware image pending investigation.
+
+- id: CIP-02
+  subject: firmware_deployment
+  question: >
+    Was the identity of the software source verified before the firmware was
+    deployed to the BES Cyber Asset?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-010"
+      version: "4"
+      requirement: "R1"
+      part: "1.6.1"
+      text: "Verify the identity of the software source."
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: verification_method_available
+      equals: true
+  fails_when:
+    - field: source_identity_verified
+      equals: false
+  gap_when:
+    - field: source_identity_verified
+      is_unknown: true
+  severity: critical
+  remediation: >
+    Do not deploy. A package whose signature does not chain to a trusted vendor
+    signing key has no verified source, regardless of where it was downloaded from
+    or whether its published hash matches. Re-obtain from the vendor and confirm the
+    signing key fingerprint out of band.
+  compensating_control: >
+    Hold the package in quarantine and request the vendor re-publish with a current
+    signing key and a fingerprint confirmed through a separate channel.
+
+- id: CIP-03
+  subject: firmware_deployment
+  question: >
+    Is the firmware signed by a vendor key that is currently trusted — neither
+    revoked nor outside its validity window?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-010"
+      version: "4"
+      requirement: "R1"
+      part: "1.6.1"
+      text: "Verify the identity of the software source."
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: signature_present
+      equals: true
+  fails_when:
+    - field: signing_key_trusted
+      equals: false
+  gap_when:
+    - field: signing_key_status
+      is_unknown: true
+  severity: critical
+  remediation: >
+    Reject the package. A mathematically valid signature from a revoked or expired
+    key does not establish source identity. Obtain a build signed by the vendor's
+    current key.
+  compensating_control: >
+    Where the vendor cannot re-sign, document a risk acceptance approved by the CIP
+    Senior Manager and verify the package through an independent vendor-confirmed
+    hash before deployment.
+
+- id: CIP-04
+  subject: firmware_deployment
+  question: >
+    Does the firmware package match the hash the vendor published for that release?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-010"
+      version: "4"
+      requirement: "R1"
+      part: "1.6.2"
+      text: "Verify the integrity of the software obtained from the software source."
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: published_hash_available
+      equals: true
+  fails_when:
+    - field: hash_match
+      equals: false
+  gap_when:
+    - field: hash_match
+      is_unknown: true
+  severity: critical
+  remediation: >
+    Reject the package and re-download. A hash mismatch means the bytes on disk are
+    not the bytes the vendor released — corruption in transit at best, substitution
+    at worst.
+  compensating_control: >
+    None. A hash mismatch is not compensable; the package must be re-obtained.
+
+- id: CIP-05
+  subject: firmware_deployment
+  question: >
+    Is the firmware package built for the device model it is being deployed to?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-010"
+      version: "4"
+      requirement: "R1"
+      part: "1.1"
+      text: >
+        Develop a baseline configuration, individually or by group, which shall
+        include operating system or firmware.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: model_match
+      equals: false
+  gap_when:
+    - field: target_model
+      is_unknown: true
+  severity: high
+  remediation: >
+    Do not deploy. Correctly signed firmware for the wrong relay family can render a
+    protective device inoperable. Obtain the build matching the deployed model and
+    firmware family.
+  compensating_control: >
+    Stage the deployment on a bench unit of the same model before any field rollout.
+
+- id: CIP-06
+  subject: firmware_deployment
+  question: >
+    Where the vendor supplies no verification method, has the absence been recorded
+    and risk-accepted rather than silently passed?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-010"
+      version: "4"
+      requirement: "R1"
+      part: "1.6"
+      text: >
+        ... and when the method to do so is available to the Responsible Entity from
+        the software source.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: verification_method_available
+      equals: false
+  fails_when:
+    - field: no_verification_method_documented
+      equals: false
+  severity: high
+  remediation: >
+    CIP-010 R1.6 is conditioned on the method being available from the source, but
+    the absence must be documented, not assumed. Record which method is unavailable,
+    for which vendor and product, and route it to procurement as a CIP-013 R1.2.5
+    contract gap.
+  compensating_control: >
+    Obtain an out-of-band hash or signature from the vendor and record the channel
+    used to confirm it.
+
+# ===========================================================================
+# CIP-013 R1.1 / R1.2 — the procurement plan layer
+# One subject per vendor. These are contract and process controls, not
+# per-deployment technical checks.
+# ===========================================================================
+
+- id: CIP-07
+  subject: procurement
+  question: >
+    Does a documented process exist to identify and assess cyber security risk from
+    vendor products and services, including installing vendor equipment and software
+    and transitions between vendors?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R1"
+      part: "1.1"
+      text: >
+        One or more process(es) used in planning for the procurement of BES Cyber
+        Systems to identify and assess cyber security risk(s) to the Bulk Electric
+        System from vendor products or services resulting from: (i) procuring and
+        installing vendor equipment and software; and (ii) transitions from one
+        vendor(s) to another vendor(s).
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: risk_assessment_process_documented
+      equals: false
+  gap_when:
+    - field: risk_assessment_process_documented
+      is_unknown: true
+  severity: high
+  remediation: >
+    Document the procurement risk assessment process covering equipment and software
+    installation and vendor transition, and record its application to this vendor
+    with a dated assessment.
+  compensating_control: >
+    Perform and record a point-in-time risk assessment for this vendor while the
+    standing process is being formalised.
+
+- id: CIP-08
+  subject: procurement
+  question: >
+    Does the procurement contract require the vendor to notify the entity of
+    vendor-identified incidents related to the products or services supplied?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R1"
+      part: "1.2.1"
+      text: >
+        Notification by the vendor of vendor-identified incidents related to the
+        products or services provided to the Responsible Entity that pose cyber
+        security risk to the Responsible Entity.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: contract.incident_notification_clause
+      equals: false
+  gap_when:
+    - field: contract.incident_notification_clause
+      is_unknown: true
+  severity: high
+  remediation: >
+    Add a vendor incident notification clause with a defined notification window at
+    the next contract renewal or amendment.
+  compensating_control: >
+    Subscribe to the vendor's published security advisory feed and monitor E-ISAC
+    bulletins naming this vendor until the clause is executed.
+
+- id: CIP-09
+  subject: procurement
+  question: >
+    Does the contract establish coordinated response to vendor-identified incidents?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R1"
+      part: "1.2.2"
+      text: >
+        Coordination of responses to vendor-identified incidents related to the
+        products or services provided to the Responsible Entity that pose cyber
+        security risk to the Responsible Entity.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: contract.incident_coordination_clause
+      equals: false
+  gap_when:
+    - field: contract.incident_coordination_clause
+      is_unknown: true
+  severity: medium
+  remediation: >
+    Define named contacts, escalation paths and response obligations for coordinated
+    incident handling with this vendor, and reference them in the contract.
+  compensating_control: >
+    Record the vendor's published incident contact and escalation path in the
+    CIP-008 incident response plan.
+
+- id: CIP-10
+  subject: procurement
+  question: >
+    Does the contract require the vendor to notify the entity when vendor remote or
+    onsite access should no longer be granted to a vendor representative?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R1"
+      part: "1.2.3"
+      text: >
+        Notification by vendors when remote or onsite access should no longer be
+        granted to vendor representatives.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: contract.access_termination_notice_clause
+      equals: false
+  gap_when:
+    - field: contract.access_termination_notice_clause
+      is_unknown: true
+  severity: high
+  remediation: >
+    Require written notice when a vendor representative leaves the engagement, with
+    a defined notification window, and bind it to the CIP-004 R5 revocation process.
+  compensating_control: >
+    Re-attest the vendor's authorised representative roster at least quarterly until
+    the notification clause is executed.
+
+- id: CIP-11
+  subject: procurement
+  question: >
+    Does the contract require vendor disclosure of known vulnerabilities in the
+    products or services provided?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R1"
+      part: "1.2.4"
+      text: >
+        Disclosure by vendors of known vulnerabilities related to the products or
+        services provided to the Responsible Entity.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: contract.vulnerability_disclosure_clause
+      equals: false
+  gap_when:
+    - field: contract.vulnerability_disclosure_clause
+      is_unknown: true
+  severity: high
+  remediation: >
+    Add a vulnerability disclosure obligation with a defined disclosure window and a
+    machine-readable advisory channel.
+  compensating_control: >
+    Track the vendor's products in the NERC E-ISAC and CISA ICS advisory feeds and
+    review at least monthly.
+
+- id: CIP-12
+  subject: procurement
+  question: >
+    Does the contract require the vendor to provide a method to verify software
+    integrity and authenticity for all software and patches supplied?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R1"
+      part: "1.2.5"
+      text: >
+        Verification of software integrity and authenticity of all software and
+        patches provided by the vendor for use in the BES Cyber System.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: contract.software_integrity_clause
+      equals: false
+  gap_when:
+    - field: contract.software_integrity_clause
+      is_unknown: true
+  severity: critical
+  remediation: >
+    Require the vendor to publish a code signing certificate or public key and a
+    per-release signature or hash for every software and firmware artifact, with the
+    key fingerprint confirmed out of band. This clause is what makes CIP-010 R1.6
+    operable for this vendor.
+  compensating_control: >
+    Obtain per-release hashes through a vendor-confirmed out-of-band channel and
+    record the channel in the deployment evidence.
+
+- id: CIP-13
+  subject: procurement
+  question: >
+    Does the contract establish coordinated controls for vendor-initiated
+    Interactive Remote Access and system-to-system remote access?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R1"
+      part: "1.2.6"
+      text: >
+        Coordination of controls for (i) vendor-initiated Interactive Remote Access,
+        and (ii) system-to-system remote access with a vendor(s).
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: contract.remote_access_coordination_clause
+      equals: false
+  gap_when:
+    - field: contract.remote_access_coordination_clause
+      is_unknown: true
+  severity: high
+  remediation: >
+    Define, in contract, how vendor-initiated Interactive Remote Access and
+    system-to-system access are requested, approved, monitored and terminated, and
+    bind it to the CIP-005 R2.4 / R2.5 technical controls.
+  compensating_control: >
+    Require all vendor remote access to transit the entity's Intermediate System
+    with session recording until the clause is executed.
+
+- id: CIP-14
+  subject: procurement
+  question: >
+    Has the supply chain cyber security risk management plan been implemented for
+    this vendor — that is, are the procured obligations evidenced in practice and
+    not only in contract?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R2"
+      part: "R2"
+      text: >
+        Each Responsible Entity shall implement its supply chain cyber security risk
+        management plan(s) specified in Requirement R1.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: plan_implemented
+      equals: false
+  gap_when:
+    - field: plan_implemented
+      is_unknown: true
+  severity: high
+  remediation: >
+    Produce dated evidence that the plan was applied to this vendor: the completed
+    risk assessment, the executed contract clauses, and the verification records for
+    software received. An unimplemented plan is a CIP-013 R2 violation independent
+    of the quality of the plan document.
+  compensating_control: >
+    None. R2 is an implementation obligation; only evidence of implementation closes it.
+
+- id: CIP-15
+  subject: procurement
+  question: >
+    Has the supply chain risk management plan been reviewed and approved by the CIP
+    Senior Manager within the last 15 calendar months?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R3"
+      part: "R3"
+      text: >
+        Each Responsible Entity shall review and obtain CIP Senior Manager or
+        delegate approval of its supply chain cyber security risk management plan(s)
+        specified in Requirement R1 at least once every 15 calendar months.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: plan_approval_age_days
+      gt: 456
+  gap_when:
+    - field: plan_approval_age_days
+      is_unknown: true
+  severity: high
+  remediation: >
+    Route the supply chain risk management plan to the CIP Senior Manager or
+    delegate for documented review and approval, and record the approval date.
+  compensating_control: >
+    None. The 15 calendar month period is a bright-line obligation.
+
+# ===========================================================================
+# CIP-005 R2.4 / R2.5 — vendor remote access into the ESP
+# ===========================================================================
+
+- id: CIP-16
+  subject: vendor_access
+  question: >
+    Does a method exist to determine that this vendor remote access session is
+    active?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-005"
+      version: "7"
+      requirement: "R2"
+      part: "2.4"
+      text: >
+        Have one or more methods for determining active vendor remote access
+        sessions (including Interactive Remote Access and system-to-system remote
+        access).
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: session_visibility_method
+      equals: false
+  gap_when:
+    - field: session_visibility_method
+      is_unknown: true
+  severity: high
+  remediation: >
+    Route vendor remote access through an Intermediate System that enumerates active
+    sessions, and confirm the enumeration covers system-to-system access as well as
+    Interactive Remote Access.
+  compensating_control: >
+    Enable session logging at the ESP boundary device and review active connections
+    at the start and end of every approved maintenance window.
+
+- id: CIP-17
+  subject: vendor_access
+  question: >
+    Does a method exist to disable this vendor remote access session?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-005"
+      version: "7"
+      requirement: "R2"
+      part: "2.5"
+      text: >
+        Have one or more method(s) to disable active vendor remote access (including
+        Interactive Remote Access and system-to-system remote access).
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: session_disable_method
+      equals: false
+  gap_when:
+    - field: session_disable_method
+      is_unknown: true
+  severity: critical
+  remediation: >
+    Establish and test a documented method to terminate vendor remote access — both
+    interactive and system-to-system — and record the test result.
+  compensating_control: >
+    Maintain a manual ESP boundary rule change procedure with a named on-call owner
+    and a tested time-to-disconnect.
+
+- id: CIP-18
+  subject: vendor_access
+  question: >
+    Is the vendor remote access session still active after its approved maintenance
+    window closed?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-005"
+      version: "7"
+      requirement: "R2"
+      part: "2.4"
+      text: >
+        Have one or more methods for determining active vendor remote access
+        sessions (including Interactive Remote Access and system-to-system remote
+        access).
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: status
+      equals: active
+  fails_when:
+    - field: past_approved_window
+      equals: true
+  gap_when:
+    - field: approved_window_end
+      is_unknown: true
+  severity: high
+  remediation: >
+    Terminate the session and determine why it outlived its approved window. Bind
+    session lifetime to the change ticket so expiry is enforced rather than reviewed.
+  compensating_control: >
+    Alert the control room on any vendor session exceeding its approved window and
+    require positive confirmation to extend.
+
+# ===========================================================================
+# CIP-004 — who may hold that access
+# ===========================================================================
+
+- id: CIP-19
+  subject: vendor_personnel
+  question: >
+    Has a personnel risk assessment been completed for this vendor representative
+    before authorised electronic access was granted?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-004"
+      version: "7"
+      requirement: "R3"
+      part: "3.4"
+      text: >
+        Process to ensure that individuals with authorized electronic or authorized
+        unescorted physical access have had a personnel risk assessment completed
+        ... prior to being granted authorized electronic access ...
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: has_electronic_access
+      equals: true
+  fails_when:
+    - field: pra_completed
+      equals: false
+  gap_when:
+    - field: pra_completed
+      is_unknown: true
+  severity: critical
+  remediation: >
+    Revoke access until the personnel risk assessment is completed and recorded.
+    Access granted before a completed PRA is a CIP-004 R3 violation on the day it
+    was granted, not on the day it is discovered.
+  compensating_control: >
+    None for standing access. Escorted, logged, time-bounded access may be permitted
+    under a documented exception.
+
+- id: CIP-20
+  subject: vendor_personnel
+  question: >
+    Has the personnel risk assessment for this vendor representative been renewed
+    within the last seven years?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-004"
+      version: "7"
+      requirement: "R3"
+      part: "3.5"
+      text: >
+        Process to ensure that individuals with authorized electronic or authorized
+        unescorted physical access have had a personnel risk assessment performed at
+        least once every seven calendar years after the initial personnel risk
+        assessment.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: has_electronic_access
+      equals: true
+  fails_when:
+    - field: pra_age_days
+      gt: 2557
+  gap_when:
+    - field: pra_age_days
+      is_unknown: true
+  severity: high
+  remediation: >
+    Re-run the personnel risk assessment, including the seven-year criminal history
+    records check, and suspend access until it is recorded.
+  compensating_control: >
+    Restrict the representative to escorted, session-recorded access pending renewal.
+
+- id: CIP-21
+  subject: vendor_personnel
+  question: >
+    Has this vendor representative completed cyber security training within the last
+    15 calendar months?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-004"
+      version: "7"
+      requirement: "R2"
+      part: "2.3"
+      text: >
+        Require completion of the training specified in Part 2.1 at least once every
+        15 calendar months.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: has_electronic_access
+      equals: true
+  fails_when:
+    - field: training_age_days
+      gt: 456
+  gap_when:
+    - field: training_age_days
+      is_unknown: true
+  severity: high
+  remediation: >
+    Suspend authorised access until role-based cyber security training is completed
+    and the completion date recorded.
+  compensating_control: >
+    Permit escorted access only, with the escort holding current training.
+
+- id: CIP-22
+  subject: vendor_personnel
+  question: >
+    Is this vendor representative's electronic access supported by a current
+    authorisation record based on need?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-004"
+      version: "7"
+      requirement: "R4"
+      part: "4.1"
+      text: >
+        Process to authorize based on need, as determined by the Responsible Entity,
+        except for CIP Exceptional Circumstances: electronic access ...
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: has_electronic_access
+      equals: true
+  fails_when:
+    - field: access_authorization_on_file
+      equals: false
+  gap_when:
+    - field: access_authorization_on_file
+      is_unknown: true
+  severity: high
+  remediation: >
+    Revoke access lacking an authorisation record, or produce the dated authorisation
+    naming the business need and the approver.
+  compensating_control: >
+    None. An unauthorised account with ESP access is revoked, not monitored.
+
+- id: CIP-23
+  subject: vendor_personnel
+  question: >
+    Have this representative's access privileges been verified within the last
+    calendar quarter?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-004"
+      version: "7"
+      requirement: "R4"
+      part: "4.2"
+      text: >
+        Verify at least once each calendar quarter that individuals with active
+        electronic access or unescorted physical access have authorization records.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: has_electronic_access
+      equals: true
+  fails_when:
+    - field: access_verification_age_days
+      gt: 92
+  gap_when:
+    - field: access_verification_age_days
+      is_unknown: true
+  severity: medium
+  remediation: >
+    Run the quarterly access verification for vendor representatives and record the
+    date, the reviewer, and the disposition of every account.
+  compensating_control: >
+    None. The quarterly period is a bright-line obligation.
+
+- id: CIP-24
+  subject: vendor_personnel
+  question: >
+    Was electronic access revoked by the end of the next calendar day following a
+    termination action for this vendor representative?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-004"
+      version: "7"
+      requirement: "R5"
+      part: "5.1"
+      text: >
+        A process to initiate removal of an individual's ability for unescorted
+        physical access and Interactive Remote Access upon a termination action, and
+        complete the removals within 24 hours of the termination action.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: termination_action
+      equals: true
+  fails_when:
+    - field: hours_to_revocation
+      gt: 24
+  gap_when:
+    - field: hours_to_revocation
+      is_unknown: true
+  severity: critical
+  remediation: >
+    Revoke immediately and record the elapsed time. Where the vendor did not notify
+    the entity of the departure, raise it as a CIP-013 R1.2.3 contract failure as
+    well as a CIP-004 R5.1 violation.
+  compensating_control: >
+    None. R5.1 is a bright-line timing obligation.
+
+- id: CIP-25
+  subject: vendor_personnel
+  question: >
+    Have shared account credentials this representative had access to been changed
+    within 30 calendar days of their termination?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-004"
+      version: "7"
+      requirement: "R5"
+      part: "5.3"
+      text: >
+        For termination actions, change passwords for shared account(s) known to the
+        user within 30 calendar days of the termination action.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: termination_action
+      equals: true
+    - field: shared_accounts_known
+      equals: true
+  fails_when:
+    - field: days_to_shared_credential_change
+      gt: 30
+  gap_when:
+    - field: days_to_shared_credential_change
+      is_unknown: true
+  severity: high
+  remediation: >
+    Rotate every shared credential the departing representative had knowledge of and
+    record the rotation date per account.
+  compensating_control: >
+    Where operational constraints delay rotation, document the constraint, the
+    compensating monitoring, and the CIP Senior Manager approval.
