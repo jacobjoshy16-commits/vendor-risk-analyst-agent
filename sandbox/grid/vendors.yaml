@@ -1,0 +1,70 @@
+- vendor_slug: sentinel-protective
+  vendor: Sentinel Protective Systems
+  supplies_impact_rating: high
+  contract_id: MSA-SENTIN-2024
+  risk_assessment_process_documented: true
+  plan_implemented: true
+  plan_approval_age_days: 120
+  contract:
+    incident_notification_clause: true
+    incident_coordination_clause: true
+    access_termination_notice_clause: true
+    vulnerability_disclosure_clause: true
+    software_integrity_clause: true
+    remote_access_coordination_clause: true
+- vendor_slug: cascade-grid
+  vendor: Cascade Grid Controls
+  supplies_impact_rating: high
+  contract_id: MSA-CASCAD-2024
+  risk_assessment_process_documented: true
+  plan_implemented: true
+  plan_approval_age_days: 300
+  contract:
+    incident_notification_clause: true
+    incident_coordination_clause: false
+    access_termination_notice_clause: true
+    vulnerability_disclosure_clause: true
+    software_integrity_clause: true
+    remote_access_coordination_clause: true
+- vendor_slug: ironwood-automation
+  vendor: Ironwood Automation
+  supplies_impact_rating: high
+  contract_id: MSA-IRONWO-2024
+  risk_assessment_process_documented: true
+  plan_implemented: true
+  plan_approval_age_days: 210
+  contract:
+    incident_notification_clause: true
+    incident_coordination_clause: true
+    access_termination_notice_clause: false
+    vulnerability_disclosure_clause: true
+    software_integrity_clause: true
+    remote_access_coordination_clause: true
+- vendor_slug: northgate-substation
+  vendor: Northgate Substation Systems
+  supplies_impact_rating: high
+  contract_id: MSA-NORTHG-2024
+  risk_assessment_process_documented: true
+  plan_implemented: true
+  plan_approval_age_days: 470
+  contract:
+    incident_notification_clause: true
+    incident_coordination_clause: true
+    access_termination_notice_clause: true
+    vulnerability_disclosure_clause: unknown
+    software_integrity_clause: true
+    remote_access_coordination_clause: true
+- vendor_slug: halcyon-instruments
+  vendor: Halcyon Instruments
+  supplies_impact_rating: high
+  contract_id: MSA-HALCYO-2024
+  risk_assessment_process_documented: true
+  plan_implemented: false
+  plan_approval_age_days: 95
+  contract:
+    incident_notification_clause: true
+    incident_coordination_clause: true
+    access_termination_notice_clause: true
+    vulnerability_disclosure_clause: true
+    software_integrity_clause: false
+    remote_access_coordination_clause: true

@@ -39,6 +39,12 @@ class Control:
     applies_when: list[dict] = field(default_factory=list)
     remediation: str = ""
     compensating_control: str = ""
+    # Which collection a control scores. The AIV-* and NHI-* sets each have one
+    # implicit subject, so they leave this empty; the NERC set spans four
+    # (firmware_deployment, procurement, vendor_access, vendor_personnel) and
+    # names the one it applies to, so the dispatch stays in YAML rather than
+    # becoming a lookup table in code.
+    subject: str = ""
 
     @property
     def citation(self) -> str:
@@ -78,12 +84,13 @@ def load_controls(path=CONTROLS_FILE) -> list[Control]:
                 applies_when=item.get("applies_when", []),
                 remediation=" ".join((item.get("remediation") or "").split()),
                 compensating_control=" ".join((item.get("compensating_control") or "").split()),
+                subject=item.get("subject", ""),
             )
         )
     ids = [c.id for c in controls]
     dupes = {i for i in ids if ids.count(i) > 1}
     if dupes:
-        raise ValueError(f"duplicate control ids in controls.yaml: {sorted(dupes)}")
+        raise ValueError(f"duplicate control ids in {path.name}: {sorted(dupes)}")
     return controls
 
 

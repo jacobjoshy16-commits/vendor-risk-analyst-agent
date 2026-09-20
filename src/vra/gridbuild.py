@@ -1,0 +1,233 @@
+"""Build the committed part of the sandbox estate: keys, packages, firmware.
+
+Run with `python3 vra.py cip build-fixtures`.
+
+Everything here is regenerated from scratch, deterministically, so the estate
+is reproducible on any machine and no private key is ever committed. The
+signing keys are derived from fixed text labels by `derive_demo_keypair`, which
+is a deliberate and clearly-marked demo-only construction.
+
+The planted scenario
+--------------------
+One package is compromised: `SPS-421-4.7.2`, a protective relay build.
+
+It is constructed the way a real mirror compromise looks, not the way a
+convenient demo looks:
+
+    1. The vendor builds and signs the genuine image.
+    2. An attacker who controls the distribution mirror replaces the binary.
+    3. The attacker also updates the SHA-256 printed beside it -- the hash and
+       the binary come down the same channel, so controlling one means
+       controlling the other.
+    4. The attacker cannot forge the vendor's signature, so the original
+       signature is left in place and hopes nobody checks it.
+
+The result is a package that PASSES a hash check and FAILS a signature check.
+That is the whole argument of this module: the semi-manual process Entergy
+describes -- engineer downloads firmware, compares the hash to the release
+notes, records it on a spreadsheet -- returns green on this package. The
+cryptography returns red. Every other package in the estate is correctly
+signed over its actual bytes and must produce nothing, which is what makes the
+red one mean something.
+"""
+
+from __future__ import annotations
+
+from datetime import date, timedelta
+from pathlib import Path
+
+import yaml
+
+from .cipcrypto import derive_demo_keypair, encode_public_key, sha256_bytes, sign_blob
+from .grid import DEVICE_MODELS, VENDORS
+
+# The compromised release. Named here rather than buried so a reader can find
+# the planted case without reverse-engineering the generator.
+TAMPERED_PACKAGE = "SPS-421-4.7.2"
+
+RELEASES = {
+    "SPS-411": ["3.8.0", "3.9.1"],
+    "SPS-421": ["4.6.0", "4.7.2"],
+    "SPS-680": ["2.1.4", "2.2.0"],
+    "CGC-RTU-200": ["7.0.3", "7.1.0"],
+    "CGC-RTU-350": ["1.4.2"],
+    "IW-BC-90": ["5.5.1", "5.6.0"],
+    "IW-BC-120": ["2.0.9"],
+    "NG-GW-5000": ["9.2.1", "9.3.0"],
+    "HAL-MU-40": ["1.1.7"],
+}
+
+VENDOR_BY_MODEL = {
+    model: vendor
+    for vendor in VENDORS
+    for kind in vendor["makes"]
+    for model in DEVICE_MODELS[kind]
+}
+
+
+def _firmware_blob(vendor: str, model: str, version: str, *, payload_seed: int) -> bytes:
+    """A plausible firmware image.
+
+    Shaped like a real one -- magic bytes, a header naming the vendor, model and
+    version, then a padded binary payload -- because the point of the exercise
+    is to hash and sign actual file bytes. The payload is deterministic filler;
+    it is not executable and does not pretend to be.
+    """
+    header = (
+        f"SPSFW\x00{vendor}\x00{model}\x00{version}\x00"
+        f"build={payload_seed:08x}\x00"
+    ).encode()
+    payload = bytearray()
+    state = payload_seed
+    while len(payload) < 8192:
+        state = (state * 1103515245 + 12345) & 0xFFFFFFFF
+        payload += state.to_bytes(4, "big")
+    return b"\x7fFWIMG" + header + bytes(payload[:8192])
+
+
+def build(grid_dir: Path, *, today: date | None = None) -> dict:
+    """Generate keys.yaml, packages.yaml, vendors.yaml and the firmware images."""
+    today = today or date.today()
+    fw_dir = grid_dir / "firmware"
+    fw_dir.mkdir(parents=True, exist_ok=True)
+    for stale in fw_dir.glob("*.bin"):
+        stale.unlink()
+
+    # --- signing keys ------------------------------------------------------
+    keys: list[dict] = []
+    private_by_vendor = {}
+    for vendor in VENDORS:
+        priv, pub = derive_demo_keypair(f"{vendor['slug']}-signing-2026")
+        private_by_vendor[vendor["slug"]] = priv
+        keys.append(
+            {
+                "key_id": f"{vendor['slug']}-2026",
+                "vendor": vendor["name"],
+                "public_key": encode_public_key(pub),
+                "status": "active",
+                "valid_from": (today - timedelta(days=400)).isoformat(),
+                "valid_until": (today + timedelta(days=700)).isoformat(),
+                "fingerprint_confirmed_out_of_band": True,
+                "note": "DEMO KEY. Fictional vendor. Derived deterministically; signs nothing real.",
+            }
+        )
+    # A retired key, kept in the registry so a package signed with it is
+    # recognised and rejected rather than reported as an unknown signer.
+    _, retired_pub = derive_demo_keypair("sentinel-protective-signing-2021")
+    keys.append(
+        {
+            "key_id": "sentinel-protective-2021",
+            "vendor": "Sentinel Protective Systems",
+            "public_key": encode_public_key(retired_pub),
+            "status": "revoked",
+            "valid_from": (today - timedelta(days=1800)).isoformat(),
+            "valid_until": (today - timedelta(days=420)).isoformat(),
+            "fingerprint_confirmed_out_of_band": True,
+            "note": "DEMO KEY. Retired after scheduled rotation.",
+        }
+    )
+
+    # --- packages and firmware images --------------------------------------
+    packages: list[dict] = []
+    seed = 1
+    for model, versions in RELEASES.items():
+        vendor = VENDOR_BY_MODEL[model]
+        for version in versions:
+            seed += 1
+            package_id = f"{model}-{version}"
+            genuine = _firmware_blob(vendor["name"], model, version, payload_seed=seed * 7919)
+            artifact = fw_dir / f"{package_id}.bin"
+            signature = sign_blob(private_by_vendor[vendor["slug"]], genuine)
+
+            if package_id == TAMPERED_PACKAGE:
+                # Steps 2-4 of the mirror compromise described in the module
+                # docstring. The signature stays over the GENUINE bytes; the
+                # file on disk and the published hash are both the attacker's.
+                tampered = bytearray(genuine)
+                tampered[600:640] = b"\x90" * 40  # substituted payload region
+                on_disk = bytes(tampered)
+                published_hash = sha256_bytes(on_disk)
+                note = (
+                    "Binary substituted on the distribution mirror. The published hash "
+                    "was updated to match the substituted binary; the vendor signature "
+                    "still covers the genuine build and therefore no longer verifies."
+                )
+            else:
+                on_disk = genuine
+                published_hash = sha256_bytes(genuine)
+                note = ""
+
+            artifact.write_bytes(on_disk)
+            packages.append(
+                {
+                    "package_id": package_id,
+                    "vendor": vendor["name"],
+                    "vendor_slug": vendor["slug"],
+                    "target_model": model,
+                    "version": version,
+                    "artifact": f"firmware/{package_id}.bin",
+                    "published_sha256": published_hash,
+                    "signature": signature,
+                    "signing_key_id": f"{vendor['slug']}-2026",
+                    "released_on": (today - timedelta(days=seed * 11)).isoformat(),
+                    "note": note,
+                }
+            )
+
+    # --- procurement records (CIP-013 R1.1 / R1.2 / R2 / R3) ---------------
+    # Mostly compliant, with a few real gaps. A vendor portfolio where every
+    # clause is executed makes the CIP-013 controls decorative; one where none
+    # are makes the output noise. These are the shapes a mid-size utility
+    # actually has.
+    clause_profiles = {
+        "sentinel-protective": dict(
+            incident_notification_clause=True, incident_coordination_clause=True,
+            access_termination_notice_clause=True, vulnerability_disclosure_clause=True,
+            software_integrity_clause=True, remote_access_coordination_clause=True),
+        "cascade-grid": dict(
+            incident_notification_clause=True, incident_coordination_clause=False,
+            access_termination_notice_clause=True, vulnerability_disclosure_clause=True,
+            software_integrity_clause=True, remote_access_coordination_clause=True),
+        "ironwood-automation": dict(
+            incident_notification_clause=True, incident_coordination_clause=True,
+            access_termination_notice_clause=False, vulnerability_disclosure_clause=True,
+            software_integrity_clause=True, remote_access_coordination_clause=True),
+        "northgate-substation": dict(
+            incident_notification_clause=True, incident_coordination_clause=True,
+            access_termination_notice_clause=True, vulnerability_disclosure_clause="unknown",
+            software_integrity_clause=True, remote_access_coordination_clause=True),
+        "halcyon-instruments": dict(
+            incident_notification_clause=True, incident_coordination_clause=True,
+            access_termination_notice_clause=True, vulnerability_disclosure_clause=True,
+            software_integrity_clause=False, remote_access_coordination_clause=True),
+    }
+    plan_age = {
+        "sentinel-protective": 120, "cascade-grid": 300, "ironwood-automation": 210,
+        "northgate-substation": 470, "halcyon-instruments": 95,
+    }
+    vendors_out = []
+    for vendor in VENDORS:
+        vendors_out.append(
+            {
+                "vendor_slug": vendor["slug"],
+                "vendor": vendor["name"],
+                "supplies_impact_rating": "high",
+                "contract_id": f"MSA-{vendor['slug'].upper()[:6]}-2024",
+                "risk_assessment_process_documented": True,
+                "plan_implemented": vendor["slug"] != "halcyon-instruments",
+                "plan_approval_age_days": plan_age[vendor["slug"]],
+                "contract": clause_profiles[vendor["slug"]],
+            }
+        )
+
+    (grid_dir / "keys.yaml").write_text(yaml.safe_dump(keys, sort_keys=False), encoding="utf-8")
+    (grid_dir / "packages.yaml").write_text(yaml.safe_dump(packages, sort_keys=False), encoding="utf-8")
+    (grid_dir / "vendors.yaml").write_text(yaml.safe_dump(vendors_out, sort_keys=False), encoding="utf-8")
+
+    return {
+        "keys": len(keys),
+        "packages": len(packages),
+        "firmware_images": len(list(fw_dir.glob("*.bin"))),
+        "vendors": len(vendors_out),
+        "tampered_package": TAMPERED_PACKAGE,
+    }
