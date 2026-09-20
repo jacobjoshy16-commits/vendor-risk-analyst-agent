@@ -368,6 +368,98 @@ subprocessor pages. A JS shell with no table is `parse_failed`, not a pass.
 
 ---
 
+## NERC CIP module (utility / OT)
+
+A **third control set** for electric utilities, on its own branch. The AIV-* and
+NHI-* sets above are unchanged; this one is scored by the same deterministic
+evaluator and cites **NERC and nothing else** — a utility is audited against
+NERC, and carrying 800-53 and SOC 2 alongside it makes the file longer without
+making it more defensible.
+
+```bash
+python3 vra.py cip                  # assess the estate
+python3 vra.py cip --evidence       # + write the audit evidence pack
+python3 vra.py cip build-fixtures   # regenerate keys, packages, firmware
+```
+
+### What it scores
+
+25 controls over four subjects, with the standards split the way they actually
+apply:
+
+| Standard | What it governs here | Controls |
+| --- | --- | --- |
+| **CIP-013** | The procurement *plan* layer: R1.1 risk assessment process, R1.2.1–R1.2.6 contract clauses, R2 implementation, R3 15-month CIP Senior Manager approval | CIP-07 … CIP-15 |
+| **CIP-010 R1.6** | The per-installation technical check: verify software **source identity** (1.6.1) and **integrity** (1.6.2) before deviating from baseline | CIP-01 … CIP-06 |
+| **CIP-005 R2** | Vendor remote access into the ESP: methods to **determine** active sessions (2.4) and to **disable** them (2.5) | CIP-16 … CIP-18 |
+| **CIP-004** | Who may hold that access: training (R2), personnel risk assessment (R3), authorization and quarterly verification (R4), revocation (R5) | CIP-19 … CIP-25 |
+| **CIP-002** | Not encoded as controls. Its High/Medium/Low impact rating drives `applies_when` on everything above. | — |
+
+**CIP-013 does not impose the firmware check.** It is a plan standard; the
+operational requirement to verify source identity and software integrity is
+CIP-010 R1 Part 1.6, and vendor session control is CIP-005 R2.4/R2.5. Getting
+this split right is why findings cite a requirement that actually governs them.
+
+### The verification is real
+
+`src/vra/cipcrypto.py` performs actual Ed25519 verification and actual SHA-256
+over the bytes on disk. No field asserts a verification result.
+
+The judgement that matters: **where a vendor publishes a signing key, a matching
+published hash does not close CIP-010 R1.6.2.** The bytes matching a published
+string does not establish that the string came from the vendor — an attacker who
+can substitute a binary on a mirror can substitute the hash beside it. Where a
+vendor publishes no key, the hash is the only available method and is used, but
+recorded as `verification_strength: hash_only` rather than dressed up.
+
+### The simulated estate
+
+1,300 substations and ~7,500 cyber assets across four states, generated
+deterministically from a seed. Impact ratings are deliberately lopsided — 26
+high, 116 medium, 1,158 low — because CIP-013 attaches to high and medium impact
+systems and a tool that ignores that is ~89% false positives.
+
+All vendors are **fictional**. Real relay vendors are deliberately absent: this
+repo is public and the planted scenario is a package that fails verification.
+
+One planted compromise, built the way a mirror compromise actually looks — the
+attacker substitutes the binary *and* the published hash, but cannot forge the
+signature:
+
+```
+FIRMWARE VERIFICATION FAILED  SPS-421-4.7.2
+    vendor published SHA-256 cf57cc28…: MATCH
+    Ed25519 verify against key sentinel-protective-2026: INVALID
+```
+
+A hash-and-spreadsheet process passes that package. It is deployed on 131
+protective relays.
+
+### The evidence pack
+
+`--evidence` writes `out/cip/evidence-pack.{md,html,json}` plus `findings.json`.
+Organised **by requirement, not by finding**, because an audit opens with "show
+me you checked", so every requirement carries its denominator:
+
+```
+CIP-01  CIP-010-4 R1 Part 1.6.2   7,464 population · 1,724 applicable · 1,593 passed · 131 exceptions
+```
+
+Exceptions collapse to root causes — 131 relays running one bad build is one
+remediation, not 131. The pack **never asserts compliance** (that is the
+Regional Entity's determination), always declares the data synthetic, and prints
+a banner while any citation is unverified.
+
+> **Citations are currently unverified.** All 25 controls carry
+> `citation_verified: false`. The standard revisions and part numbers were
+> written from knowledge, not checked against nerc.com. Confirm each and set the
+> flag before showing this to a compliance audience.
+
+See `VALIDATION-CIP.md` for what is proven (and what is not) and `DEMO-CIP.md`
+for the presentation script.
+
+---
+
 ## Limitations
 
 The scored sandbox runs used the offline heuristic, not a live 7B model. That
@@ -394,9 +486,10 @@ on messy real vendor prose. Run against Ollama before relying on it.
 ## Repository
 
 ```
-vra.py                  entry point — connect / monitor / report
+vra.py                  entry point — connect / monitor / report / cip
 nhi_controls.yaml       8 NHI-* controls — the identity set (800-53 + SOC 2)
 controls.yaml           15 AIV-* controls — the feature set (800-53 + SOC 2)
+cip_controls.yaml       25 CIP-* controls — the NERC set (NERC only, no 800-53)
 vendors/*.yaml          YOUR registers (gitignored) — `vra connect` writes here
 sandbox/registers/      the three demo registers that ship with the repo
 src/vra/connect.py      the interactive front door
@@ -411,5 +504,15 @@ src/vra/creds.py        OS keychain
 src/vra/webui.py        local console
 sandbox/                planted scenario + real-world page fixtures
 sandbox/probe/idp/      recorded Okta / Auth0 pages (same walker as live)
+src/vra/cip.py          NERC assessment over the estate
+src/vra/cipcrypto.py    real Ed25519 + SHA-256 firmware verification
+src/vra/grid.py         the simulated substation estate
+src/vra/gridbuild.py    fixture builder — signs the firmware, plants the compromise
+src/vra/evidence.py     CIP audit evidence pack (md / html / json)
+src/vra/cipcli.py       `vra.py cip`
+sandbox/grid/           signing keys, packages, signed firmware images
 VALIDATION.md           including every defect found
+VALIDATION-CIP.md       what the NERC module proves, and what it does not
+DEMO-CIP.md             career-fair script for the NERC demo
+docs/ARCHITECTURE-CIP-BRIEF.md   the decision record behind the module
 ```

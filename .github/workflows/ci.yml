@@ -98,3 +98,87 @@ jobs:
               sys.exit(1)
           print("every vendor assessed")
           PY
+
+  cip-scenario:
+    # Same reasoning as the scenario job above, for the NERC module. The
+    # assertions that matter are the negative ones: exactly one package may
+    # fail, and it must be the planted one. A detector that fires on two is
+    # producing false positives, and one that fires on none is dead.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Fixtures must regenerate byte-for-byte
+        # The estate is generated, not committed. If generation drifts, every
+        # hash and signature in the repo silently stops matching the artifacts.
+        run: |
+          python3 vra.py cip build-fixtures --date 2026-09-20
+          if ! git diff --quiet -- sandbox/grid; then
+            echo "::error::regenerating fixtures changed committed files"
+            git --no-pager diff --stat -- sandbox/grid
+            exit 1
+          fi
+          echo "fixtures reproduce exactly"
+
+      - name: Assessment must exit 1 and flag the planted package
+        run: |
+          set +e
+          python3 vra.py cip --date 2026-09-20 --evidence --no-color | tee /tmp/cip.log
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "cip exit=$code"
+          if [ "$code" -ne 1 ]; then
+            echo "::error::cip run should exit 1 (open critical), got $code"
+            exit 1
+          fi
+          grep -q "FIRMWARE VERIFICATION FAILED  SPS-421-4.7.2" /tmp/cip.log || {
+            echo "::error::planted package SPS-421-4.7.2 was not flagged"; exit 1; }
+
+      - name: Negative control — exactly one package may fail
+        run: |
+          failures=$(grep -c "FIRMWARE VERIFICATION FAILED" /tmp/cip.log || true)
+          echo "packages failing verification: $failures"
+          if [ "$failures" -ne 1 ]; then
+            echo "::error::expected exactly 1 failing package, got $failures"
+            exit 1
+          fi
+
+      - name: The planted package must pass the hash check
+        # If this stops being true the demo has lost its argument: the whole
+        # point is that a hash-only process returns green on this package.
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          pack = json.load(open("out/cip/evidence-pack.json"))
+          row = next(v for v in pack["verification_log"] if v["package_id"] == "SPS-421-4.7.2")
+          if not row["hash_match"]:
+              print("::error::planted package no longer passes the hash check"); sys.exit(1)
+          if row["signature_verified"]:
+              print("::error::planted package signature unexpectedly verifies"); sys.exit(1)
+          if row["integrity_verified"] or row["source_identity_verified"]:
+              print("::error::CIP-010 R1.6 should not be satisfied"); sys.exit(1)
+          print("hash MATCH, signature INVALID, R1.6 not satisfied — as designed")
+          PY
+
+      - name: Evidence pack must not claim compliance
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys
+          text = (pathlib.Path("out/cip/evidence-pack.md").read_text()
+                  + pathlib.Path("out/cip/evidence-pack.html").read_text()).lower()
+          for phrase in ("is compliant", "fully compliant", "compliance achieved"):
+              if phrase in text:
+                  print(f"::error::evidence pack asserts compliance: {phrase!r}"); sys.exit(1)
+          if "synthetic" not in text:
+              print("::error::evidence pack does not declare the data synthetic"); sys.exit(1)
+          print("pack states what was checked, not that anyone is compliant")
+          PY
