@@ -32,6 +32,7 @@ SUBCOMMANDS = (
     "enrich",
     "portfolio",
     "events",
+    "cip",
 )
 
 
@@ -80,6 +81,10 @@ def main(argv: list[str] | None = None) -> int:
             from vra.portfolio import portfolio_main
 
             return portfolio_main(rest)
+        if cmd == "cip":
+            from vra.cipcli import main as cip_main
+
+            return cip_main(rest)
         if cmd == "events":
             from vra.events import main as events_main
 

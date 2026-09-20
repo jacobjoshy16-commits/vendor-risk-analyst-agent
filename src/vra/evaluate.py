@@ -48,7 +48,30 @@ class Control:
 
     @property
     def citation(self) -> str:
-        return "; ".join(f"{f['name']} {f['id']}" for f in self.frameworks)
+        """Render this control's frameworks the way each framework is written.
+
+        The 800-53 and SOC 2 sets carry a flat control id ("AC-6", "CC6.1").
+        The NERC set pins standard, revision, requirement and part separately,
+        because those move between revisions and an auditor cites all four. One
+        property handles both shapes so every downstream consumer -- reports,
+        finding records, the evidence pack -- gets a correct citation without
+        knowing which control set it is looking at.
+        """
+        out = []
+        for f in self.frameworks:
+            if f.get("id"):
+                out.append(f"{f.get('name', '')} {f['id']}".strip())
+                continue
+            standard = f.get("standard") or f.get("name") or ""
+            version = f.get("version")
+            label = f"{standard}-{version}" if version else str(standard)
+            requirement, part = f.get("requirement"), f.get("part")
+            if requirement:
+                label += f" {requirement}"
+            if part and str(part) != str(requirement):
+                label += f" Part {part}"
+            out.append(label.strip())
+        return "; ".join(x for x in out if x)
 
 
 @dataclass

@@ -21,6 +21,14 @@ VENDORS_DIR = Path(os.environ.get("VRA_VENDORS_DIR") or (REPO_ROOT / "vendors"))
 SANDBOX_VENDORS_DIR = REPO_ROOT / "sandbox" / "registers"
 CONTROLS_FILE = REPO_ROOT / "controls.yaml"
 NHI_CONTROLS_FILE = REPO_ROOT / "nhi_controls.yaml"
+# NERC CIP control set. A third file rather than more entries in controls.yaml:
+# that file is the vendor AI *feature* set, and firmware integrity is not an AI
+# feature. load_controls() already takes a path, so the evaluator is unchanged.
+CIP_CONTROLS_FILE = REPO_ROOT / "cip_controls.yaml"
+# The simulated substation estate. Synthetic throughout; see src/vra/grid.py.
+GRID_DIR = Path(os.environ.get("VRA_GRID_DIR") or (REPO_ROOT / "sandbox" / "grid"))
+# How many substations a CIP run generates. Entergy operates roughly 1,300.
+GRID_SUBSTATIONS = int(os.environ.get("VRA_GRID_SUBSTATIONS", "1300"))
 DATA_DIR = REPO_ROOT / "data"
 SNAPSHOT_DIR = DATA_DIR / "snapshots"
 PENDING_REVIEW_DIR = REPO_ROOT / "pending_review"
