@@ -172,8 +172,13 @@ def load_estate(
 ) -> Estate:
     """Load committed keys/packages/vendors, then generate the asset estate."""
     today = today or date.today()
-    keys = _read_yaml(grid_dir / "keys.yaml") or []
-    packages = _read_yaml(grid_dir / "packages.yaml") or []
+    # A vendor's own release directory uses different filenames from the estate
+    # directory (signing-key.yaml / releases.yaml rather than keys.yaml /
+    # packages.yaml). Accepting both means the deployment gate can be pointed
+    # straight at what a vendor shipped, which is where you actually want to
+    # check a package -- before it is anywhere near the estate.
+    keys = _read_yaml(grid_dir / "keys.yaml") or _read_yaml(grid_dir / "signing-key.yaml") or []
+    packages = _read_yaml(grid_dir / "packages.yaml") or _read_yaml(grid_dir / "releases.yaml") or []
     vendors = _read_yaml(grid_dir / "vendors.yaml") or []
 
     estate = Estate(

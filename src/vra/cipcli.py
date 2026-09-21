@@ -13,6 +13,7 @@ only inform a human.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from datetime import date
@@ -20,6 +21,7 @@ from pathlib import Path
 
 from .cip import (assess_estate, cip_citation, citation_status, citations_verified,
                   load_cip_controls, rollup)
+from .cipcrypto import utc_now_iso
 from .config import CIP_CONTROLS_FILE, DEFAULT_OUT_DIR, GRID_DIR, GRID_SUBSTATIONS
 from .grid import load_estate
 
@@ -41,7 +43,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="NERC CIP assessment over the simulated substation estate",
     )
     p.add_argument("action", nargs="?", default="run",
-                   choices=["run", "build-fixtures", "onboard"])
+                   choices=["run", "build-fixtures", "onboard", "monitor", "gate", "alerts"])
+    p.add_argument("--interval", default="15m",
+                   help="monitor: seconds, or 30s / 15m / 1h")
+    p.add_argument("--once", action="store_true",
+                   help="monitor: one cycle then exit (for cron)")
+    p.add_argument("--package", default=None, help="gate: package id to verify")
+    p.add_argument("--limit", type=int, default=20, help="alerts: how many to show")
     p.add_argument("--vendor", default=None, help="onboard: vendor name")
     p.add_argument("--docs", type=Path, default=None,
                    help="onboard: directory of vendor contract documents")
@@ -70,6 +78,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "onboard":
         return _onboard(args, colour, when)
+
+    if args.action == "monitor":
+        return _monitor(args, colour, when)
+
+    if args.action == "gate":
+        return _gate(args, colour, when)
+
+    if args.action == "alerts":
+        return _alerts(args, colour)
 
     if args.action == "build-fixtures":
         from .gridbuild import build
@@ -326,3 +343,231 @@ def _onboard(args, colour: bool, when) -> int:
     if args.no_fail:
         return 0
     return 1 if crit else 0
+
+
+# ---------------------------------------------------------------------------
+# Continuous monitoring
+# ---------------------------------------------------------------------------
+def _parse_interval(raw: str) -> int:
+    """Accept 900, 30s, 15m or 1h."""
+    text = str(raw).strip().lower()
+    units = {"s": 1, "m": 60, "h": 3600}
+    if text and text[-1] in units:
+        try:
+            return max(10, int(float(text[:-1]) * units[text[-1]]))
+        except ValueError:
+            pass
+    try:
+        return max(10, int(float(text)))
+    except ValueError:
+        return 900
+
+
+def _cycle(args, colour: bool, when, store, *, quiet: bool = False,
+           baseline: bool = False) -> tuple[int, dict]:
+    """One assessment pass: assess, reconcile against memory, alert on changes.
+
+    `baseline` is the cold-start case. On the very first run every open finding
+    is technically "new", and alerting on all of them means the first thing the
+    security team ever sees from this tool is a hundred-line dump they did not
+    ask for. That is how a channel gets muted on day one. So the first cycle
+    records the state, reports a summary, and alerts nothing. Everything after
+    it alerts on transitions.
+    """
+    from . import cipalert
+    from .evaluate import to_record
+    from .grid import load_estate
+
+    controls = load_cip_controls(args.controls)
+    estate = load_estate(args.grid_dir, substations=args.substations,
+                         seed=args.seed, today=when)
+    findings, gaps, verified, coverage = assess_estate(estate, controls, when=when)
+    records = [to_record(a) for a in findings] + [to_record(a) for a in gaps]
+
+    delta = store.reconcile(records, when)
+
+    if baseline:
+        store.mark_alerted(delta.new)
+        store.save()
+        if not quiet:
+            by_sev: dict[str, int] = {}
+            for f in delta.new:
+                by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
+            print(f"  {_c('baseline established', BOLD, colour)} — "
+                  f"{len(delta.new)} open finding(s) recorded, no alerts sent")
+            print(f"    {'  '.join(f'{k} {v}' for k, v in sorted(by_sev.items()))}")
+            print(_c("    from here, only changes are announced", DIM, colour))
+        return 0, delta.summary()
+
+    alerts = cipalert.group_new([f for f in delta.new if not f.alerted_new], when)
+    alerts += cipalert.group_new(delta.reopened, when)
+    alerts += [cipalert.for_overdue(f, when) for f in delta.newly_overdue]
+    alerts += cipalert.group_resolved(delta.resolved, when)
+
+    if alerts:
+        store.mark_alerted([f for f in delta.new + delta.reopened])
+        store.mark_alerted(delta.newly_overdue, overdue=True)
+        path = cipalert.append(alerts)
+        url = cipalert.webhook_url()
+        if url:
+            code, detail = cipalert.post_webhook(alerts, url)
+            if not quiet:
+                ok = 200 <= code < 300
+                print(f"    webhook {url}: {_c(str(code) or 'failed', GREEN if ok else YELLOW, colour)} {detail}")
+        if not quiet:
+            print(f"    logged {len(alerts)} alert(s) to {path}")
+    store.save()
+
+    if not quiet:
+        _print_alerts(alerts, colour)
+
+    return len(alerts), delta.summary()
+
+
+def _print_alerts(alerts, colour: bool) -> None:
+    for alert in alerts:
+        tint = {"critical": RED, "high": RED, "medium": YELLOW}.get(alert.severity, DIM)
+        if alert.kind == "resolved":
+            tint = GREEN
+        head = alert.kind.replace("_", " ").upper()
+        print(f"  {_c(head, tint, colour)}  [{alert.severity}] -> {alert.route_to}")
+        print(f"    {alert.message}")
+
+
+def _monitor(args, colour: bool, when) -> int:
+    """Re-assess on a timer and alert on what changed.
+
+    This is what makes it a monitor rather than a report generator: the estate
+    is re-verified every cycle, the result is diffed against what was already
+    known, and only transitions are announced.
+    """
+    import time
+
+    from .cipstate import CIP_FINDINGS_FILE, FindingStore
+
+    interval = _parse_interval(args.interval)
+    lock = args.grid_dir.parent.parent / "data" / "cip_monitor.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        # Two monitors would each reconcile against a store the other is
+        # rewriting, producing duplicate alerts and a corrupted lifecycle.
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+    except FileExistsError:
+        print(f"{_c('a CIP monitor is already running', RED, colour)} ({lock}). "
+              f"Remove the lock if that is wrong.", file=sys.stderr)
+        return 2
+
+    store = FindingStore().load()
+    cold_start = not store.all()
+    print()
+    print(f"{_c('NERC CIP monitor', BOLD, colour)}  ·  every {interval}s  ·  "
+          f"{len(store.open_findings())} finding(s) already open")
+    print(_c(f"  state {CIP_FINDINGS_FILE}", DIM, colour))
+    print(_c("  ctrl-c to stop", DIM, colour))
+    cycles = 0
+    try:
+        while True:
+            cycles += 1
+            stamp = utc_now_iso()
+            print()
+            print(f"{_c(f'cycle {cycles}', BOLD, colour)}  {stamp}")
+            count, summary = _cycle(args, colour, when, store,
+                                    baseline=(cold_start and cycles == 1))
+            parts = "  ".join(f"{k} {v}" for k, v in summary.items() if v)
+            print(f"  {parts or _c('no change', DIM, colour)}")
+            if args.once:
+                break
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\n  stopped")
+    finally:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Deployment gate
+# ---------------------------------------------------------------------------
+def _gate(args, colour: bool, when) -> int:
+    """Refuse to let unverified firmware through.
+
+    This is the enforcement point, and it is deliberately the ONLY one. CIP-010
+    R1.6 requires verification prior to a change that deviates from baseline, so
+    a gate that blocks the deployment is the requirement itself rather than an
+    action taken on the entity's behalf.
+
+    Terminating a live vendor session into a substation would also be
+    "enforcement", and this tool will not do it: that has reliability
+    consequences and belongs to a human with operational authority. Those
+    findings alert instead.
+
+    Exit 0 = safe to deploy. Exit 1 = do not deploy.
+    """
+    from . import cipalert
+    from .grid import load_estate
+
+    if not args.package:
+        print("gate needs --package <package_id>", file=sys.stderr)
+        return 2
+
+    estate = load_estate(args.grid_dir, substations=1, seed=args.seed, today=when)
+    package = estate.packages.get(args.package)
+    if package is None:
+        print(f"{_c('unknown package:', RED, colour)} {args.package}", file=sys.stderr)
+        print(f"  known: {', '.join(sorted(estate.packages))}", file=sys.stderr)
+        return 2
+
+    results = estate.verify_all(when=when)
+    result = results[args.package]
+    ok = result.integrity_verified is True and result.source_identity_verified is True
+
+    print()
+    print(f"{_c('CIP-010 R1.6 DEPLOYMENT GATE', BOLD, colour)}  ·  {args.package}")
+    for line in result.evidence:
+        print(f"    {_c(line, DIM, colour)}")
+    print()
+    if ok:
+        print(f"  {_c('PASS — safe to deploy', GREEN, colour)}")
+        print(f"    source identity verified (R1.6.1), integrity verified (R1.6.2)")
+        return 0
+
+    alert = cipalert.for_rejected_firmware(result, package_id=args.package)
+    path = cipalert.append([alert])
+    print(f"  {_c('BLOCKED — do not deploy', RED, colour)}")
+    print(f"    {alert.message}")
+    print(f"    routed to {alert.route_to}; logged to {path}")
+    return 1
+
+
+# ---------------------------------------------------------------------------
+# Alert log
+# ---------------------------------------------------------------------------
+def _alerts(args, colour: bool) -> int:
+    import json
+
+    from .cipalert import CIP_ALERT_LOG
+
+    if not CIP_ALERT_LOG.is_file():
+        print(f"no alerts yet ({CIP_ALERT_LOG})")
+        return 0
+    lines = CIP_ALERT_LOG.read_text(encoding="utf-8").splitlines()
+    print()
+    print(f"{_c('CIP alerts', BOLD, colour)}  ·  {len(lines)} total  ·  {CIP_ALERT_LOG}")
+    print()
+    for raw in lines[-args.limit:]:
+        try:
+            a = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        tint = {"critical": RED, "high": RED, "medium": YELLOW}.get(a.get("severity"), DIM)
+        if a.get("kind") == "resolved":
+            tint = GREEN
+        print(f"  {a.get('raised_at', '')}  {_c(a.get('kind', '').upper(), tint, colour)}"
+              f"  -> {a.get('route_to', '')}")
+        print(f"    {a.get('message', '')}")
+    return 0

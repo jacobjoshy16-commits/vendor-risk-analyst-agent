@@ -230,6 +230,67 @@ same rules: it must return a real verbatim sentence, and that sentence goes
 through the same verification. A heuristic that could bypass the check would
 leave the safety boundary untested in CI, which is where it matters most.
 
+### Continuous monitoring, alerting, and the deployment gate
+
+The assessment above is one-shot. `monitor` is the same assessment on a timer,
+with memory:
+
+```bash
+python3 vra.py cip monitor --interval 15m     # re-assess and alert on changes
+python3 vra.py cip monitor --once             # one cycle, for cron
+python3 vra.py cip alerts                     # read the alert log
+python3 vra.py cip gate --package SPS-421-4.7.2   # exit 1 = do not deploy
+```
+
+**State** lives in `data/cip_findings.json`: when a finding was *first* raised,
+whether anyone has been told, and whether it has since cleared. Due dates are
+anchored to first sighting, so a finding the monitor re-sees every fifteen
+minutes still goes overdue — if the deadline were recomputed each cycle nothing
+would ever be late.
+
+**Alerts** fire on transitions only — `new_finding`, `overdue`, `resolved`,
+`firmware_rejected` — and append to `data/cip_alerts.jsonl`. Two rules keep the
+channel readable:
+
+- **Cold start is a baseline, not an alert storm.** The first run records what
+  is already open and sends nothing. That is how a channel survives day one.
+- **Findings group by root cause.** 131 relays running one substituted package
+  is one alert naming 17 assets, not 131 pages.
+
+Flip one bit in a firmware image and the next cycle says so:
+
+```
+NEW FINDING  [critical] -> CIP Senior Manager / Security on-call
+  17 assets: Was the integrity of the firmware obtained from the software source
+  verified... — observed integrity_verified=False. CIP-010-4 R1 Part 1.6.2.
+  e.g. AR-SUB-0001-RTU-05-FW, LA-SUB-0002-RTU-04-FW, +14 more. Remediate by 2026-09-28.
+```
+
+Restore it and the next cycle reports `CLEARED — 17 assets`.
+
+**The alert names the obligation, not the vendor.** CIP-003-9 obliges the
+*Responsible Entity*. "This vendor is not compliant with CIP-003-9" is wrong on
+the facts and a compliance lead will say so.
+
+### Enforcement — one place, deliberately
+
+```
+$ python3 vra.py cip gate --package KG-RTU-100-2.4.1 --grid-dir ./vendor-release
+  BLOCKED — do not deploy
+    DEPLOYMENT BLOCKED — failed CIP-010 R1.6 (hash_match=True,
+    signature_verified=False). Not flashed.
+$ echo $?
+1
+```
+
+CIP-010 R1.6 requires verification *prior to* a change that deviates from
+baseline, so a gate that blocks the deployment **is** the requirement. Drop it
+in a patch pipeline and unverified firmware cannot be flashed.
+
+Terminating a live vendor session into a substation would also be
+"enforcement". This tool will not do it. That has reliability consequences and
+belongs to a human with operational authority — those findings alert instead.
+
 ### The evidence pack
 
 `--evidence` writes `out/cip/evidence-pack.{md,html,json}` plus `findings.json`.
