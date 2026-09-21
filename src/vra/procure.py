@@ -466,15 +466,17 @@ def extract_procurement(
     for rank, target in enumerate(reading_order(footprint), start=1):
         if cfg.llm_enabled:
             answer = call_json(
-                SYSTEM,
-                PROMPT.format(
+                system=SYSTEM,
+                prompt=PROMPT.format(
                     requirement=target["requirement"],
                     asks=target["asks"],
                     estate_context=estate_context or "(no estate context available)",
                     documents=blob[:60000],
                 ),
-                cfg,
+                cfg=cfg,
+                schema_check=_clause_schema,
                 task=f"procurement_clause:{target['field']}",
+                context={"field": target["field"], "requirement": target["requirement"]},
             )
             data, backend = (answer.data or {}), answer.backend
             if not answer.ok:
@@ -499,6 +501,30 @@ def extract_procurement(
     result.backend = backend
     adjudicate(claims, readable, critical_fields=critical_fields_from_controls(controls or []))
     return result
+
+
+def _clause_schema(obj: dict) -> str | None:
+    """Reject a malformed clause answer before it reaches adjudication.
+
+    A small local model (Gemma 4B, for instance) will sometimes return prose, a
+    code fence, or a partial object. call_json retries with the rejection reason
+    attached, so a schema that names the problem precisely is what turns a bad
+    first answer into a good second one.
+    """
+    if "present" not in obj:
+        return "missing key: present"
+    if not isinstance(obj["present"], bool):
+        return "present must be a boolean (true or false), not a string"
+    if obj["present"] and not str(obj.get("quote", "")).strip():
+        return "present is true, so quote must contain the verbatim clause text"
+    if "confidence" in obj:
+        try:
+            value = float(obj["confidence"])
+        except (TypeError, ValueError):
+            return "confidence must be a number between 0 and 1"
+        if not 0.0 <= value <= 1.0:
+            return "confidence must be between 0 and 1"
+    return None
 
 
 def _as_float(value: Any) -> float:

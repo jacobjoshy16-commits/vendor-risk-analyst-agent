@@ -54,6 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="monitor: one cycle then exit (for cron)")
     p.add_argument("--package", default=None, help="gate: package id to verify")
     p.add_argument("--limit", type=int, default=20, help="alerts: how many to show")
+    p.add_argument("--decision", default="both", choices=["code", "model", "both"],
+                   help="who decides the disposition (default: both, stricter wins)")
+    p.add_argument("--model", default=None,
+                   help="model tag for Ollama, e.g. gemma3:4b (default: $VRA_MODEL)")
     p.add_argument("--vendor", default=None, help="onboard: vendor name")
     p.add_argument("--docs", type=Path, default=None,
                    help="onboard: directory of vendor contract documents")
@@ -508,54 +512,141 @@ def _monitor(args, colour: bool, when) -> int:
 # ---------------------------------------------------------------------------
 # Deployment gate
 # ---------------------------------------------------------------------------
+def _runconfig(args):
+    """RunConfig for the reasoning layer, honouring --model and --offline."""
+    from .config import RunConfig
+
+    cfg = RunConfig(offline=getattr(args, "offline", False))
+    if getattr(args, "model", None):
+        cfg.model = args.model
+    if not cfg.offline:
+        from .llm import probe_ollama
+
+        # No reachable model means the deterministic stand-in, labelled as such,
+        # not a silent downgrade.
+        cfg.llm_unavailable = not probe_ollama(cfg)
+    return cfg
+
+
+def _print_judgment(decision, colour: bool) -> None:
+    from .analyst_cip import DECIDE_BOTH
+
+    j = decision.judgment
+    tint = {"block": RED, "escalate": YELLOW, "allow": GREEN}.get(j.disposition, DIM)
+    print(f"  {_c('ANALYST JUDGEMENT', BOLD, colour)}  ({j.backend or 'unavailable'}"
+          f"{'/' + j.model if j.model else ''})")
+    print(f"    disposition  {_c(j.disposition.upper(), tint, colour)}   "
+          f"risk {j.risk}   confidence {j.confidence:.2f}")
+    print(f"    {j.reasoning}")
+    if j.pattern:
+        print(f"    pattern: {_c(j.pattern, YELLOW, colour)}")
+    for action in j.recommended_actions:
+        print(f"      → {action}")
+    for question in j.questions_for_vendor:
+        print(f"      ? {question}")
+    if decision.disagreement:
+        print(f"    {_c('DISAGREEMENT', YELLOW, colour)} — rule engine says "
+              f"{decision.deterministic.upper()}, model says "
+              f"{decision.model_disposition.upper()}")
+    print()
+
+
+def _write_audit_report(package_id, result, decision, out_dir, when) -> Path:
+    """The per-package audit record that goes out with the block."""
+    import json
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"blocked-{package_id}-{when.isoformat()}.json"
+    path.write_text(json.dumps({
+        "package_id": package_id,
+        "assessed_on": when.isoformat(),
+        "generated_at": utc_now_iso(),
+        "disposition": decision.disposition,
+        "decided_by": decision.decided_by,
+        "rule_engine_verdict": decision.deterministic,
+        "model_disposition": decision.model_disposition,
+        "disagreement": decision.disagreement,
+        "citation": "NERC CIP-010-4 R1 Part 1.6",
+        "verification": result.as_fields(),
+        "verification_log": result.evidence,
+        "analyst_judgment": decision.judgment.as_dict(),
+        "note": ("Synthetic demonstration data. This record states what was checked "
+                 "and what was decided; it does not assert compliance."),
+    }, indent=2, default=str), encoding="utf-8")
+    return path
+
+
 def _gate(args, colour: bool, when) -> int:
-    """Refuse to let unverified firmware through.
+    """A vendor package arrives. Verify it, reason about it, decide, record, route.
 
-    This is the enforcement point, and it is deliberately the ONLY one. CIP-010
-    R1.6 requires verification prior to a change that deviates from baseline, so
-    a gate that blocks the deployment is the requirement itself rather than an
-    action taken on the entity's behalf.
+    The full path the tool exists for:
 
-    Terminating a live vendor session into a substation would also be
-    "enforcement", and this tool will not do it: that has reliability
-    consequences and belongs to a human with operational authority. Those
-    findings alert instead.
+        verify (code)  ->  reason (model, over everything the code found)
+        ->  decide  ->  write the audit report  ->  alert the security team
+        ->  exit non-zero so a pipeline cannot deploy it
+
+    CIP-010 R1.6 requires verification prior to a change that deviates from
+    baseline, so blocking the deployment is the requirement itself.
 
     Exit 0 = safe to deploy. Exit 1 = do not deploy.
     """
     from . import cipalert
+    from .analyst_cip import build_brief, decide, judge
+    from .cipstate import FindingStore
     from .grid import load_estate
 
     if not args.package:
         print("gate needs --package <package_id>", file=sys.stderr)
         return 2
 
-    estate = load_estate(args.grid_dir, substations=1, seed=args.seed, today=when)
+    estate = load_estate(args.grid_dir, substations=args.substations,
+                         seed=args.seed, today=when)
     package = estate.packages.get(args.package)
     if package is None:
         print(f"{_c('unknown package:', RED, colour)} {args.package}", file=sys.stderr)
         print(f"  known: {', '.join(sorted(estate.packages))}", file=sys.stderr)
         return 2
 
-    results = estate.verify_all(when=when)
-    result = results[args.package]
-    ok = result.integrity_verified is True and result.source_identity_verified is True
+    # 1. Code verifies.
+    result = estate.verify_all(when=when)[args.package]
 
     print()
     print(f"{_c('CIP-010 R1.6 DEPLOYMENT GATE', BOLD, colour)}  ·  {args.package}")
+    print(_c("  synthetic package — not a real supplier", DIM, colour))
+    print()
+    print(f"  {_c('CRYPTOGRAPHIC VERIFICATION', BOLD, colour)}")
     for line in result.evidence:
         print(f"    {_c(line, DIM, colour)}")
     print()
-    if ok:
-        print(f"  {_c('PASS — safe to deploy', GREEN, colour)}")
+
+    # 2. Model reasons over what the code found, plus history and blast radius.
+    cfg = _runconfig(args)
+    brief = build_brief(package, result, estate=estate,
+                        store=FindingStore().load())
+    judgment = judge(brief, cfg)
+    decision = decide(brief, judgment, mode=args.decision)
+    _print_judgment(decision, colour)
+
+    print(f"  {_c('DECISION', BOLD, colour)}  ({decision.decided_by})")
+    if not decision.blocks:
+        print(f"    {_c('PASS — safe to deploy', GREEN, colour)}")
         print(f"    source identity verified (R1.6.1), integrity verified (R1.6.2)")
         return 0
 
+    # 3. Block, record, route.
+    report = _write_audit_report(args.package, result, decision, args.out, when)
     alert = cipalert.for_rejected_firmware(result, package_id=args.package)
-    path = cipalert.append([alert])
-    print(f"  {_c('BLOCKED — do not deploy', RED, colour)}")
-    print(f"    {alert.message}")
-    print(f"    routed to {alert.route_to}; logged to {path}")
+    alert.context["analyst_judgment"] = decision.judgment.as_dict()
+    alert.context["decided_by"] = decision.decided_by
+    alert.context["audit_report"] = str(report)
+    log = cipalert.append([alert])
+
+    verb = "BLOCKED — do not deploy" if decision.disposition == "block" else \
+           "HELD — human review required before deploy"
+    print(f"    {_c(verb, RED, colour)}")
+    print(f"    audit report  {report}")
+    print(f"    routed to     {alert.route_to}")
+    print(f"    alert log     {log}")
     return 1
 
 

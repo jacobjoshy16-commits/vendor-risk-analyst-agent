@@ -230,6 +230,58 @@ same rules: it must return a real verbatim sentence, and that sentence goes
 through the same verification. A heuristic that could bypass the check would
 leave the safety boundary untested in CI, which is where it matters most.
 
+### The analyst: the model reasons, the code's output is one of its inputs
+
+There are two model roles in this tool, and they are deliberately different
+shapes.
+
+**Reading a contract is a fact question** — "is this clause present?" — so in
+`procure.py` the model extracts and the code adjudicates against a verified
+quote.
+
+**Deciding what to do about a firmware package is a judgement**, and judgement
+is what a model is for. So in `analyst_cip.py` the code runs first and hands the
+model everything it established, and the model reasons over all of it:
+
+```
+CODE COMPUTES                          MODEL RECEIVES AND WEIGHS
+  SHA-256 over the bytes          ──▶    the full verification result
+  Ed25519 verification            ──▶    which controls the rule engine failed
+  key status and trust            ──▶    how many devices run this build
+  control evaluation              ──▶    what this vendor has done before
+  blast radius from inventory     ──▶    what the contract obliges them to do
+  vendor history from the store   ──▶    the rule engine's own verdict
+                                            ↓
+                                   disposition · risk · reasoning
+                                   recommended actions · questions for the vendor
+```
+
+The rule engine's verdict is **an input to the brief**, not a conclusion hidden
+from the model. The model can reach a different one.
+
+**Who decides is yours to set:**
+
+```bash
+python3 vra.py cip gate --package X --decision model   # the model decides
+python3 vra.py cip gate --package X --decision code    # the rule engine decides
+python3 vra.py cip gate --package X --decision both    # default: stricter wins
+```
+
+`both` is not the code overruling the model — it is the same rule in both
+directions, so **the model can block a package the rules would have passed**.
+That is the direction that matters: the rules encode what we thought of, and the
+model sees pattern, history and blast radius that the rules do not.
+
+Disagreement is printed rather than hidden. Either the model saw something the
+rules do not encode, or it got it wrong, and both are worth knowing.
+
+**Model:** runs locally through Ollama. Default `gemma3:4b`; override with
+`--model` or `VRA_MODEL`. The brief is rendered as short labelled lines rather
+than JSON because a small model reasons better over facts than over braces, and
+every model answer is schema-validated with the rejection reason fed back on
+retry. A model that cannot produce a usable judgement **escalates** — it never
+becomes an allow.
+
 ### Continuous monitoring, alerting, and the deployment gate
 
 The assessment above is one-shot. `monitor` is the same assessment on a timer,
