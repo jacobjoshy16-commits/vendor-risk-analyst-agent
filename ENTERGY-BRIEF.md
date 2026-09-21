@@ -1,5 +1,18 @@
 # Why this exists — the Entergy case
 
+## The framing, before anything else
+
+Entergy has a mature CIP-013 program, a GRC platform, and vendor processes.
+**This does not fill a gap in it, and pitching it that way invites someone to
+prove you wrong.** The honest claim, which is also the one that gets an
+interview:
+
+> "I understand the problem your program solves well enough to build a working
+> model of it."
+
+Everything below is material for *that* conversation — evidence you read the
+filing and understood what the program is for — not a sales case.
+
 **Read §6 before you quote anything.** Some of what follows is confirmed against
 Entergy's SEC filings and some is not, and the difference is marked. Asserting a
 quote from a company's own 10-K, in front of that company, and being wrong about
@@ -394,6 +407,23 @@ Entity, and a tool that claims it is selling something it cannot back.
 | Note 8: 21 power island sets from one turbine vendor, 7 delivered | **Confirmed by direct read of the filing** |
 | Whether NERC CIP applies to "Power Through" units at customer sites | **UNVERIFIED — likely below CIP size thresholds. Do not claim CIP covers them.** |
 | ~1,300 substations, ~16,100 circuit miles | From Entergy's annual report; verify the current figures |
+
+### Confirmed since the last revision
+
+| Claim | Status |
+| --- | --- |
+| **CIP-003-9 became enforceable 1 April 2026**, adding Attachment 1 Section 6, "Vendor Electronic Remote Access Security Controls", for low impact BES Cyber Systems | **Confirmed, multiple independent sources.** "It just became enforceable this year" is a true line. |
+| CIP-013-2 R1 Parts 1.1, 1.2.1, 1.2.2, 1.2.3, 1.2.5, 1.2.6 wording | **Confirmed against the standard text** |
+| **CIP-013 R1.2.5 is a procurement-phase check of the vendor's *capability*, not an operational requirement to verify** | **Confirmed by NERC's technical rationale.** The operational check is CIP-010 R1.6. This is the strongest single thing you can say about knowing the standards apart. |
+| CIP-013-2 R1 scope includes **EACMS and PACS**, not only BES Cyber Systems | **Confirmed.** The tool scopes on impact rating only — recorded as a known simplification. |
+
+### Still to verify — yours to do
+
+- **The 10-K figures.** The capital plan numbers, plant names, MISO count and
+  Note 8 equipment sets came from your read. Re-check them against the filing
+  before quoting; sec.gov is not reachable from the tooling here.
+- **Whether NERC CIP applies to "Power Through" units.** Likely below size
+  thresholds. Do not claim CIP covers them.
 
 **Before presenting:**
 

@@ -1,19 +1,21 @@
 # Substation Supply-Chain Integrity Monitor
 
-**NERC CIP-013 supply chain risk management, evidenced cryptographically.**
+**A working model of NERC CIP-013 / CIP-010 R1.6 supply-chain verification,
+built on a synthetic utility estate.**
 
-For an electric utility, a vendor firmware package is not a compliance
-checkbox — it is code that will execute on a protective relay deciding whether
-high-voltage power flows. This tool verifies that code before it is trusted, and
-produces the evidence a NERC audit asks for.
+> **What this is not.** It is not a product, and it does not fill a gap in
+> anyone's compliance program. A utility of any size already has a CIP-013
+> program, a GRC platform and vendor processes. This is a working model of the
+> problem those programs solve — built to understand it end to end, on data that
+> is synthetic throughout.
 
 ```bash
-python3 vra.py cip                  # assess the estate
-python3 vra.py cip --evidence       # + write the audit evidence pack
-python3 vra.py cip onboard --vendor "…" --docs ./contracts   # onboard a supplier
+python3 vra.py cip gate --package X    # verify a vendor package; exit 1 = do not deploy
+python3 vra.py cip --evidence          # assess the estate, write the audit pack
+python3 vra.py cip monitor             # re-assess on a timer, alert on change
 ```
 
-Vendor risk data does not leave the machine by default.
+Everything runs locally. Nothing leaves the machine.
 
 ---
 
@@ -26,7 +28,7 @@ close it.
 
 | You get | What that is |
 | --- | --- |
-| **Real cryptographic verification** | Actual SHA-256 over the bytes on disk and actual Ed25519 signature verification against a registry of pinned vendor keys. No field asserts a verification result. Flip one bit in an 8 KB image and the answer changes. |
+| **Real cryptographic verification** | Actual SHA-256 over the bytes on disk and actual Ed25519 signature verification against a registry of pinned vendor keys. No field asserts a verification result. Flip one bit in an 8 KB image and the answer changes. **Flat key registry — no X.509 chain validation, no revocation checking.** |
 | **A NERC CIP score** | **34 `CIP-*` controls** over four subjects — firmware deployments, procurement, vendor ESP access, vendor personnel. CIP-013 R1/R2/R3, CIP-010 R1.6, CIP-005 R2.4/2.5, CIP-004 R2–R5, scoped by CIP-002 impact rating. |
 | **Procurement detection** | The model reads the vendor's actual contract documents and locates each CIP-013 R1.2 obligation. **Code verifies every quote against the source** before it may affect a control. |
 | **An audit evidence pack** | Organised by requirement, not by finding, with a denominator on every row and the cryptographic working shown. Markdown, HTML and JSON. |
@@ -54,6 +56,13 @@ So **where a vendor publishes a signing key, a matching hash does not close
 CIP-010 R1.6.2.** Where a vendor publishes no key, the hash is the only method
 available from the source, it is used, and the result is recorded as
 `verification_strength: hash_only` rather than dressed up as the stronger check.
+
+**In the real OT market, `hash_only` is probably the common case, not the edge
+case.** Many device vendors publish a digest and nothing else, and where signing
+does exist it is usually X.509 code signing rather than raw Ed25519. This tool's
+trust model is a flat registry of pinned keys: it checks key status and validity
+windows, and it does **not** do certificate chain validation or revocation
+checking. The revoked-key path is real and worth showing; it is not PKI.
 
 This is the argument of the whole project, and the planted demo scenario is
 built to show it: a package that **passes the hash check and fails the
@@ -143,8 +152,10 @@ recorded as `verification_strength: hash_only` rather than dressed up.
 
 ### The simulated estate
 
-1,300 substations and ~7,500 cyber assets across four states, generated
-deterministically from a seed. Impact ratings are deliberately lopsided — 26
+**Synthetic throughout.** 1,300 substations and ~7,500 cyber assets across four
+states, generated deterministically from a seed — a model sized to resemble a
+mid-size utility, containing no real utility's data. Every substation, device,
+technician, vendor and firmware image is fabricated. Impact ratings are deliberately lopsided — 26
 high, 116 medium, 1,158 low — because CIP-013 attaches to high and medium impact
 systems and a tool that ignores that is ~89% false positives.
 
@@ -358,10 +369,12 @@ remediation, not 131. The pack **never asserts compliance** (that is the
 Regional Entity's determination), always declares the data synthetic, and prints
 a banner while any citation is unverified.
 
-> **Citation status: 6 of 34 verified.** The six CIP-010 controls the demo
-> exercises (CIP-01 … CIP-06) were checked against NERC's published standards
-> listing on 2026-09-21: **CIP-010-4 is mandatory and subject to enforcement**,
-> and CIP-010-5 is subject to *future* enforcement. The remaining 28 citations
+> **Citation status: 19 of 34 verified.** Checked against the standard text on
+> 2026-09-21: the six **CIP-010 R1.6** controls (CIP-010-4 is mandatory and
+> subject to enforcement; CIP-010-5 is subject to *future* enforcement), nine
+> **CIP-013-2 R1** controls (Parts 1.1, 1.2.1, 1.2.2, 1.2.3, 1.2.5, 1.2.6), and
+> the four **CIP-003-9** controls (Attachment 1 Section 6, enforceable since
+> 1 April 2026). The remaining 15 — CIP-004, CIP-005, and CIP-013 R2/R3/1.2.4 —
 > are unverified and the tool prints a banner saying so.
 >
 > Verification has a shelf life. CIP-010-5 takes effect **2028-04-01** under

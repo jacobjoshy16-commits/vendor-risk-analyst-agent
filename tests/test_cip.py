@@ -509,13 +509,23 @@ class CitationShelfLife(unittest.TestCase):
                 self.assertEqual(fw.get("enforceable_until"), "2028-03-31", control.id)
 
     def test_today_the_citation_is_current_and_not_yet_warned_about(self):
+        """Verified count is asserted loosely on purpose.
+
+        Pinning an exact number turns every additional citation check into a
+        failing test, which is backwards: verifying more citations is the work
+        this flag exists to encourage. What must hold is that the six CIP-010
+        ones are verified and that none has expired.
+        """
         s = self.status(self.controls, date(2026, 9, 21))
-        self.assertEqual(s.verified, 6)
+        self.assertGreaterEqual(s.verified, 6)
+        self.assertLessEqual(s.verified, s.total)
         self.assertEqual(s.expired, [])
         self.assertEqual(s.expiring, [], "2028 is more than a year out from 2026-09")
 
     def test_it_warns_inside_a_year_of_the_sunset(self):
         s = self.status(self.controls, date(2027, 6, 1))
+        # Only the CIP-010 citations carry an enforceable_until date, because
+        # CIP-010-5 is the only supersession with a known effective date.
         self.assertEqual(len(s.expiring), 6)
         self.assertEqual(s.expired, [])
         self.assertTrue(all(e["superseded_by"] == "CIP-010-5" for e in s.expiring))

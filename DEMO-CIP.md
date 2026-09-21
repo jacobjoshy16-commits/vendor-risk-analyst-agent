@@ -1,13 +1,42 @@
 # Demo script — NERC CIP module
 
-**Audience:** an Entergy engineer, compliance lead, or recruiter at a career
-fair. Target 3 minutes. You will often get 90 seconds.
+## Before anything: check who they're recruiting for
 
-**Before you start, say this sentence.** It buys you credibility you cannot buy
-any other way, and anyone who works in CIP is already thinking it:
+This lands hardest with **OT security, cybersecurity, or NERC CIP compliance**
+roles. It lands a lot less with general IT. Ask at the table before you launch
+into it, and if the answer is general IT, keep it to the 20-second version and
+move on.
 
-> "Everything here is synthetic — fabricated substations, fabricated vendors,
-> air-gapped. Nothing touches a real OT network."
+---
+
+## The 20-second version (recruiter — probably not technical)
+
+No architecture. No numbers. Do not say "estate", "control set" or "adjudicate".
+
+> "I built a tool that checks vendor firmware is authentic before it gets
+> deployed to grid equipment, and maps the results to CIP-013 evidence. Your
+> 10-K mentions a lot of new generation coming online, and that commissioning
+> window is exactly where a tampered firmware package slips through."
+
+Then show **one** thing: the package that passes the hash check and fails the
+signature check. That is the whole demo for a non-technical audience.
+
+Keep the seven commands, the control engine, the analyst layer and the alerting
+in reserve for whoever asks a second question. Most won't.
+
+---
+
+## The honest framing — use this, not a gap pitch
+
+Entergy has a mature CIP-013 program, a GRC platform, and vendor processes.
+**Do not pitch this as filling a gap.** Claiming more than you can back invites
+someone to prove you wrong, and they can.
+
+> "I understand the problem your program solves well enough to build a working
+> model of it."
+
+That sentence gets the interview. It is also true, which is why it survives
+follow-up questions.
 
 ---
 
@@ -218,7 +247,56 @@ Then hand over the HTML pack.
 
 ---
 
-## Questions you will get, and the honest answers
+## Where you will get pushed — have these ready
+
+### "Real vendors don't ship Ed25519 signatures."
+
+**Correct, and concede it immediately.** Many OT device vendors publish a digest
+and nothing else; where signing exists it is usually X.509 code signing.
+
+> "You're right — `hash_only` is probably the common real-world case, not the
+> edge case, and the tool marks it as the weaker check rather than dressing it
+> up. My registry is flat: it checks key status and validity windows, not
+> certificate chains or revocation. The revoked-key path is real, but it isn't
+> PKI and I'm not claiming it is."
+
+Conceding this fast is worth more than the feature was.
+
+### "Is any of this real data?"
+
+**Never say a number without "synthetic" in the same breath.** Not "7,464
+devices" — "a synthetic estate of about 7,500 devices."
+
+> "None of it. I built a synthetic estate modeled on a mid-size utility —
+> 1,300 substations, roughly 7,500 devices, all fabricated, no connection to any
+> OT network. The vendors are invented too."
+
+### "Are your control mappings actually right?"
+
+> "Nineteen of thirty-four are checked against the standard text — the CIP-010
+> R1.6 ones, the CIP-013 R1 ones, and CIP-003-9. The remaining fifteen are
+> flagged in the tool and it prints a banner. I'm not claiming all thirty-four
+> are right."
+
+Defensible. Implying all 34 are verified is not.
+
+### "Has the contract extraction seen a real MSA?"
+
+> "No. It's been run against documents I wrote. The adjudication rules are the
+> interesting part anyway — presence can be evidenced, absence can't, so a model
+> saying a clause is missing never fails a control. That logic holds whatever
+> the document looks like."
+
+### "How would this plug into what we already use?"
+
+You don't need a specific answer.
+
+> "It exits non-zero and writes JSON, so it sits in front of whatever deployment
+> or ticketing workflow you already have."
+
+---
+
+## Other questions you will get
 
 ### "Your estate is Arkansas, Louisiana, Mississippi and Texas. Is that us?"
 

@@ -10,6 +10,11 @@
 # WHAT EACH STANDARD ACTUALLY DOES (this mapping is the point of the file)
 # ---------------------------------------------------------------------------
 #
+#   SCOPE NOTE: CIP-013-2 R1 applies to high and medium impact BES Cyber Systems
+#   AND their associated EACMS and PACS. The applies_when gates in this file key
+#   off the asset's impact rating only; an estate model that distinguished EACMS
+#   and PACS would scope these more precisely. Recorded as a known simplification.
+#
 #   CIP-013  Supply chain risk management. A PLAN standard: develop a plan
 #            (R1), implement it (R2), review and get CIP Senior Manager
 #            approval every 15 calendar months (R3). CIP-013 does NOT impose
@@ -406,8 +411,8 @@
         System from vendor products or services resulting from: (i) procuring and
         installing vendor equipment and software; and (ii) transitions from one
         vendor(s) to another vendor(s).
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "nerc.com CIP-013-2 standard text, checked 2026-09-21"
   applies_when:
     - field: supplies_impact_rating
       in: [high, medium]
@@ -441,8 +446,8 @@
         Notification by the vendor of vendor-identified incidents related to the
         products or services provided to the Responsible Entity that pose cyber
         security risk to the Responsible Entity.
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "nerc.com CIP-013-2 standard text, checked 2026-09-21"
   applies_when:
     - field: supplies_impact_rating
       in: [high, medium]
@@ -474,8 +479,8 @@
         Coordination of responses to vendor-identified incidents related to the
         products or services provided to the Responsible Entity that pose cyber
         security risk to the Responsible Entity.
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "nerc.com CIP-013-2 standard text, checked 2026-09-21"
   applies_when:
     - field: supplies_impact_rating
       in: [high, medium]
@@ -507,8 +512,8 @@
       text: >
         Notification by vendors when remote or onsite access should no longer be
         granted to vendor representatives.
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "nerc.com CIP-013-2 standard text, checked 2026-09-21"
   applies_when:
     - field: supplies_impact_rating
       in: [high, medium]
@@ -573,8 +578,15 @@
       text: >
         Verification of software integrity and authenticity of all software and
         patches provided by the vendor for use in the BES Cyber System.
-      citation_verified: false
-      citation_verified_by: ""
+      # NERC's technical rationale is explicit that Part 1.2.5 is NOT an
+      # operational requirement for the entity to perform verification. It is
+      # aimed at identifying, during procurement, the vendor's CAPABILITY to
+      # provide software integrity and authenticity assurance. The operational
+      # check belongs to CIP-010 R1.6. This is the split the whole control set
+      # is built on, and it is confirmed by the standard's own rationale.
+      note: "procurement-phase capability check; the operational check is CIP-010 R1.6"
+      citation_verified: true
+      citation_verified_by: "nerc.com CIP-013-2 standard text, checked 2026-09-21"
   applies_when:
     - field: supplies_impact_rating
       in: [high, medium]
@@ -608,8 +620,8 @@
       text: >
         Coordination of controls for (i) vendor-initiated Interactive Remote Access,
         and (ii) system-to-system remote access with a vendor(s).
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "nerc.com CIP-013-2 standard text, checked 2026-09-21"
   applies_when:
     - field: supplies_impact_rating
       in: [high, medium]
@@ -1079,8 +1091,8 @@
         Notification by the vendor of vendor-identified incidents related to the
         products or services provided to the Responsible Entity that pose cyber
         security risk to the Responsible Entity.
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "nerc.com CIP-013-2 standard text, checked 2026-09-21"
   applies_when:
     - field: supplies_impact_rating
       in: [high, medium]
@@ -1151,8 +1163,8 @@
         ... to identify and assess cyber security risk(s) to the Bulk Electric
         System from vendor products or services resulting from: ... (ii)
         transitions from one vendor(s) to another vendor(s).
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "nerc.com CIP-013-2 standard text, checked 2026-09-21"
   applies_when:
     - field: supplies_impact_rating
       in: [high, medium]
@@ -1186,8 +1198,15 @@
       text: >
         Verification of software integrity and authenticity of all software and
         patches provided by the vendor for use in the BES Cyber System.
-      citation_verified: false
-      citation_verified_by: ""
+      # NERC's technical rationale is explicit that Part 1.2.5 is NOT an
+      # operational requirement for the entity to perform verification. It is
+      # aimed at identifying, during procurement, the vendor's CAPABILITY to
+      # provide software integrity and authenticity assurance. The operational
+      # check belongs to CIP-010 R1.6. This is the split the whole control set
+      # is built on, and it is confirmed by the standard's own rationale.
+      note: "procurement-phase capability check; the operational check is CIP-010 R1.6"
+      citation_verified: true
+      citation_verified_by: "nerc.com CIP-013-2 standard text, checked 2026-09-21"
   applies_when:
     - field: supplies_impact_rating
       in: [high, medium]
@@ -1291,13 +1310,25 @@
       version: "9"
       requirement: "R2"
       part: "Attachment 1 Section 6"
+      # VERIFIED 2026-09-21: CIP-003-9 became enforceable 1 April 2026, adding
+      # Attachment 1 Section 6, "Vendor Electronic Remote Access Security
+      # Controls", for low impact BES Cyber Systems.
+      #
+      # TWO REQUIREMENTS ARE IN PLAY and this file cites the implementation one.
+      # R1 Part 1.2.6 obliges the cyber security POLICY to address vendor
+      # electronic remote access; R2 obliges implementation of the plans in
+      # Attachment 1, which is where Section 6's controls live. These controls
+      # score whether the controls exist and work, so R2 / Attachment 1 Section 6
+      # is the right citation for them -- but a policy-level finding would cite
+      # R1 Part 1.2.6 instead. Confirm which the audience expects.
+      related_requirement: "R1 Part 1.2.6 (policy must address vendor electronic remote access)"
       text: >
         For assets containing low impact BES Cyber System(s) identified pursuant
         to CIP-002, that allow vendor electronic remote access, the Responsible
         Entity shall implement a process to mitigate risks associated with vendor
         electronic remote access.
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "CIP-003-9 Attachment 1 Section 6; effective 2026-04-01, checked 2026-09-21"
   applies_when:
     - field: impact_rating
       equals: low
@@ -1330,12 +1361,24 @@
       version: "9"
       requirement: "R2"
       part: "Attachment 1 Section 6"
+      # VERIFIED 2026-09-21: CIP-003-9 became enforceable 1 April 2026, adding
+      # Attachment 1 Section 6, "Vendor Electronic Remote Access Security
+      # Controls", for low impact BES Cyber Systems.
+      #
+      # TWO REQUIREMENTS ARE IN PLAY and this file cites the implementation one.
+      # R1 Part 1.2.6 obliges the cyber security POLICY to address vendor
+      # electronic remote access; R2 obliges implementation of the plans in
+      # Attachment 1, which is where Section 6's controls live. These controls
+      # score whether the controls exist and work, so R2 / Attachment 1 Section 6
+      # is the right citation for them -- but a policy-level finding would cite
+      # R1 Part 1.2.6 instead. Confirm which the audience expects.
+      related_requirement: "R1 Part 1.2.6 (policy must address vendor electronic remote access)"
       text: >
         Process to mitigate risks associated with vendor electronic remote
         access, including determining active vendor electronic remote access
         sessions.
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "CIP-003-9 Attachment 1 Section 6; effective 2026-04-01, checked 2026-09-21"
   applies_when:
     - field: impact_rating
       equals: low
@@ -1366,11 +1409,23 @@
       version: "9"
       requirement: "R2"
       part: "Attachment 1 Section 6"
+      # VERIFIED 2026-09-21: CIP-003-9 became enforceable 1 April 2026, adding
+      # Attachment 1 Section 6, "Vendor Electronic Remote Access Security
+      # Controls", for low impact BES Cyber Systems.
+      #
+      # TWO REQUIREMENTS ARE IN PLAY and this file cites the implementation one.
+      # R1 Part 1.2.6 obliges the cyber security POLICY to address vendor
+      # electronic remote access; R2 obliges implementation of the plans in
+      # Attachment 1, which is where Section 6's controls live. These controls
+      # score whether the controls exist and work, so R2 / Attachment 1 Section 6
+      # is the right citation for them -- but a policy-level finding would cite
+      # R1 Part 1.2.6 instead. Confirm which the audience expects.
+      related_requirement: "R1 Part 1.2.6 (policy must address vendor electronic remote access)"
       text: >
         Process to mitigate risks associated with vendor electronic remote
         access, including disabling vendor electronic remote access.
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "CIP-003-9 Attachment 1 Section 6; effective 2026-04-01, checked 2026-09-21"
   applies_when:
     - field: impact_rating
       equals: low
@@ -1401,11 +1456,23 @@
       version: "9"
       requirement: "R2"
       part: "Attachment 1 Section 6"
+      # VERIFIED 2026-09-21: CIP-003-9 became enforceable 1 April 2026, adding
+      # Attachment 1 Section 6, "Vendor Electronic Remote Access Security
+      # Controls", for low impact BES Cyber Systems.
+      #
+      # TWO REQUIREMENTS ARE IN PLAY and this file cites the implementation one.
+      # R1 Part 1.2.6 obliges the cyber security POLICY to address vendor
+      # electronic remote access; R2 obliges implementation of the plans in
+      # Attachment 1, which is where Section 6's controls live. These controls
+      # score whether the controls exist and work, so R2 / Attachment 1 Section 6
+      # is the right citation for them -- but a policy-level finding would cite
+      # R1 Part 1.2.6 instead. Confirm which the audience expects.
+      related_requirement: "R1 Part 1.2.6 (policy must address vendor electronic remote access)"
       text: >
         Process to mitigate risks associated with vendor electronic remote
         access, including detecting malicious communications.
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "CIP-003-9 Attachment 1 Section 6; effective 2026-04-01, checked 2026-09-21"
   applies_when:
     - field: impact_rating
       equals: low
