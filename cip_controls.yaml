@@ -948,3 +948,195 @@
   compensating_control: >
     Where operational constraints delay rotation, document the constraint, the
     compensating monitoring, and the CIP Senior Manager approval.
+
+# ===========================================================================
+# CIP-013 — clause quality, vendor transition, and the crosswalk to CIP-010
+#
+# A clause that exists but commits the vendor to nothing is not a control. The
+# controls above ask whether each R1.2 obligation is addressed at all; these ask
+# whether it is addressed in a way that can actually be relied on, which is the
+# distinction an auditor draws between a procurement process and a paragraph.
+# ===========================================================================
+
+- id: CIP-26
+  subject: procurement
+  question: >
+    Does the vendor incident notification obligation specify a notification
+    window, rather than requiring notice without a deadline?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R1"
+      part: "1.2.1"
+      text: >
+        Notification by the vendor of vendor-identified incidents related to the
+        products or services provided to the Responsible Entity that pose cyber
+        security risk to the Responsible Entity.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+    - field: contract.incident_notification_clause
+      equals: true
+  fails_when:
+    - field: contract.incident_notification_hours
+      gt: 72
+  gap_when:
+    - field: contract.incident_notification_hours
+      is_unknown: true
+  severity: medium
+  remediation: >
+    Amend the notification clause to state a maximum notification window in hours
+    from vendor awareness. "Prompt" and "without undue delay" are not enforceable
+    at audit and give the entity no basis to measure vendor performance.
+  compensating_control: >
+    Track vendor notification latency against incidents on record and raise it at
+    the contract review.
+
+- id: CIP-27
+  subject: procurement
+  question: >
+    Does the vulnerability disclosure obligation specify a disclosure window?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R1"
+      part: "1.2.4"
+      text: >
+        Disclosure by vendors of known vulnerabilities related to the products or
+        services provided to the Responsible Entity.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+    - field: contract.vulnerability_disclosure_clause
+      equals: true
+  fails_when:
+    - field: contract.vulnerability_disclosure_days
+      gt: 90
+  gap_when:
+    - field: contract.vulnerability_disclosure_days
+      is_unknown: true
+  severity: medium
+  remediation: >
+    Amend the disclosure clause to state a maximum disclosure window in days, with
+    a shorter window or immediate notice where a vulnerability is being actively
+    exploited.
+  compensating_control: >
+    Monitor the vendor's products in the E-ISAC and CISA ICS advisory feeds and
+    compare against what the vendor disclosed directly.
+
+- id: CIP-28
+  subject: procurement
+  question: >
+    Does the procurement process address transition away from this vendor to
+    another vendor?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R1"
+      part: "1.1"
+      text: >
+        ... to identify and assess cyber security risk(s) to the Bulk Electric
+        System from vendor products or services resulting from: ... (ii)
+        transitions from one vendor(s) to another vendor(s).
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+  fails_when:
+    - field: contract.vendor_transition_clause
+      equals: false
+  gap_when:
+    - field: contract.vendor_transition_clause
+      is_unknown: true
+  severity: medium
+  remediation: >
+    Secure transition assistance terms covering transfer of configuration
+    baselines and the documentation needed to operate or replace the supplied
+    equipment. R1.1 names vendor transition explicitly and it is the part most
+    often omitted from a supply chain plan.
+  compensating_control: >
+    Maintain an independent copy of device configuration baselines so a vendor
+    exit does not strand the assets.
+
+- id: CIP-29
+  subject: procurement
+  question: >
+    Is the vendor obliged to notify the entity before rotating, or upon
+    compromise of, a code signing key?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R1"
+      part: "1.2.5"
+      text: >
+        Verification of software integrity and authenticity of all software and
+        patches provided by the vendor for use in the BES Cyber System.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+    - field: contract.software_integrity_clause
+      equals: true
+  fails_when:
+    - field: contract.key_rotation_notice_clause
+      equals: false
+  gap_when:
+    - field: contract.key_rotation_notice_clause
+      is_unknown: true
+  severity: high
+  remediation: >
+    Require advance notice of planned key rotation and immediate notice of key
+    compromise. Without it, a rotated key makes every subsequent release fail
+    source identity verification and the entity cannot distinguish that from an
+    attack.
+  compensating_control: >
+    Subscribe to the vendor's security advisory feed and re-confirm the key
+    fingerprint out of band whenever a signature unexpectedly fails to verify.
+
+- id: CIP-30
+  subject: procurement
+  question: >
+    Does the vendor actually publish a usable verification method, so that the
+    CIP-013 R1.2.5 contract obligation is operable under CIP-010 R1.6?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-013"
+      version: "2"
+      requirement: "R2"
+      part: "R2"
+      text: >
+        Each Responsible Entity shall implement its supply chain cyber security
+        risk management plan(s) specified in Requirement R1.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: supplies_impact_rating
+      in: [high, medium]
+    - field: contract.software_integrity_clause
+      equals: true
+  fails_when:
+    - field: vendor_publishes_signing_key
+      equals: false
+  gap_when:
+    - field: vendor_publishes_signing_key
+      is_unknown: true
+  severity: high
+  remediation: >
+    Obtain the vendor's current code signing public key, confirm its fingerprint
+    out of band, and register it as trusted. A contract clause requiring a
+    verification method that the entity has not actually obtained is an
+    unimplemented plan under R2, and leaves CIP-010 R1.6.1 unevaluable for every
+    release this vendor ships.
+  compensating_control: >
+    Obtain per-release hashes through a vendor-confirmed out-of-band channel and
+    record the channel in the deployment evidence until the key is registered.

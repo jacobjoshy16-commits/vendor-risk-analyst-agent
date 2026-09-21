@@ -231,3 +231,92 @@ def build(grid_dir: Path, *, today: date | None = None) -> dict:
         "vendors": len(vendors_out),
         "tampered_package": TAMPERED_PACKAGE,
     }
+
+
+# ---------------------------------------------------------------------------
+# Onboarding fixtures — a vendor that is NOT part of the estate yet
+# ---------------------------------------------------------------------------
+# Kestrel Grid Systems is the vendor the end-to-end test onboards from scratch:
+# contract documents, a published signing key, and two firmware releases. It is
+# deliberately absent from VENDORS, because the point of the exercise is the
+# path a new supplier takes before any of its equipment is in service.
+ONBOARDING_VENDOR = "Kestrel Grid Systems"
+ONBOARDING_SLUG = "kestrel-grid"
+ONBOARDING_MODEL = "KG-RTU-100"
+ONBOARDING_CLEAN = "KG-RTU-100-2.4.0"
+ONBOARDING_TAMPERED = "KG-RTU-100-2.4.1"
+
+
+def build_onboarding(vendor_dir: Path, *, today: date | None = None) -> dict:
+    """Write Kestrel's published key and two signed firmware releases.
+
+    One release is genuine. The other is the same mirror compromise the estate
+    carries -- binary substituted, published hash updated to match, signature
+    left over the original -- so the onboarding path exercises both outcomes:
+    a vendor that verifies, and a release that does not.
+    """
+    today = today or date.today()
+    releases = vendor_dir / "releases"
+    releases.mkdir(parents=True, exist_ok=True)
+    for stale in releases.glob("*.bin"):
+        stale.unlink()
+
+    priv, pub = derive_demo_keypair(f"{ONBOARDING_SLUG}-signing-2026")
+    key = {
+        "key_id": f"{ONBOARDING_SLUG}-2026",
+        "vendor": ONBOARDING_VENDOR,
+        "public_key": encode_public_key(pub),
+        "status": "active",
+        "valid_from": (today - timedelta(days=200)).isoformat(),
+        "valid_until": (today + timedelta(days=900)).isoformat(),
+        # MSA 9.4 obliges the vendor to make the key available through a channel
+        # independent of the artifact, and to confirm the fingerprint on request.
+        # This records that the entity actually did that -- the difference
+        # between a clause and a control.
+        "fingerprint_confirmed_out_of_band": True,
+        "note": "DEMO KEY. Fictional vendor. Derived deterministically; signs nothing real.",
+    }
+
+    out = []
+    for package_id, version, tampered in (
+        (ONBOARDING_CLEAN, "2.4.0", False),
+        (ONBOARDING_TAMPERED, "2.4.1", True),
+    ):
+        genuine = _firmware_blob(ONBOARDING_VENDOR, ONBOARDING_MODEL, version, payload_seed=0xA5 * len(version))
+        signature = sign_blob(priv, genuine)
+        if tampered:
+            substituted = bytearray(genuine)
+            substituted[900:948] = b"\xcc" * 48
+            on_disk = bytes(substituted)
+            note = ("Substituted on the distribution mirror; published hash updated to "
+                    "match, vendor signature still covers the genuine build.")
+        else:
+            on_disk = genuine
+            note = "Genuine release as published by the vendor."
+
+        (releases / f"{package_id}.bin").write_bytes(on_disk)
+        out.append({
+            "package_id": package_id,
+            "vendor": ONBOARDING_VENDOR,
+            "vendor_slug": ONBOARDING_SLUG,
+            "target_model": ONBOARDING_MODEL,
+            "version": version,
+            "artifact": f"releases/{package_id}.bin",
+            "published_sha256": sha256_bytes(on_disk),
+            "signature": signature,
+            "signing_key_id": key["key_id"],
+            "released_on": (today - timedelta(days=30 if tampered else 90)).isoformat(),
+            "note": note,
+        })
+
+    (vendor_dir / "signing-key.yaml").write_text(
+        yaml.safe_dump([key], sort_keys=False), encoding="utf-8")
+    (vendor_dir / "releases.yaml").write_text(
+        yaml.safe_dump(out, sort_keys=False), encoding="utf-8")
+    return {
+        "vendor": ONBOARDING_VENDOR,
+        "keys": 1,
+        "releases": len(out),
+        "clean": ONBOARDING_CLEAN,
+        "tampered": ONBOARDING_TAMPERED,
+    }

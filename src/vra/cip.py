@@ -108,9 +108,22 @@ def procurement_subjects(estate: Estate) -> Iterable[tuple[dict, dict, None]]:
     The container is the vendor record itself so that `contract.*` field paths
     in the control file resolve through the evaluator's existing prefix
     handling -- the same mechanism the AIV-* set uses for `contract.baa_on_file`.
+
+    `vendor_publishes_signing_key` is computed here rather than recorded,
+    following the same rule as the firmware fields: it is a fact about the key
+    registry, so asking a human to assert it would let the register drift away
+    from what the tool can actually verify. It is what CIP-30 uses to tell a
+    contract clause apart from a working control.
     """
     for vendor in estate.vendors:
-        yield dict(vendor), vendor, None
+        subject = dict(vendor)
+        active = [
+            k for k in estate.registry.for_vendor(str(vendor.get("vendor", "")))
+            if k.status == "active"
+        ]
+        subject["vendor_publishes_signing_key"] = bool(active)
+        subject["trusted_key_ids"] = [k.key_id for k in active]
+        yield subject, vendor, None
 
 
 def access_subjects(estate: Estate) -> Iterable[tuple[dict, dict, None]]:

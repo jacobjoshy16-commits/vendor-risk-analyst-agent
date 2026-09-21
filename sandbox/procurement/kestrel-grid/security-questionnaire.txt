@@ -1,0 +1,48 @@
+SUPPLIER CYBER SECURITY QUESTIONNAIRE — RESPONSES
+Supplier: Kestrel Grid Systems, Inc.
+Completed by: T. Vaszary, Director of Product Security
+Date: 22 January 2026
+
+FICTIONAL DOCUMENT. For demonstration only.
+
+-------------------------------------------------------------------------------
+Q3. Does your organization maintain a documented secure development lifecycle?
+
+A3. Yes. Kestrel maintains a documented secure development lifecycle covering
+threat modeling, static analysis, dependency scanning and release signing. The
+lifecycle document is available under NDA.
+
+-------------------------------------------------------------------------------
+Q7. Describe how a customer can verify the integrity and authenticity of
+firmware you distribute.
+
+A7. Every firmware release is signed with the Kestrel release signing key. The
+signature and a SHA-256 digest are published on the Kestrel support portal
+alongside the release. The signing public key and its fingerprint are published
+separately in the Kestrel Security Advisory feed, and Kestrel will confirm the
+fingerprint by telephone on request.
+
+-------------------------------------------------------------------------------
+Q9. How are customers notified when a Kestrel representative should no longer
+have access to customer systems?
+
+A9. Kestrel maintains an internal offboarding process. Access to customer
+systems is managed through the customer's own access request process.
+
+-------------------------------------------------------------------------------
+Q12. Do you notify customers of security incidents affecting your products?
+
+A12. Yes. Kestrel notifies affected customers of security incidents within 24
+hours of confirmation, in accordance with our contractual obligations.
+
+-------------------------------------------------------------------------------
+Q15. Do you disclose known vulnerabilities in your products?
+
+A15. Yes. Kestrel publishes security advisories for confirmed vulnerabilities
+and provides advance notice to customers under active support agreements.
+
+-------------------------------------------------------------------------------
+Q18. Is a supply chain risk assessment performed on your own suppliers?
+
+A18. Kestrel performs supplier assessments at onboarding. Reassessment cadence
+is under review.

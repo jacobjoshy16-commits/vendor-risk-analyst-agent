@@ -1,0 +1,82 @@
+MASTER SERVICES AGREEMENT — EXCERPT
+Between: Entergy Corporation ("Customer") and Kestrel Grid Systems, Inc. ("Supplier")
+Agreement No. MSA-KESTRL-2026   Effective Date: 14 January 2026
+
+THIS IS A FICTIONAL DOCUMENT created for demonstration. Kestrel Grid Systems is
+an invented company. No part of this reflects any real agreement.
+
+-------------------------------------------------------------------------------
+SECTION 4 — DEFINITIONS (excerpt)
+
+4.11 "BES Cyber System" has the meaning given in the NERC Glossary of Terms.
+
+4.12 "Security Incident" means any actual or reasonably suspected unauthorized
+access to, disclosure of, or interference with Supplier systems, products or
+services that could reasonably be expected to affect Customer.
+
+4.13 "Firmware" means embedded software distributed by Supplier for execution on
+Supplier-manufactured field devices, including protective relays and remote
+terminal units.
+
+-------------------------------------------------------------------------------
+SECTION 9 — SECURITY OBLIGATIONS
+
+9.1 Incident Notification. Supplier shall notify Customer's designated security
+contact of any Security Incident affecting the products or services provided
+under this Agreement, and which poses a cyber security risk to Customer, no
+later than twenty-four (24) hours after Supplier becomes aware of such Security
+Incident.
+
+9.2 Incident Response Coordination. Following notification under Section 9.1,
+Supplier shall designate a named incident response lead, shall participate in
+joint response calls at Customer's request, and shall cooperate with Customer's
+incident response process including the provision of forensic artifacts within
+Supplier's control.
+
+9.3 Vulnerability Disclosure. Supplier shall disclose to Customer all known
+vulnerabilities affecting the products or services provided under this
+Agreement, including vulnerabilities identified in third-party or open source
+components incorporated therein, within thirty (30) days of Supplier becoming
+aware of such vulnerability, or immediately where the vulnerability is being
+actively exploited.
+
+9.4 Software Integrity and Authenticity. For each release of software, Firmware
+or patch supplied under this Agreement, Supplier shall publish a cryptographic
+signature generated with Supplier's code signing key, together with a SHA-256
+digest of the released artifact, and shall make the corresponding public key
+available to Customer through a channel independent of the artifact
+distribution channel. Supplier shall confirm the public key fingerprint to
+Customer upon request.
+
+9.5 Key Rotation. Supplier shall notify Customer not less than thirty (30) days
+prior to any planned rotation of a code signing key, and immediately upon any
+compromise or revocation of such key.
+
+-------------------------------------------------------------------------------
+SECTION 11 — ACCESS TO CUSTOMER SYSTEMS
+
+11.1 Remote Access Coordination. Supplier-initiated remote access to Customer
+systems, whether Interactive Remote Access by a Supplier representative or
+system-to-system access by a Supplier service, shall be initiated only through
+Customer's Intermediate System, shall be requested in advance against an
+approved change record, and shall be subject to Customer's ability to observe
+and terminate the session at any time without notice.
+
+11.2 Session Records. Supplier acknowledges that all remote access sessions are
+recorded and consents to such recording.
+
+11.3 Onsite Access. Supplier personnel requiring onsite access shall be escorted
+at all times unless separately authorized in writing by Customer.
+
+-------------------------------------------------------------------------------
+SECTION 14 — TERM AND TERMINATION
+
+14.1 Initial Term. Three (3) years from the Effective Date.
+
+14.4 Transition Assistance. Upon expiry or termination, Supplier shall provide
+reasonable transition assistance for a period of ninety (90) days, including
+transfer of configuration baselines and documentation necessary for Customer to
+operate or replace the supplied equipment.
+
+-------------------------------------------------------------------------------
+END OF EXCERPT

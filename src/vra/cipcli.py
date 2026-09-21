@@ -39,7 +39,15 @@ def build_parser() -> argparse.ArgumentParser:
         prog="vra.py cip",
         description="NERC CIP assessment over the simulated substation estate",
     )
-    p.add_argument("action", nargs="?", default="run", choices=["run", "build-fixtures"])
+    p.add_argument("action", nargs="?", default="run",
+                   choices=["run", "build-fixtures", "onboard"])
+    p.add_argument("--vendor", default=None, help="onboard: vendor name")
+    p.add_argument("--docs", type=Path, default=None,
+                   help="onboard: directory of vendor contract documents")
+    p.add_argument("--impact", default="high", choices=["high", "medium", "low"],
+                   help="onboard: impact rating of the systems this vendor supplies")
+    p.add_argument("--offline", action="store_true",
+                   help="onboard: use the deterministic extractor, no model")
     p.add_argument("--substations", type=int, default=GRID_SUBSTATIONS,
                    help=f"estate size (default {GRID_SUBSTATIONS})")
     p.add_argument("--grid-dir", type=Path, default=GRID_DIR)
@@ -59,13 +67,24 @@ def main(argv: list[str] | None = None) -> int:
     colour = sys.stdout.isatty() and not args.no_color
     when = date.fromisoformat(args.as_of) if args.as_of else date.today()
 
+    if args.action == "onboard":
+        return _onboard(args, colour, when)
+
     if args.action == "build-fixtures":
         from .gridbuild import build
+
+        from .gridbuild import build_onboarding
 
         result = build(args.grid_dir, today=when)
         print(f"{_c('✓', GREEN, colour)} regenerated sandbox estate in {args.grid_dir}")
         for k, v in result.items():
             print(f"    {k:20} {v}")
+        onboarding_dir = args.grid_dir.parent / "procurement" / "kestrel-grid"
+        if onboarding_dir.is_dir():
+            extra = build_onboarding(onboarding_dir, today=when)
+            print(f"{_c('✓', GREEN, colour)} regenerated onboarding fixtures in {onboarding_dir}")
+            for k, v in extra.items():
+                print(f"    {k:20} {v}")
         return 0
 
     try:
@@ -150,6 +169,129 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    {label:9} {path}")
         print(f"    {'findings':9} {fpath}")
         print()
+
+    if args.no_fail:
+        return 0
+    return 1 if crit else 0
+
+
+def _onboard(args, colour: bool, when) -> int:
+    """Walk a new vendor from contract documents to a scored record."""
+    from .config import RunConfig
+    from .onboard_cip import onboard_vendor
+
+    if not args.vendor or not args.docs:
+        print("onboard needs --vendor and --docs", file=sys.stderr)
+        return 2
+    if not args.docs.is_dir() and not args.docs.is_file():
+        print(f"no such documents path: {args.docs}", file=sys.stderr)
+        return 2
+
+    try:
+        controls = load_cip_controls(args.controls)
+    except (ValueError, OSError) as exc:
+        print(f"{_c('control set error:', RED, colour)} {exc}", file=sys.stderr)
+        return 2
+
+    cfg = RunConfig(offline=args.offline)
+    if not args.offline:
+        # No local model reachable means the heuristic extractor, labelled as
+        # such -- not a silent downgrade.
+        from .llm import probe_ollama
+
+        cfg.llm_unavailable = not probe_ollama(cfg)
+
+    result = onboard_vendor(
+        args.vendor, args.docs, cfg,
+        impact_rating=args.impact, controls=controls, when=when,
+    )
+    if result.errors:
+        for err in result.errors:
+            print(f"{_c('error:', RED, colour)} {err}", file=sys.stderr)
+        return 2
+
+    ex = result.extraction
+    backend = ex.backend or "unknown"
+    print()
+    print(f"{_c('VENDOR ONBOARDING', BOLD, colour)}  ·  {result.vendor}  ·  {when.isoformat()}")
+    print(_c("  synthetic vendor and documents — not a real supplier", DIM, colour))
+    print()
+
+    # --- step 1-2 --------------------------------------------------------
+    print(f"{_c('1. Documents read', BOLD, colour)}  ({backend})")
+    for name in ex.documents:
+        print(f"     {name}")
+    for name in ex.unreadable_documents:
+        print(f"     {_c(name + '  (no extractable text)', YELLOW, colour)}")
+    print()
+
+    print(f"{_c('2. Procurement obligations detected', BOLD, colour)}")
+    # Two clause targets can cite the same requirement (R1.2.5 covers both the
+    # integrity method and key rotation notice), so the obligation is named as
+    # well as the citation -- otherwise the table shows two identical rows.
+    print(f"     {'CIP-013':16} {'obligation':32} {'clause':7} {'quote':10} {'applied':8} source")
+    for claim in ex.claims:
+        found = "found" if claim.present else "-"
+        quoted = "verified" if claim.quote_verified else ("UNVERIFIED" if claim.quote else "-")
+        applied = "yes" if claim.tier == "extracted" else "held"
+        obligation = claim.field.split(".", 1)[-1]
+        line = (f"     {claim.requirement:16} {obligation:32} {found:7} {quoted:10} "
+                f"{applied:8} {claim.source_document}")
+        if claim.tier == "extracted":
+            print(_c(line, GREEN, colour))
+        elif claim.present:
+            print(_c(line, YELLOW, colour))
+        else:
+            print(line)
+    print()
+
+    # --- step 3 ----------------------------------------------------------
+    print(f"{_c('3. What the code refused to let the model decide', BOLD, colour)}")
+    if not ex.withheld:
+        print("     nothing withheld")
+    for claim in ex.withheld:
+        print(f"     {_c(claim.requirement, YELLOW, colour)}  {claim.field}")
+        print(f"       {_c(claim.withheld_reason, DIM, colour)}")
+    if result.pending_review_path:
+        print(f"     queued for ratification: {result.pending_review_path}")
+    print()
+
+    # --- step 4-5 --------------------------------------------------------
+    keys = result.key_registry.all()
+    print(f"{_c('4. Vendor signing key registered', BOLD, colour)}")
+    for key in keys:
+        confirmed = key.fingerprint_confirmed_out_of_band
+        mark = "confirmed out of band" if confirmed else _c("NOT confirmed out of band", YELLOW, colour)
+        print(f"     {key.key_id}  fingerprint {key.fingerprint}  [{key.status}]  {mark}")
+    if not keys:
+        print(_c("     none published — CIP-010 R1.6.1 will be unevaluable", YELLOW, colour))
+    print()
+
+    print(f"{_c('5. Firmware verification (SHA-256, then Ed25519)', BOLD, colour)}")
+    for package_id in sorted(result.verified):
+        r = result.verified[package_id]
+        ok = r.integrity_verified is True and r.source_identity_verified is True
+        head = _c("ACCEPTED", GREEN, colour) if ok else _c("REJECTED", RED, colour)
+        print(f"     {head}  {package_id}")
+        for line in r.evidence:
+            print(f"        {_c(line, DIM, colour)}")
+    print()
+
+    # --- step 6 ----------------------------------------------------------
+    crit = sum(1 for f in result.findings if f.control.severity == "critical")
+    print(f"{_c('6. Controls scored', BOLD, colour)}")
+    print(f"     {'control':8} {'citation':26} {'appl':>5} {'pass':>5} {'fail':>5} {'gap':>4}")
+    for cid, cov in sorted(result.coverage.items()):
+        if not cov.applicable:
+            continue
+        mark = RED if cov.failed else (YELLOW if cov.gapped else GREEN)
+        line = (f"     {cid:8} {cov.citation[:26]:26} {cov.applicable:5} "
+                f"{cov.passed:5} {cov.failed:5} {cov.gapped:4}")
+        print(_c(line, mark, colour) if (cov.failed or cov.gapped) else line)
+    print()
+    tag = _c(f"{crit} critical", RED, colour) if crit else _c("0 critical", GREEN, colour)
+    print(f"  {len(result.findings)} exceptions ({tag}) · {len(result.gaps)} information gaps")
+    print()
 
     if args.no_fail:
         return 0
