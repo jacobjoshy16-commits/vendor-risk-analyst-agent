@@ -1,0 +1,133 @@
+- package_id: MTS-PICS-9000-3.1.0
+  vendor: Meridian Turbine Systems
+  vendor_slug: meridian-turbine
+  target_model: MTS-PICS-9000
+  version: 3.1.0
+  artifact: firmware/MTS-PICS-9000-3.1.0.bin
+  published_sha256: 1c13567917666070beb1fa37638fd29765ca3987412032bca0c9d414b20a90e3
+  signature: I7w4cJzBbpBfVRsgSTW1NQdzZbj/leYMo9+ZiJE/m91cpjeMO1zpS+tAcScE8Y0Y2aphCBqpv5329X6C+5GlCg==
+  signing_key_id: meridian-turbine-2026
+  released_on: '2026-08-05'
+  note: Substituted in transit; published hash updated to match, vendor signature
+    still covers the genuine build.
+- package_id: MTS-GOV-400-2.0.4
+  vendor: Meridian Turbine Systems
+  vendor_slug: meridian-turbine
+  target_model: MTS-GOV-400
+  version: 2.0.4
+  artifact: firmware/MTS-GOV-400-2.0.4.bin
+  published_sha256: 08d5b494dbbff081d51487b3957478693e28f4149009edd329905696b3108a1f
+  signature: x09zGM4+hLo/jGIU2QyEmaie72mNba6dWwUAnkSqE5DofIdlylGsxwE7l2hbfdqLFcGWzKBEEeS/5GaHDoQ/Cg==
+  signing_key_id: meridian-turbine-2026
+  released_on: '2026-08-04'
+  note: Genuine release as published by the vendor.
+- package_id: MTS-EXC-220-1.7.1
+  vendor: Meridian Turbine Systems
+  vendor_slug: meridian-turbine
+  target_model: MTS-EXC-220
+  version: 1.7.1
+  artifact: firmware/MTS-EXC-220-1.7.1.bin
+  published_sha256: 06a059781ad0c3552481e517bfdf8d3114bd677795db9475c4bd2aed9afb58b5
+  signature: VNKac4cWLAfDcJB+6rm6R8kIPc6eETGDjPa9sgIksitpnO+cSQaJRl5UZSdbo8qiSjwi5HfqHkcQsXhZjNqrCA==
+  signing_key_id: meridian-turbine-2026
+  released_on: '2026-08-03'
+  note: Genuine release as published by the vendor.
+- package_id: SPS-411-3.9.1
+  vendor: Sentinel Protective Systems
+  vendor_slug: sentinel-protective
+  target_model: SPS-411
+  version: 3.9.1
+  artifact: firmware/SPS-411-3.9.1.bin
+  published_sha256: 55a24726e1fb0d51f8190e7c40bbca4bd900e4653719475bcbd1b312eca582ff
+  signature: aUZgdnPq791aHb9uhV2cxCSxKTYXuGoxZbhYFR2pbTRDQHjLBmtL8Ck4VNo4x6WcQCrLkJ338EnTc/ND3uqaCg==
+  signing_key_id: sentinel-protective-2026
+  released_on: '2026-08-02'
+  note: Genuine release as published by the vendor.
+- package_id: SPS-680-2.2.0
+  vendor: Sentinel Protective Systems
+  vendor_slug: sentinel-protective
+  target_model: SPS-680
+  version: 2.2.0
+  artifact: firmware/SPS-680-2.2.0.bin
+  published_sha256: a8d4330970171686abec94b2289c3750d2ebab521ef69633350b12deaf2cb111
+  signature: 8ZESiQy6ynkg1EHJELmutmTqafP7RliVTr1ocMl/Awk4yXw2MNcdnL958pOv8zAyYfwrCwpGnYQ+YvOEv8mJDQ==
+  signing_key_id: sentinel-protective-2026
+  released_on: '2026-08-01'
+  note: Genuine release as published by the vendor.
+- package_id: CGC-RTU-350-1.4.2
+  vendor: Cascade Grid Controls
+  vendor_slug: cascade-grid
+  target_model: CGC-RTU-350
+  version: 1.4.2
+  artifact: firmware/CGC-RTU-350-1.4.2.bin
+  published_sha256: 9a790a27f4232f408c188827e83a7af6cc10fc53ac8bcc4732326b911b3ad2cb
+  signature: 8k+PfUSi0PNRUQMCpMQ/ilyJmPUzEfg5HiRefgyNh2pG4oJHy4ytJExpemLhO1AXxeCfSbs2UnYdqf1GxU9xBA==
+  signing_key_id: cascade-grid-2026
+  released_on: '2026-07-31'
+  note: Genuine release as published by the vendor.
+- package_id: CGC-RTU-200-7.1.0
+  vendor: Cascade Grid Controls
+  vendor_slug: cascade-grid
+  target_model: CGC-RTU-200
+  version: 7.1.0
+  artifact: firmware/CGC-RTU-200-7.1.0.bin
+  published_sha256: 0c66d32cba580cc682cbee4c43aec2d7468510804c80dec2a1c9eb2c0c8a9da3
+  signature: NViAgZf0MnmwhtgeUfLJK8a6OK/eKPceZkIcAvhToiSUH4xlQvOj/ISRNfFaqvZI3zqBRRn1pDJahJlrcvfkAQ==
+  signing_key_id: cascade-grid-2026
+  released_on: '2026-07-30'
+  note: Genuine release as published by the vendor.
+- package_id: IW-BC-120-2.0.9
+  vendor: Ironwood Automation
+  vendor_slug: ironwood-automation
+  target_model: IW-BC-120
+  version: 2.0.9
+  artifact: firmware/IW-BC-120-2.0.9.bin
+  published_sha256: cc85e78fc85b37c02493be15edab8b3672fd5d020cab55bed502cf4d18dd8dfe
+  signature: vRtHq28pXCumcB9MCkK2Fxo26173q3rPxJ2bHAx7qi46s0UMcxT7fTMpCDlj04l+fwiAOZnAM93qHI24qrWzAA==
+  signing_key_id: ironwood-automation-2026
+  released_on: '2026-07-29'
+  note: Genuine release as published by the vendor.
+- package_id: IW-BC-90-5.6.0
+  vendor: Ironwood Automation
+  vendor_slug: ironwood-automation
+  target_model: IW-BC-90
+  version: 5.6.0
+  artifact: firmware/IW-BC-90-5.6.0.bin
+  published_sha256: 91e921d144f99b89ae4f0eff5b09906a67e3c5048b85f23bf3b57849f06b5ee1
+  signature: toeDFnethNeG5zjRpKdHZa3hRE1wOPlAHFWE8qyYADoy1giumHqClmH67MnkP+DqBb3spoVHNNBg37cyOl+dDQ==
+  signing_key_id: ironwood-automation-2026
+  released_on: '2026-07-28'
+  note: Genuine release as published by the vendor.
+- package_id: NG-GW-5000-9.3.0
+  vendor: Northgate Substation Systems
+  vendor_slug: northgate-substation
+  target_model: NG-GW-5000
+  version: 9.3.0
+  artifact: firmware/NG-GW-5000-9.3.0.bin
+  published_sha256: 33c66fdfe67e6275f7e5cb7180e780b3bb12ec98e5d0374b7f876a982c0c7a81
+  signature: 9kSsMHR7GDi9e1tTc9+h7/ZTcTWfSnCHYfL13ejOK9yCXQEsKsIzJrYjUcXbmdR/Dpoely/pdjnTrTkmqrhWBg==
+  signing_key_id: northgate-substation-2026
+  released_on: '2026-07-27'
+  note: Genuine release as published by the vendor.
+- package_id: HAL-MU-40-1.1.7
+  vendor: Halcyon Instruments
+  vendor_slug: halcyon-instruments
+  target_model: HAL-MU-40
+  version: 1.1.7
+  artifact: firmware/HAL-MU-40-1.1.7.bin
+  published_sha256: a24db1a734a4ea68de809772e921813599294952dd191ac78c91eb0fa00d0cdd
+  signature: IExD+kE1Psh3pui0WjsGanji1rotF1ko0vxga53aHfuJwiSx0qKnuAQOEoELLY5Y6MNUfkmE5SMEXhP/RyQSCg==
+  signing_key_id: halcyon-instruments-2026
+  released_on: '2026-07-26'
+  note: Genuine release as published by the vendor.
+- package_id: HAL-MU-40-1.2.0
+  vendor: Halcyon Instruments
+  vendor_slug: halcyon-instruments
+  target_model: HAL-MU-40
+  version: 1.2.0
+  artifact: firmware/HAL-MU-40-1.2.0.bin
+  published_sha256: 7936507f4ae28d0550b992a9b585b689f1a93f8df576b7cccce7c229a439bc22
+  signature: l2oq/NX+G+C/55KNGicS+ipJy9JUzVaZ6EHL/DhD283LFTmgRHwJsoo8rxjwOWDPlW+ZtWPv3gnCj+tv8rzvBQ==
+  signing_key_id: halcyon-instruments-2026
+  released_on: '2026-07-25'
+  note: Genuine release as published by the vendor.

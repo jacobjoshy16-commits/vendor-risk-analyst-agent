@@ -15,14 +15,33 @@ any other way, and anyone who works in CIP is already thinking it:
 
 ```bash
 pip install -r requirements.txt
-python3 vra.py cip build-fixtures --date 2026-09-20   # once; regenerates the estate
-python3 vra.py cip --date 2026-09-20 --evidence       # warm the run
+python3 vra.py cip build-fixtures                # once; estate + batch + onboarding
+python3 vra.py cip --date 2026-09-21 --evidence  # warm the run
 ```
 
 Pin `--date` so your numbers match what you rehearsed. Have
 `out/cip/evidence-pack.html` open in a second tab.
 
 ---
+
+## Beat 0 — the hook from their own filing (15s)
+
+Open with what they already do, not with a gap:
+
+> "Your 10-K says you run a vendor risk management program, and that you use
+> threat intelligence to continuously monitor the cybersecurity risk of key
+> vendors. I built the piece that produces the CIP evidence that program would
+> hand an auditor."
+
+Then the reason it matters *now*:
+
+> "You're spending $6.35 billion on generation this year and $8 billion next,
+> across about a dozen new plants, and you're connecting fourteen generators
+> through MISO's expedited process. Every one of those arrives with vendor
+> firmware. That's when this matters most."
+
+See `ENTERGY-BRIEF.md` §1a for the full citations and the two things not to
+raise.
 
 ## Beat 1 — the problem (25s, no terminal)
 
@@ -93,6 +112,34 @@ FIRMWARE VERIFICATION FAILED  SPS-421-4.7.2
 Then the scale line:
 
 > "That one package is on 131 protective relays across the estate."
+
+## Beat 3b — the commissioning batch (35s) — the Entergy-specific beat
+
+```bash
+python3 vra.py cip commission --plant "Cypress Bend Energy Center" \
+    --batch sandbox/commissioning/cypress-bend --date 2026-09-21
+```
+
+Let the table land. Point at the **sha-256 column first**:
+
+> "Twelve packages, six vendors, one delivery for a new plant. Look at the hash
+> column — every single row says MATCH. A hash-and-spreadsheet process signs off
+> on this entire batch.
+>
+> Now the signature column. One INVALID. And it's the turbine control system —
+> the one item in a plant that comes from a single supplier, where there's no
+> second source to compare a build against.
+>
+> Exit code 1. The plant doesn't energise."
+
+Then connect it back:
+
+> "Your Note 8 says you're committed to 21 power island sets from one turbine
+> vendor and seven have been delivered. That's fourteen more deliveries where
+> this check is the only thing standing between a substituted package and a
+> running plant."
+
+This is the beat that makes the demo *theirs* rather than generic.
 
 ## Beat 4 — this is real crypto (20s)
 
@@ -204,6 +251,16 @@ The honest answer, which is stronger than a confident wrong one:
 That last paragraph is the one to land. Anyone who has worked a CIP program has
 been bitten by a standard revision, and a tool that tracks the sunset rather
 than trusting a one-time check is saying something they will recognise.
+
+### "What about Power Through — are those in scope?"
+
+**Do not claim CIP covers them.** Small utility-owned units at customer sites
+are probably below the size thresholds for NERC CIP to apply. The honest answer
+is also the better one:
+
+> "Those likely fall outside CIP, which is exactly why they'd need a lighter
+> control rather than the same one. Same verification logic, different
+> applicability gate — which is what the CIP-003-9 low-impact path already does."
 
 ### "Doesn't CIP-015 require monitoring inside the ESP now?"
 

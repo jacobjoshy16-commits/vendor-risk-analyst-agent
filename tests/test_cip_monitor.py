@@ -233,3 +233,89 @@ class DeploymentGate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CommissioningBatch(unittest.TestCase):
+    """A new plant's firmware arrives as a batch, against a schedule.
+
+    The estate scenario is steady-state: equipment in service, one bad build
+    found among it. Commissioning is the riskier shape, because the pressure at
+    that moment is to energise rather than to check — and the batch arrives from
+    several vendors at once.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from vra.gridbuild import (COMMISSIONING_BATCH, COMMISSIONING_TAMPERED,
+                                   build_commissioning)
+
+        cls.tampered = COMMISSIONING_TAMPERED
+        cls.expected = len(COMMISSIONING_BATCH)
+        cls.dir = Path(tempfile.mkdtemp()) / "batch"
+        cls.dir.mkdir(parents=True)
+        build_commissioning(cls.dir, today=AS_OF)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir.parent, ignore_errors=True)
+
+    def _results(self):
+        from vra.grid import load_estate
+
+        estate = load_estate(self.dir, substations=1, today=AS_OF)
+        return estate, estate.verify_all(when=AS_OF)
+
+    def test_the_whole_batch_is_verified(self):
+        estate, results = self._results()
+        self.assertEqual(len(results), self.expected)
+        self.assertGreater(len({p["vendor"] for p in estate.packages.values()}), 1,
+                           "a commissioning batch spans several vendors")
+
+    def test_exactly_one_package_is_blocked(self):
+        """NEGATIVE CONTROL. Eleven good packages must stay silent."""
+        _, results = self._results()
+        blocked = sorted(
+            p for p, r in results.items()
+            if r.integrity_verified is not True or r.source_identity_verified is not True
+        )
+        self.assertEqual(blocked, [self.tampered])
+
+    def test_every_package_in_the_batch_passes_the_hash_check(self):
+        """The argument of the demo.
+
+        If any package failed the hash too, the screen would show a mismatch and
+        the audience would conclude a hash check was sufficient. Every row must
+        read MATCH so the only red is the signature.
+        """
+        _, results = self._results()
+        for package_id, result in results.items():
+            self.assertTrue(result.hash_match, f"{package_id} must pass the hash check")
+
+    def test_the_blocked_package_fails_only_on_the_signature(self):
+        _, results = self._results()
+        result = results[self.tampered]
+        self.assertTrue(result.hash_match)
+        self.assertFalse(result.signature_verified)
+        self.assertTrue(result.signing_key_trusted, "the key itself is fine; the bytes are not")
+        self.assertFalse(result.integrity_verified)
+
+    def test_the_blocked_package_is_from_a_single_source_vendor(self):
+        """Deliberate: the turbine control system is the item with no second
+        source, so there is no other build to fall back to."""
+        estate, _ = self._results()
+        self.assertEqual(estate.packages[self.tampered]["vendor"], "Meridian Turbine Systems")
+
+    def test_blocking_produces_an_alert_naming_the_plant(self):
+        _, results = self._results()
+        alert = cipalert.for_rejected_firmware(
+            results[self.tampered], package_id=self.tampered, target="Cypress Bend Energy Center")
+        self.assertIn("Cypress Bend", alert.asset)
+        self.assertEqual(alert.severity, "critical")
+
+    def test_the_batch_regenerates_identically(self):
+        """Fixtures are committed; a rebuild must not churn them."""
+        from vra.gridbuild import build_commissioning
+
+        before = (self.dir / "releases.yaml").read_text()
+        build_commissioning(self.dir, today=AS_OF)
+        self.assertEqual((self.dir / "releases.yaml").read_text(), before)

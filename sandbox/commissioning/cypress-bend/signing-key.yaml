@@ -1,0 +1,48 @@
+- key_id: meridian-turbine-2026
+  vendor: Meridian Turbine Systems
+  public_key: MHksSGpEV4q/qB/yMegj7VK1H+ctV+WCUw62B43twZU=
+  status: active
+  valid_from: '2025-08-16'
+  valid_until: '2028-08-20'
+  fingerprint_confirmed_out_of_band: true
+  note: DEMO KEY. Fictional vendor. Derived deterministically; signs nothing real.
+- key_id: sentinel-protective-2026
+  vendor: Sentinel Protective Systems
+  public_key: olh6zMvUw5baE5ciPnOAe8AQK7hMFMTeV4XY/f5YFeY=
+  status: active
+  valid_from: '2025-08-16'
+  valid_until: '2028-08-20'
+  fingerprint_confirmed_out_of_band: true
+  note: DEMO KEY. Fictional vendor. Derived deterministically; signs nothing real.
+- key_id: cascade-grid-2026
+  vendor: Cascade Grid Controls
+  public_key: AOLAfMEZEhp2zsZYbL4rzEdr60MmMKSn8g/RUp2cxkk=
+  status: active
+  valid_from: '2025-08-16'
+  valid_until: '2028-08-20'
+  fingerprint_confirmed_out_of_band: true
+  note: DEMO KEY. Fictional vendor. Derived deterministically; signs nothing real.
+- key_id: ironwood-automation-2026
+  vendor: Ironwood Automation
+  public_key: 307fSyHj6rKPVYaZ19xEay6mVX9/wbdXcG2LGhNylJ8=
+  status: active
+  valid_from: '2025-08-16'
+  valid_until: '2028-08-20'
+  fingerprint_confirmed_out_of_band: true
+  note: DEMO KEY. Fictional vendor. Derived deterministically; signs nothing real.
+- key_id: northgate-substation-2026
+  vendor: Northgate Substation Systems
+  public_key: jQzSV09sBAsvBLsKh7PhlLdLZUO7mZTwpRvJJaOOTNA=
+  status: active
+  valid_from: '2025-08-16'
+  valid_until: '2028-08-20'
+  fingerprint_confirmed_out_of_band: true
+  note: DEMO KEY. Fictional vendor. Derived deterministically; signs nothing real.
+- key_id: halcyon-instruments-2026
+  vendor: Halcyon Instruments
+  public_key: QV8VW4r+tYGw77fmg9cKwX4Oczoq4F/UERQqDMF+fC0=
+  status: active
+  valid_from: '2025-08-16'
+  valid_until: '2028-08-20'
+  fingerprint_confirmed_out_of_band: true
+  note: DEMO KEY. Fictional vendor. Derived deterministically; signs nothing real.

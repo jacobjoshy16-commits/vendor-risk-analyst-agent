@@ -43,7 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="NERC CIP assessment over the simulated substation estate",
     )
     p.add_argument("action", nargs="?", default="run",
-                   choices=["run", "build-fixtures", "onboard", "monitor", "gate", "alerts"])
+                   choices=["run", "build-fixtures", "onboard", "monitor", "gate",
+                            "alerts", "commission"])
+    p.add_argument("--plant", default=None, help="commission: plant name")
+    p.add_argument("--batch", type=Path, default=None,
+                   help="commission: directory of the vendor firmware batch")
     p.add_argument("--interval", default="15m",
                    help="monitor: seconds, or 30s / 15m / 1h")
     p.add_argument("--once", action="store_true",
@@ -85,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.action == "gate":
         return _gate(args, colour, when)
 
+    if args.action == "commission":
+        return _commission(args, colour, when)
+
     if args.action == "alerts":
         return _alerts(args, colour)
 
@@ -101,6 +108,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{_c('✓', GREEN, colour)} regenerated sandbox estate in {args.grid_dir}")
         for k, v in result.items():
             print(f"    {k:20} {v}")
+        batch_dir = args.grid_dir.parent / "commissioning" / "cypress-bend"
+        if batch_dir.is_dir():
+            from .gridbuild import build_commissioning
+
+            batch = build_commissioning(batch_dir, today=fixture_date)
+            print(f"{_c('✓', GREEN, colour)} regenerated commissioning batch in {batch_dir}")
+            for k, v in batch.items():
+                print(f"    {k:20} {v}")
         onboarding_dir = args.grid_dir.parent / "procurement" / "kestrel-grid"
         if onboarding_dir.is_dir():
             extra = build_onboarding(onboarding_dir, today=fixture_date)
@@ -571,3 +586,85 @@ def _alerts(args, colour: bool) -> int:
               f"  -> {a.get('route_to', '')}")
         print(f"    {a.get('message', '')}")
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Commissioning gate
+# ---------------------------------------------------------------------------
+def _commission(args, colour: bool, when) -> int:
+    """Verify an entire commissioning batch before a new plant is energised.
+
+    The estate assessment is steady-state: equipment already in service, one bad
+    build found among it. Commissioning is the other shape and the riskier one.
+    A plant's firmware arrives as a batch, from several vendors, against a
+    schedule, and the pressure at that moment is to energise rather than to
+    check.
+
+    Same verification as everywhere else -- this only changes the unit of work
+    from one package to a delivery, and the exit code from one device to a
+    whole plant.
+
+    Exit 0 = every package verified. Exit 1 = do not energise.
+    """
+    from . import cipalert
+    from .grid import load_estate
+
+    if not args.batch:
+        print("commission needs --batch <directory>", file=sys.stderr)
+        return 2
+    if not args.batch.is_dir():
+        print(f"no such batch directory: {args.batch}", file=sys.stderr)
+        return 2
+
+    plant = args.plant or args.batch.name
+    estate = load_estate(args.batch, substations=1, seed=args.seed, today=when)
+    if not estate.packages:
+        print(f"{_c('no releases found in', RED, colour)} {args.batch}", file=sys.stderr)
+        return 2
+
+    results = estate.verify_all(when=when)
+    blocked = []
+
+    print()
+    print(f"{_c('COMMISSIONING FIRMWARE VERIFICATION', BOLD, colour)}  ·  {plant}")
+    print(_c("  synthetic batch — not a real plant or a real supplier", DIM, colour))
+    print()
+    print(f"  {len(results)} packages from "
+          f"{len({p.get('vendor') for p in estate.packages.values()})} vendors, "
+          f"assessed {when.isoformat()}")
+    print()
+    print(f"    {'package':26} {'vendor':30} {'sha-256':9} {'signature':10} verdict")
+    for package_id in sorted(results):
+        result = results[package_id]
+        vendor = str(estate.packages[package_id].get("vendor", ""))[:30]
+        ok = result.integrity_verified is True and result.source_identity_verified is True
+        if not ok:
+            blocked.append((package_id, result))
+        hashed = "MATCH" if result.hash_match else "MISMATCH"
+        signed = "VALID" if result.signature_verified else "INVALID"
+        verdict = "accepted" if ok else "BLOCKED"
+        line = f"    {package_id:26} {vendor:30} {hashed:9} {signed:10} {verdict}"
+        print(_c(line, GREEN, colour) if ok else _c(line, RED, colour))
+    print()
+
+    if not blocked:
+        print(f"  {_c('BATCH ACCEPTED', GREEN, colour)} — all {len(results)} packages "
+              f"verified against CIP-010-4 R1 Part 1.6")
+        return 0
+
+    headline = f"ENERGISATION BLOCKED — {len(blocked)} of {len(results)} packages failed"
+    print(f"  {_c(headline, RED, colour)}")
+    print()
+    for package_id, result in blocked:
+        print(f"    {_c(package_id, RED, colour)}  ({estate.packages[package_id].get('vendor')})")
+        for line in result.evidence:
+            print(f"      {_c(line, DIM, colour)}")
+        print()
+
+    alerts = [cipalert.for_rejected_firmware(r, package_id=p, target=plant)
+              for p, r in blocked]
+    path = cipalert.append(alerts)
+    print(f"    routed to {alerts[0].route_to}; logged to {path}")
+    if args.no_fail:
+        return 0
+    return 1

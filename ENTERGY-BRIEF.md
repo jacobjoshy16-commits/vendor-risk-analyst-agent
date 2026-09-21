@@ -45,20 +45,96 @@ rather than discretionary.
 ### Item 1C — Cybersecurity
 
 Entergy describes a **three lines of defense** security-risk-management model.
-The third line includes Internal Audit, independent third parties, and —
-in Entergy's own framing — **certain regulatory constructs such as the NERC
-Reliability Standards and the NRC Cyber Rule**, providing assurance to senior
-management and the Board.
+The third line includes Internal Audit, independent third parties, and — in
+Entergy's own framing — certain regulatory constructs such as the **NERC
+Reliability Standards** and the NRC Cyber Rule, providing assurance to senior
+management and the Board. Governance sits with the Board, with the **Audit
+Committee holding primary responsibility**, receiving quarterly reports from
+the CSO, CISO, CIO and General Auditor.
 
-Governance sits with the Board, with the **Audit Committee holding primary
-responsibility** for overseeing cybersecurity risk management, receiving reports
-at each regular quarterly meeting from the CSO, CISO, CIO and General Auditor.
+And, critically:
 
-**This is the sentence that matters most for this tool.** Entergy does not
-merely *comply with* NERC standards. It names them, in its Item 1C disclosure,
-as part of the assurance model it reports to its Board. Evidence that a NERC
-supply-chain control is operating is therefore evidence that feeds a disclosed
-governance process — not paperwork for a regulator alone.
+> Entergy uses a **"vendor risk management program to assess and monitor
+> security risks that arise from certain third-party vendors"**, and uses
+> threat-intelligence services to **"continuously monitor the cybersecurity risk
+> of key vendors."**
+
+---
+
+## 1a. The three hooks, ranked
+
+### Hook 1 — they already run this program; this feeds it
+
+They are not missing the idea. They have a vendor risk program and they
+continuously monitor key vendors. What this tool produces is a *specific
+artifact* that program would hand an auditor.
+
+> **"Your 10-K says you run a vendor risk management program. Mine produces the
+> CIP evidence that program would hand an auditor."**
+
+That lands better than "you have a gap," because it is not a critique of their
+program — it is an example of its output.
+
+### Hook 2 — an unusual volume of new vendor equipment is about to arrive
+
+This is the strongest angle and it is spread across several sections:
+
+| Where | What |
+| --- | --- |
+| MD&A capital plan | Generation spending of **$6.35B in 2026** and **$8.01B in 2027** |
+| Item 1 | Roughly a dozen new plants: Orange County, Legend, Lone Star, Franklin Farms, Delta Blues, Traceview, Vicksburg |
+| Item 1 (MISO) | Using MISO's expedited study process to connect **fourteen generators** |
+| **Note 8, exclusivity agreement** | Committed to **21 power island equipment sets from one turbine vendor**, of which only **7 have been delivered** |
+| Item 1 | "Power Through" — utility-owned generators at customer sites in all four states, remotely dispatchable |
+
+New plants mean a large volume of vendor firmware arriving at commissioning,
+from many suppliers, against a schedule. That is exactly where a substituted
+package slips through, because the pressure at that moment is to energise rather
+than to check.
+
+The **Note 8** row is the sharpest of these. A single turbine supplier, 21 sets
+committed, 14 still to come, is concentrated dependence with no second source to
+compare a build against.
+
+> **"You're commissioning more new generation in the next three years than most
+> utilities do in ten. Every one of those plants arrives with vendor firmware.
+> That's when signature checks matter most."**
+
+**This is what `vra.py cip commission` demonstrates** — see §4.8.
+
+**Caution on Power Through.** Small units at customer sites are probably below
+the size thresholds for NERC CIP to apply. **Verify before the fair and do not
+claim CIP covers them.** If it comes up: *"Those likely fall outside CIP, which
+is exactly why they'd need a lighter control."*
+
+### Hook 3 — they state detection limits, and name AI-driven threats
+
+Item 1A, cyber risk factor:
+
+> **"Entergy cannot anticipate, detect, or implement fully preventive measures
+> against all cybersecurity threats."**
+
+The same section names **"threats fueled by artificial intelligence."**
+
+This is the governance argument for the design, not an "AI will fix it" pitch:
+in this tool the model reads documents and **never creates a finding**. Code
+decides everything. An entity that has told its investors it cannot detect
+everything, and that AI-driven threats are among what it faces, is exactly the
+audience for a design where the AI structurally cannot invent a conclusion.
+
+### Only if the conversation turns to nuclear
+
+Item 1A's nuclear risk factor notes that some replacement parts **have to be
+reverse-engineered**, with reliance on fewer suppliers. Proving a part is
+authentic is the same class of problem as proving firmware is authentic. Raise
+it only if they go there.
+
+### Do not raise
+
+- **The SEC investigation in Item 9B** (inventory records, $12M penalty). It is
+  public, but bringing it to a recruiter reads as a gotcha.
+- **Naming data center customers** as attack surface. It sounds like speculation
+  about their clients.
 
 ---
 
@@ -199,6 +275,33 @@ Two rules bound it:
 
 On the sample vendor: six clauses applied, two withheld with reasons.
 
+### 4.8 Commissioning — a whole plant's batch at once
+
+```bash
+python3 vra.py cip commission --plant "Cypress Bend Energy Center" \
+    --batch ./vendor-firmware-batch
+```
+
+Twelve packages, six vendors, one delivery. Every row passes the hash check.
+One signature does not:
+
+```
+package                    vendor                         sha-256   signature  verdict
+MTS-EXC-220-1.7.1          Meridian Turbine Systems       MATCH     VALID      accepted
+MTS-GOV-400-2.0.4          Meridian Turbine Systems       MATCH     VALID      accepted
+MTS-PICS-9000-3.1.0        Meridian Turbine Systems       MATCH     INVALID    BLOCKED
+SPS-411-3.9.1              Sentinel Protective Systems    MATCH     VALID      accepted
+...
+ENERGISATION BLOCKED — 1 of 12 packages failed
+```
+
+Exit code 1. The blocked package is the **turbine control system** — the item in
+a plant that typically comes from a single supplier, where there is no second
+source to compare against. That is the Note 8 dependency in §1a, made concrete.
+
+Eleven correctly-signed packages stay silent, which is what makes the twelfth
+mean something.
+
 ### 4.5 Continuous monitoring
 
 ```bash
@@ -283,16 +386,23 @@ Entity, and a tool that claims it is selling something it cannot back.
 | Audit Committee has primary cybersecurity oversight; quarterly reports from CSO/CISO/CIO/General Auditor | **Confirmed via search of the filing** |
 | Item 1A cites attack risk to generation, transmission operations centers and distribution infrastructure | **Confirmed via search of the filing** |
 | Item 1A cites "mandatory and prescriptive standards" and "judgments and fines" | **Confirmed via search of the filing** |
-| **Item 1C explicitly describes a third-party vendor risk management program covering vendor access and hardware/software supply chain** | **NOT CONFIRMED.** A targeted search of the filing did not surface this language. Do not assert it until you have read it in the filing yourself. |
+| Item 1C: "vendor risk management program to assess and monitor security risks that arise from certain third-party vendors" | **Confirmed by direct read of the filing** |
+| Item 1C: threat-intelligence services "continuously monitor the cybersecurity risk of key vendors" | **Confirmed by direct read of the filing** |
+| Item 1A: "cannot anticipate, detect, or implement fully preventive measures against all cybersecurity threats" | **Confirmed by direct read of the filing** |
+| Item 1A names "threats fueled by artificial intelligence" | **Confirmed by direct read of the filing** |
+| Capital plan $6.35B (2026) / $8.01B (2027); ~12 named plants; MISO expedited study for 14 generators | **Confirmed by direct read of the filing** |
+| Note 8: 21 power island sets from one turbine vendor, 7 delivered | **Confirmed by direct read of the filing** |
+| Whether NERC CIP applies to "Power Through" units at customer sites | **UNVERIFIED — likely below CIP size thresholds. Do not claim CIP covers them.** |
 | ~1,300 substations, ~16,100 circuit miles | From Entergy's annual report; verify the current figures |
 
-**Two things to do before presenting:**
+**Before presenting:**
 
-1. Open the filing on EDGAR and read Item 1C yourself. Confirm the exact wording
-   of anything you intend to quote, and resolve the unconfirmed row above. The
-   language in this brief came through search summaries of the filing, not a
-   direct read, so treat it as *reported* rather than *verbatim* until you check.
-2. If penalties come up, say **"the statutory maximum under FPA §316A is roughly
+1. The Item 1C and Item 1A language above came from a direct read of the filing.
+   The three lines of defense and Audit Committee details came through search
+   summaries — treat those as *reported* rather than *verbatim* until checked.
+2. Resolve the Power Through row. It is the only claim here that could be wrong
+   in a way a CIP engineer would catch immediately.
+3. If penalties come up, say **"the statutory maximum under FPA §316A is roughly
    $1M per day per violation; actual exposure is set by the VRF/VSL matrix and
    mitigating factors."** "A million dollars a day" alone sounds like a brochure.
    The qualified version sounds like someone who has read the standard.
