@@ -277,7 +277,7 @@ boundary untested in CI, which is the one place it must hold.
 Stated plainly, because a validation document that only lists successes is
 marketing.
 
-- **The citations themselves are unverified.** All 25 controls carry
+- **The citations themselves are unverified.** All 34 controls carry
   `citation_verified: false`. The standard revision numbers (CIP-013-2,
   CIP-004-7, CIP-005-7, CIP-010-4) and part numbers in this repo were written
   from knowledge, not checked against the enforceable standards on nerc.com. The

@@ -235,6 +235,10 @@ class ExtractedClaim:
     applied_value: Any = None     # what actually reaches the register
     withheld_reason: str = ""
     backend: str = ""
+    # Where this obligation fell in the prioritised reading order. Recorded so
+    # the evidence shows what the model was asked to look at first; it has no
+    # effect on adjudication.
+    read_rank: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -250,6 +254,7 @@ class ExtractedClaim:
             "applied_value": self.applied_value,
             "withheld_reason": self.withheld_reason,
             "backend": self.backend,
+            "read_rank": self.read_rank,
         }
 
 
@@ -261,6 +266,8 @@ class ProcurementExtraction:
     unreadable_documents: list[str] = field(default_factory=list)
     claims: list[ExtractedClaim] = field(default_factory=list)
     backend: str = ""
+    footprint: "VendorFootprint | None" = None
+    reading_order: list[str] = field(default_factory=list)
 
     @property
     def applied(self) -> list[ExtractedClaim]:
@@ -399,6 +406,11 @@ SYSTEM = (
 PROMPT = """Read the vendor documents below and determine whether they contain an
 obligation matching the description.
 
+WHAT THIS VENDOR SUPPLIES (from the asset inventory — context only; it does not
+change what counts as an obligation, and you must not treat a large footprint as
+a reason to read a clause more generously):
+{estate_context}
+
 OBLIGATION SOUGHT ({requirement}):
 {asks}
 
@@ -426,8 +438,14 @@ def extract_procurement(
     cfg: RunConfig,
     *,
     controls: list | None = None,
+    footprint: "VendorFootprint | None" = None,
 ) -> ProcurementExtraction:
-    """Read the documents and produce adjudicated claims."""
+    """Read the documents and produce adjudicated claims.
+
+    `footprint` is machine-derived context about what this vendor supplies. It
+    changes what the model is told and the order it reads in. It cannot change
+    what happens to a claim afterwards.
+    """
     readable = [d for d in documents if d.text.strip()]
     result = ProcurementExtraction(
         vendor=vendor,
@@ -441,14 +459,18 @@ def extract_procurement(
     blob = "\n\n".join(f"--- {d.name} ---\n{d.text}" for d in readable)
     claims: list[ExtractedClaim] = []
     backend = ""
+    estate_context = footprint.as_prompt_context() if footprint else ""
+    result.footprint = footprint
+    result.reading_order = [t["field"] for t in reading_order(footprint)]
 
-    for target in CLAUSE_TARGETS:
+    for rank, target in enumerate(reading_order(footprint), start=1):
         if cfg.llm_enabled:
             answer = call_json(
                 SYSTEM,
                 PROMPT.format(
                     requirement=target["requirement"],
                     asks=target["asks"],
+                    estate_context=estate_context or "(no estate context available)",
                     documents=blob[:60000],
                 ),
                 cfg,
@@ -469,6 +491,7 @@ def extract_procurement(
                 confidence=_as_float(data.get("confidence")),
                 rationale=str(data.get("rationale") or ""),
                 backend=backend,
+                read_rank=rank,
             )
         )
 
@@ -583,3 +606,167 @@ def write_pending_review(
         encoding="utf-8",
     )
     return path
+
+
+# ---------------------------------------------------------------------------
+# Prioritized reading — machine context, without moving the boundary
+# ---------------------------------------------------------------------------
+# The model used to read a contract knowing nothing about the vendor. That is
+# wasteful: a supplier of four relays at one low-impact distribution substation
+# and a supplier of nine hundred relays across the 500 kV backbone get the same
+# attention on the same eight clauses, in the same arbitrary order.
+#
+# So the model is told what the estate knows before it reads: how many devices
+# this vendor supplies, at what CIP-002 impact ratings, and whether the entity
+# actually holds a signing key for them. It then reads the obligations that
+# carry the most weight for THAT footprint first.
+#
+# What this deliberately does NOT do
+# ----------------------------------
+# The footprint changes what the model is told and the ORDER it reads in.
+# It cannot change what happens to a claim afterwards. Every claim still goes
+# through verify_quote and adjudicate() with identical rules, and the severity
+# ceiling still comes from the control set. A vendor with a large footprint does
+# not get its claims accepted more easily, and a small one does not get them
+# refused -- that would make the footprint an input to a decision, which is
+# exactly the boundary this design exists to hold.
+#
+# tests/test_cip_onboarding.py asserts this directly: the same documents under
+# opposite footprints produce the same adjudicated result.
+
+# Base weight per obligation, before the footprint adjusts it. Software
+# integrity leads because it is the clause that makes CIP-010 R1.6 operable at
+# all; a contract missing it means every release from this vendor is
+# unverifiable no matter what else is agreed.
+BASE_PRIORITY: dict[str, int] = {
+    "contract.software_integrity_clause": 100,
+    "contract.remote_access_coordination_clause": 80,
+    "contract.access_termination_notice_clause": 70,
+    "contract.vulnerability_disclosure_clause": 60,
+    "contract.incident_notification_clause": 50,
+    "contract.key_rotation_notice_clause": 40,
+    "contract.incident_coordination_clause": 30,
+    "contract.vendor_transition_clause": 20,
+}
+
+
+@dataclass
+class VendorFootprint:
+    """What the estate already knows about a vendor, computed from machine data.
+
+    Every field here comes from the asset inventory or the key registry. None of
+    it is asked of a human and none of it is asked of the model.
+    """
+
+    vendor: str
+    devices: int = 0
+    substations: int = 0
+    high_impact_devices: int = 0
+    medium_impact_devices: int = 0
+    deployments: int = 0
+    packages: int = 0
+    publishes_signing_key: bool = False
+    trusted_key_ids: list[str] = field(default_factory=list)
+
+    @property
+    def max_impact(self) -> str:
+        if self.high_impact_devices:
+            return "high"
+        if self.medium_impact_devices:
+            return "medium"
+        return "low"
+
+    @property
+    def in_scope_devices(self) -> int:
+        return self.high_impact_devices + self.medium_impact_devices
+
+    def priority(self, field_name: str) -> int:
+        """Rank one obligation for this vendor. Higher is read first."""
+        score = BASE_PRIORITY.get(field_name, 10)
+
+        # A vendor whose equipment sits on high-impact systems raises the stakes
+        # on everything, because that is where CIP-013 obligations attach most
+        # heavily and where a bad firmware flash has the largest consequence.
+        if self.max_impact == "high":
+            score += 25
+        elif self.max_impact == "medium":
+            score += 10
+
+        # The entity holds no key for this vendor, so CIP-010 R1.6.1 is
+        # currently unevaluable for every release it ships. Finding out whether
+        # the contract even obliges them to provide one is the single most
+        # useful thing to establish.
+        if not self.publishes_signing_key and field_name in (
+            "contract.software_integrity_clause",
+            "contract.key_rotation_notice_clause",
+        ):
+            score += 60
+
+        # A large deployed base makes disclosure and notification timing matter
+        # more: the same unpatched vulnerability is on more devices.
+        if self.deployments >= 100 and field_name in (
+            "contract.vulnerability_disclosure_clause",
+            "contract.incident_notification_clause",
+        ):
+            score += 15
+
+        return score
+
+    def as_prompt_context(self) -> str:
+        """The block handed to the model before it reads.
+
+        Stated as facts about the estate, with no instruction about what to
+        conclude. The model is being told where it is, not what to find.
+        """
+        if not self.devices and not self.deployments:
+            return (
+                f"{self.vendor} has no equipment in service in this estate yet. "
+                f"This is a pre-procurement review."
+            )
+        key = (
+            f"The entity holds a trusted signing key for this vendor "
+            f"({', '.join(self.trusted_key_ids)})."
+            if self.publishes_signing_key
+            else "The entity holds NO trusted signing key for this vendor."
+        )
+        return (
+            f"{self.vendor} supplies {self.devices} cyber assets across "
+            f"{self.substations} substations in this estate: "
+            f"{self.high_impact_devices} on high impact BES Cyber Systems and "
+            f"{self.medium_impact_devices} on medium impact. "
+            f"{self.deployments} firmware deployments draw on {self.packages} "
+            f"distinct releases from this vendor. {key}"
+        )
+
+
+def footprint_from_estate(vendor: str, estate) -> VendorFootprint:
+    """Derive a footprint from the asset inventory and the key registry."""
+    low = vendor.strip().lower()
+    devices = [d for d in estate.devices if str(d.get("vendor", "")).strip().lower() == low]
+    deployments = [
+        d for d in estate.deployments if str(d.get("vendor", "")).strip().lower() == low
+    ]
+    active = [k for k in estate.registry.for_vendor(vendor) if k.status == "active"]
+    return VendorFootprint(
+        vendor=vendor,
+        devices=len(devices),
+        substations=len({d.get("substation_id") for d in devices}),
+        high_impact_devices=sum(1 for d in devices if d.get("impact_rating") == "high"),
+        medium_impact_devices=sum(1 for d in devices if d.get("impact_rating") == "medium"),
+        deployments=len(deployments),
+        packages=len({d.get("package_id") for d in deployments}),
+        publishes_signing_key=bool(active),
+        trusted_key_ids=[k.key_id for k in active],
+    )
+
+
+def reading_order(footprint: VendorFootprint | None) -> list[dict[str, Any]]:
+    """The clause targets, highest-stakes first for this vendor.
+
+    Every target is always returned. Prioritisation changes the order, never the
+    coverage -- silently skipping an obligation because it scored low would be a
+    gap the report could not see.
+    """
+    if footprint is None:
+        return list(CLAUSE_TARGETS)
+    return sorted(CLAUSE_TARGETS, key=lambda t: -footprint.priority(t["field"]))

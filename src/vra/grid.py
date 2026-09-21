@@ -283,14 +283,27 @@ def _generate_assets(estate: Estate, *, substations: int, seed: int, today: date
 
 
 def _generate_vendor_people_and_sessions(estate: Estate, *, rng: random.Random, today: date) -> None:
-    """Vendor technicians and their remote access into substation ESPs.
+    """Vendor technicians and their remote access into substations.
 
-    Only high and medium impact sites get vendor remote access records: a low
-    impact distribution substation with no defined ESP has no Interactive Remote
-    Access to govern, and inventing sessions there would manufacture CIP-005 and
-    CIP-004 findings that an auditor would throw out.
+    High and medium impact sites get Interactive Remote Access governed by
+    CIP-005 R2 and the personnel requirements of CIP-004.
+
+    A SUBSET OF LOW IMPACT SITES GETS VENDOR ACCESS TOO, and that is deliberate.
+    An earlier version of this generator created vendor sessions only at high
+    and medium impact sites, on the reasoning that a low impact distribution
+    substation has no ESP to govern. That reasoning is incomplete: CIP-003-9
+    Attachment 1 Section 6 places obligations on low impact assets that ALLOW
+    vendor electronic remote access — determine the sessions, disable them,
+    detect malicious communications. A dial-in maintenance path into a low
+    impact substation is in scope for Section 6 while being out of scope for
+    CIP-013 and CIP-005 R2.
+
+    So the vendor-access population is deliberately wider than the CIP-013
+    population, and the two are scoped separately. Low impact sites with no
+    vendor access path get no session and are genuinely out of scope.
     """
     in_scope = [s for s in estate.substations if s["impact_rating"] in (IMPACT_HIGH, IMPACT_MEDIUM)]
+    low_impact = [s for s in estate.substations if s["impact_rating"] == IMPACT_LOW]
     first = ["Dana", "Marcus", "Priya", "Tobias", "Renee", "Hollis", "Amara", "Grant", "Yusuf", "Lena"]
     last = ["Okafor", "Brandt", "Naidu", "Whitfield", "Serrano", "Kemp", "Ahmadi", "Lindqvist", "Boone", "Reyes"]
 
@@ -326,25 +339,42 @@ def _generate_vendor_people_and_sessions(estate: Estate, *, rng: random.Random, 
                 }
             )
 
-    for n in range(rng.randint(40, 70)):
-        sub = rng.choice(in_scope)
-        person = rng.choice(estate.personnel)
+    def _session(n: int, sub: dict, person: dict) -> dict:
         active = rng.random() < 0.35
-        past_window = active and rng.random() < 0.12
-        estate.access_sessions.append(
-            {
-                "session_id": f"VRA-SESS-{n + 1:04d}",
-                "substation_id": sub["substation_id"],
-                "impact_rating": sub["impact_rating"],
-                "vendor": person["vendor"],
-                "vendor_slug": person["vendor_slug"],
-                "person_id": person["person_id"],
-                "access_type": rng.choice(["interactive_remote_access", "system_to_system"]),
-                "status": "active" if active else "closed",
-                "session_visibility_method": rng.random() > 0.05,
-                "session_disable_method": rng.random() > 0.04,
-                "approved_window_end": (today - timedelta(days=rng.randint(0, 3))).isoformat(),
-                "past_approved_window": past_window,
-                "change_ticket": f"CHG-{rng.randint(100000, 999999)}",
-            }
-        )
+        low = sub["impact_rating"] == IMPACT_LOW
+        return {
+            "session_id": f"VRA-SESS-{n:04d}",
+            "substation_id": sub["substation_id"],
+            "impact_rating": sub["impact_rating"],
+            "vendor": person["vendor"],
+            "vendor_slug": person["vendor_slug"],
+            "person_id": person["person_id"],
+            "access_type": rng.choice(["interactive_remote_access", "system_to_system"]),
+            "status": "active" if active else "closed",
+            "session_visibility_method": rng.random() > (0.22 if low else 0.05),
+            "session_disable_method": rng.random() > (0.18 if low else 0.04),
+            "approved_window_end": (today - timedelta(days=rng.randint(0, 3))).isoformat(),
+            "past_approved_window": active and rng.random() < 0.12,
+            "change_ticket": f"CHG-{rng.randint(100000, 999999)}",
+            # CIP-003-9 Attachment 1 Section 6 fields. Only meaningful for low
+            # impact assets; the controls that read them are gated on that.
+            # Low impact sites are worse at all three, which is the realistic
+            # shape: the obligation is newer and the assets are less attended.
+            "allows_vendor_electronic_remote_access": True,
+            "low_impact_vendor_access_process": (rng.random() > 0.35) if low else True,
+            "malicious_comms_detection": (rng.random() > 0.45) if low else True,
+        }
+
+    n = 0
+    for _ in range(rng.randint(40, 70)):
+        n += 1
+        estate.access_sessions.append(_session(n, rng.choice(in_scope), rng.choice(estate.personnel)))
+
+    # Low impact assets that allow vendor electronic remote access. A minority
+    # of low impact substations have such a path, but there are so many low
+    # impact substations that the resulting Section 6 population is larger than
+    # the CIP-005 R2 population -- which is the point.
+    for sub in low_impact:
+        if rng.random() < 0.06:
+            n += 1
+            estate.access_sessions.append(_session(n, sub, rng.choice(estate.personnel)))

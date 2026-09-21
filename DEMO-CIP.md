@@ -38,19 +38,35 @@ Do not say "$1 million a day." If penalties come up, say *"the statutory
 maximum under FPA 316A is about $1M per day per violation; actual exposure is
 set by the VRF/VSL matrix."* That one sentence signals you've read the standard.
 
-## Beat 2 — the estate (20s)
+## Beat 2 — the estate, and two different scopes (25s)
 
 ```bash
-python3 vra.py cip --date 2026-09-20
+python3 vra.py cip --date 2026-09-21
 ```
 
-Point at the first three lines.
+Point at the scoping lines. **This is where you prove you know the standards
+apart from each other.**
 
-> "1,300 substations, 7,464 cyber assets. Notice the second line — only 142 are
-> high or medium impact. That's CIP-002 doing its job. The other 1,158 are
-> reported **not applicable**, not passing. If a tool raises CIP-013 findings
-> across all 1,300, ninety percent of them are wrong and an auditor finds that
-> in ten minutes."
+> "1,300 substations, 7,464 cyber assets. Two different populations here.
+>
+> 142 substations are high or medium impact — that's CIP-013, CIP-010 R1.6 and
+> CIP-005 R2 scope. If a tool raises CIP-013 findings across all 1,300, ninety
+> percent are wrong and an auditor finds that in ten minutes.
+>
+> But 69 **low impact** assets allow vendor electronic remote access, and those
+> are in scope for CIP-003-9 Attachment 1 Section 6 — determine the sessions,
+> disable them, detect malicious communications. Low impact doesn't mean no
+> obligation. It means a *different, lighter* obligation.
+>
+> Low impact sites with no vendor access path are out of scope, and reported
+> that way rather than as passing."
+
+If you want the strongest version of this, tell the story:
+
+> "I originally scoped this on high and medium impact only, which is right for
+> CIP-013 and wrong for vendor remote access. CIP-003-9 moved that population.
+> That's the kind of thing that actually happens to a compliance program — the
+> applicable population changes under you."
 
 ## Beat 3 — the money shot (45s)
 
@@ -152,3 +168,63 @@ Run the command. Point at MATCH / INVALID. Say:
 > passes this firmware. Real cryptography catches it. It's on 131 relays."
 
 Then hand over the HTML pack.
+
+---
+
+## Questions you will get, and the honest answers
+
+### "Your estate is Arkansas, Louisiana, Mississippi and Texas. Is that us?"
+
+Someone will notice. Have this ready, and say it before they finish asking:
+
+> "It's sized and shaped to resemble a utility of your scale — roughly 1,300
+> substations across four states — so the numbers are realistic. It contains no
+> Entergy data. Every substation name, vendor, technician and firmware image is
+> fabricated, and the generator that produces them is one file you can read."
+
+Do not be vague here. Any ambiguity about whether you modelled their actual
+system is worse than the demo being less impressive.
+
+### "What version of the standards is this against?"
+
+The honest answer, which is stronger than a confident wrong one:
+
+> "Every control carries a pinned standard, revision, requirement and part, plus
+> a `citation_verified` flag. The flag is off until a human checks it against
+> nerc.com, and the evidence pack prints a banner while any are unverified.
+>
+> That flag already earned itself. When I checked CIP-010, I found the software
+> integrity requirement I'm citing as R1 Part 1.6 was carried into CIP-010-5 as
+> **Part 1.3**, and there's a CIP-010-6 document dated April 2026. I don't yet
+> know which revision is enforceable, so the tool says so rather than guessing.
+> That's the failure mode the flag exists to catch, and it caught it before an
+> auditor would have."
+
+### "Doesn't CIP-015 require monitoring inside the ESP now?"
+
+**No — and do not say it does.** CIP-015-1 is approved but scheduled for
+enforcement on **1 October 2028**. It is not in force. If you say "now requires"
+to an Entergy engineer they will correct you, and you will have spent your
+credibility on a detail you did not need. This tool does not implement CIP-015
+and does not claim to.
+
+### "Is this doing real cryptography or is it mocked?"
+
+```bash
+python3 -m unittest tests.test_cip.CryptoIsReal -v
+```
+
+The bit-flip test settles it in ten seconds.
+
+---
+
+## Before the fair — the one task worth doing
+
+You cannot verify all 34 citations. **Verify the six the demo touches**
+(CIP-01 … CIP-06, the CIP-010 R1.6 firmware controls), starting with whether
+CIP-010-4 is still the enforceable revision and whether the part is 1.6 or 1.3.
+Flip `citation_verified: true` on those and leave the banner on the rest.
+
+Then the answer to "are your citations right" becomes *"the demo path is
+verified against nerc.com; the remainder is flagged and the tool says so"* —
+which is a much better sentence than a blanket disclaimer.

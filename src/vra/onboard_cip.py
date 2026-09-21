@@ -31,6 +31,7 @@ from .evaluate import Assessment, Control
 from .grid import Estate
 from .procure import (
     ProcurementExtraction,
+    VendorFootprint,
     extract_procurement,
     load_documents,
     write_pending_review,
@@ -92,16 +93,33 @@ def onboard_vendor(
         result.errors.append(f"no readable documents under {vendor_dir}")
         return result
 
+    # --- the key is loaded BEFORE the contract is read ----------------------
+    # Whether the entity already holds a trusted key for this vendor is the
+    # single most useful thing to know going in: if it does not, CIP-010 R1.6.1
+    # is unevaluable for every release this vendor ships, and finding out
+    # whether the contract even obliges them to provide one is the priority.
+    keys = _read_yaml(vendor_dir / "signing-key.yaml", [])
+    result.key_registry = KeyRegistry(keys)
+    active = [k for k in result.key_registry.all() if k.status == "active"]
+    footprint = VendorFootprint(
+        vendor=vendor,
+        publishes_signing_key=bool(active),
+        trusted_key_ids=[k.key_id for k in active],
+        # Nothing is in service yet -- that is what onboarding means. The
+        # footprint says so rather than implying a deployed base that does not
+        # exist.
+        high_impact_devices=0,
+        medium_impact_devices=0,
+    )
+
     # --- 3: adjudicate in code ----------------------------------------------
-    extraction = extract_procurement(vendor, slug, documents, cfg, controls=controls)
+    extraction = extract_procurement(
+        vendor, slug, documents, cfg, controls=controls, footprint=footprint
+    )
     result.extraction = extraction
     result.pending_review_path = write_pending_review(
         extraction, when=when, root=pending_review_root
     )
-
-    # --- 4: register the vendor's published key -----------------------------
-    keys = _read_yaml(vendor_dir / "signing-key.yaml", [])
-    result.key_registry = KeyRegistry(keys)
 
     # The register the controls are scored against. Only what the code allowed
     # from the extraction reaches `contract`; everything else stays absent,

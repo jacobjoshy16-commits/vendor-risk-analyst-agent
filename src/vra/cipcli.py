@@ -118,8 +118,16 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print(f"  {summary['substations']:,} substations · {summary['devices']:,} cyber assets · "
           f"{summary['firmware_deployments']:,} firmware deployments")
+    low_vendor_access = sum(
+        1 for a in estate.access_sessions
+        if a.get("impact_rating") == "low" and a.get("allows_vendor_electronic_remote_access")
+    )
     print(f"  {summary['in_cip013_scope']:,} substations at high/medium impact "
-          f"{_c('(CIP-002 scoping — the rest are out of scope, not passing)', DIM, colour)}")
+          f"{_c('— CIP-013, CIP-010 R1.6 and CIP-005 R2 scope', DIM, colour)}")
+    print(f"  {low_vendor_access:,} low impact assets allow vendor electronic remote access "
+          f"{_c('— CIP-003-9 Attachment 1 Section 6 scope', DIM, colour)}")
+    print(_c("  low impact assets with no vendor access path are out of scope, not passing",
+             DIM, colour))
     print(f"  {summary['distinct_packages']} distinct packages cryptographically verified "
           f"in {elapsed:.2f}s")
     print()
@@ -143,12 +151,12 @@ def main(argv: list[str] | None = None) -> int:
     print()
 
     print(f"  {_c('Requirement coverage', BOLD, colour)}")
-    print(f"    {'control':8} {'citation':26} {'appl':>7} {'pass':>7} {'fail':>6} {'gap':>5}")
-    for cid, cov in sorted(coverage.items()):
+    print(f"    {'control':8} {'citation':38} {'appl':>7} {'pass':>7} {'fail':>6} {'gap':>5}")
+    for cid, cov in sorted(coverage.items(), key=lambda kv: int(kv[0].split("-")[1])):
         if not cov.applicable:
             continue
         mark = RED if cov.failed else (YELLOW if cov.gapped else GREEN)
-        line = (f"    {cid:8} {cov.citation[:26]:26} {cov.applicable:7,} "
+        line = (f"    {cid:8} {cov.citation[:38]:38} {cov.applicable:7,} "
                 f"{cov.passed:7,} {cov.failed:6,} {cov.gapped:5,}")
         print(_c(line, mark, colour) if (cov.failed or cov.gapped) else line)
     print()
@@ -229,18 +237,23 @@ def _onboard(args, colour: bool, when) -> int:
         print(f"     {_c(name + '  (no extractable text)', YELLOW, colour)}")
     print()
 
-    print(f"{_c('2. Procurement obligations detected', BOLD, colour)}")
+    if ex.footprint is not None:
+        print(f"{_c('2. Reading order (prioritised from the asset inventory)', BOLD, colour)}")
+        print(f"     {_c(ex.footprint.as_prompt_context(), DIM, colour)}")
+        print()
+
+    print(f"{_c('3. Procurement obligations detected', BOLD, colour)}")
     # Two clause targets can cite the same requirement (R1.2.5 covers both the
     # integrity method and key rotation notice), so the obligation is named as
     # well as the citation -- otherwise the table shows two identical rows.
-    print(f"     {'CIP-013':16} {'obligation':32} {'clause':7} {'quote':10} {'applied':8} source")
+    print(f"     {'#':>2}  {'CIP-013':16} {'obligation':32} {'clause':7} {'quote':10} {'applied':8} source")
     for claim in ex.claims:
         found = "found" if claim.present else "-"
         quoted = "verified" if claim.quote_verified else ("UNVERIFIED" if claim.quote else "-")
         applied = "yes" if claim.tier == "extracted" else "held"
         obligation = claim.field.split(".", 1)[-1]
-        line = (f"     {claim.requirement:16} {obligation:32} {found:7} {quoted:10} "
-                f"{applied:8} {claim.source_document}")
+        line = (f"     {claim.read_rank:2}  {claim.requirement:16} {obligation:32} "
+                f"{found:7} {quoted:10} {applied:8} {claim.source_document}")
         if claim.tier == "extracted":
             print(_c(line, GREEN, colour))
         elif claim.present:
@@ -250,7 +263,7 @@ def _onboard(args, colour: bool, when) -> int:
     print()
 
     # --- step 3 ----------------------------------------------------------
-    print(f"{_c('3. What the code refused to let the model decide', BOLD, colour)}")
+    print(f"{_c('4. What the code refused to let the model decide', BOLD, colour)}")
     if not ex.withheld:
         print("     nothing withheld")
     for claim in ex.withheld:
@@ -262,7 +275,7 @@ def _onboard(args, colour: bool, when) -> int:
 
     # --- step 4-5 --------------------------------------------------------
     keys = result.key_registry.all()
-    print(f"{_c('4. Vendor signing key registered', BOLD, colour)}")
+    print(f"{_c('5. Vendor signing key registered', BOLD, colour)}")
     for key in keys:
         confirmed = key.fingerprint_confirmed_out_of_band
         mark = "confirmed out of band" if confirmed else _c("NOT confirmed out of band", YELLOW, colour)
@@ -271,7 +284,7 @@ def _onboard(args, colour: bool, when) -> int:
         print(_c("     none published — CIP-010 R1.6.1 will be unevaluable", YELLOW, colour))
     print()
 
-    print(f"{_c('5. Firmware verification (SHA-256, then Ed25519)', BOLD, colour)}")
+    print(f"{_c('6. Firmware verification (SHA-256, then Ed25519)', BOLD, colour)}")
     for package_id in sorted(result.verified):
         r = result.verified[package_id]
         ok = r.integrity_verified is True and r.source_identity_verified is True
@@ -283,7 +296,7 @@ def _onboard(args, colour: bool, when) -> int:
 
     # --- step 6 ----------------------------------------------------------
     crit = sum(1 for f in result.findings if f.control.severity == "critical")
-    print(f"{_c('6. Controls scored', BOLD, colour)}")
+    print(f"{_c('7. Controls scored', BOLD, colour)}")
     print(f"     {'control':8} {'citation':26} {'appl':>5} {'pass':>5} {'fail':>5} {'gap':>4}")
     for cid, cov in sorted(result.coverage.items()):
         if not cov.applicable:

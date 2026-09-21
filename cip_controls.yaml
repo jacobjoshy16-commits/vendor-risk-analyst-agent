@@ -42,6 +42,23 @@
 # ---------------------------------------------------------------------------
 # CITATION VERIFICATION
 # ---------------------------------------------------------------------------
+#
+# !! CIP-010 NEEDS CHECKING FIRST !!
+#
+# A search of nerc.com on 2026-09-21 found that CIP-010-5 exists and that the
+# software integrity requirement cited throughout this file as R1 Part 1.6 was
+# "incorporated into CIP-010-5 as Requirement R1 Part 1.3". A CIP-010-6 standard
+# document dated 2026-04-28 also exists under Project 2025-06. Which revision is
+# currently ENFORCEABLE was not established, and this tool will not guess.
+#
+# So CIP-01 through CIP-06 may be citing a superseded revision AND a part number
+# that has moved. That is the single highest-value thing to verify, because those
+# six controls are the ones the demo actually exercises.
+#
+# This is exactly the failure mode citation_verified exists to catch, and it was
+# caught by the flag rather than by an auditor.
+#
+# ---------------------------------------------------------------------------
 # NERC revises these standards and part numbering shifts between revisions.
 # Every control therefore carries an explicit, pinned `standard` + `version` +
 # `requirement` + `part`, plus `citation_verified`. Until a human checks each
@@ -1140,3 +1157,181 @@
   compensating_control: >
     Obtain per-release hashes through a vendor-confirmed out-of-band channel and
     record the channel in the deployment evidence until the key is registered.
+
+# ===========================================================================
+# CIP-003-9 Attachment 1 Section 6 — LOW IMPACT vendor electronic remote access
+#
+# WHY THESE EXIST, AND WHY THE SCOPING ABOVE IS NOT THE WHOLE STORY
+#
+# Every control above is gated on `impact_rating in [high, medium]`, because
+# CIP-013, CIP-010 R1.6 and CIP-005 R2 attach to high and medium impact BES
+# Cyber Systems. That gate is correct for those standards and it is why ~89% of
+# a real estate is reported not applicable rather than passing.
+#
+# It is NOT correct to conclude that low impact assets have no vendor supply
+# chain obligations. CIP-003-9 Attachment 1 Section 6 requires that, for assets
+# containing low impact BES Cyber Systems which ALLOW vendor electronic remote
+# access, the Responsible Entity implement a process to mitigate the risks of
+# that access — including determining active vendor sessions, disabling them,
+# and detecting malicious communications.
+#
+# So the population for vendor remote access is larger than the population for
+# CIP-013. A low impact distribution substation with a dial-in maintenance path
+# to a vendor is in scope for Section 6 and out of scope for CIP-013, and a tool
+# that reports it as simply "not applicable" is under-reporting.
+#
+# These controls apply ONLY to low impact assets that actually allow vendor
+# electronic remote access. A low impact substation with no vendor access path
+# is genuinely out of scope and is reported that way.
+#
+# CITATION CAUTION, SPECIFIC TO THIS BLOCK
+# NERC Project 2023-04 has been developing CIP-003-A, which would supersede
+# CIP-003-9. The sub-numbering within Attachment 1 Section 6 is therefore cited
+# only as "Attachment 1 Section 6" rather than asserting part numbers that may
+# have moved. Confirm the enforceable revision and the effective date before
+# relying on this block.
+
+- id: CIP-31
+  subject: vendor_access
+  question: >
+    For this low impact asset that allows vendor electronic remote access, is a
+    documented process in place to mitigate the risks of that access?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-003"
+      version: "9"
+      requirement: "R2"
+      part: "Attachment 1 Section 6"
+      text: >
+        For assets containing low impact BES Cyber System(s) identified pursuant
+        to CIP-002, that allow vendor electronic remote access, the Responsible
+        Entity shall implement a process to mitigate risks associated with vendor
+        electronic remote access.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      equals: low
+    - field: allows_vendor_electronic_remote_access
+      equals: true
+  fails_when:
+    - field: low_impact_vendor_access_process
+      equals: false
+  gap_when:
+    - field: low_impact_vendor_access_process
+      is_unknown: true
+  severity: high
+  remediation: >
+    Document and implement the process required by CIP-003-9 Attachment 1
+    Section 6 for this asset. Low impact does not mean no obligation where vendor
+    electronic remote access has been established.
+  compensating_control: >
+    Remove the vendor electronic remote access path until the process is
+    documented. An asset that allows no vendor remote access is out of Section 6
+    scope entirely.
+
+- id: CIP-32
+  subject: vendor_access
+  question: >
+    Is there a method to determine active vendor electronic remote access
+    sessions to this low impact asset?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-003"
+      version: "9"
+      requirement: "R2"
+      part: "Attachment 1 Section 6"
+      text: >
+        Process to mitigate risks associated with vendor electronic remote
+        access, including determining active vendor electronic remote access
+        sessions.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      equals: low
+    - field: allows_vendor_electronic_remote_access
+      equals: true
+  fails_when:
+    - field: session_visibility_method
+      equals: false
+  gap_when:
+    - field: session_visibility_method
+      is_unknown: true
+  severity: medium
+  remediation: >
+    Provide a means of enumerating active vendor sessions to this asset. The
+    obligation is lighter than CIP-005 R2.4 for medium and high impact systems,
+    but it is not absent.
+  compensating_control: >
+    Log connections at the access point and review them on a defined cadence.
+
+- id: CIP-33
+  subject: vendor_access
+  question: >
+    Is there a method to disable vendor electronic remote access to this low
+    impact asset?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-003"
+      version: "9"
+      requirement: "R2"
+      part: "Attachment 1 Section 6"
+      text: >
+        Process to mitigate risks associated with vendor electronic remote
+        access, including disabling vendor electronic remote access.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      equals: low
+    - field: allows_vendor_electronic_remote_access
+      equals: true
+  fails_when:
+    - field: session_disable_method
+      equals: false
+  gap_when:
+    - field: session_disable_method
+      is_unknown: true
+  severity: high
+  remediation: >
+    Establish and test a documented method to terminate vendor electronic remote
+    access to this asset, and record the test result.
+  compensating_control: >
+    Maintain a manual disconnection procedure with a named owner and a tested
+    time-to-disconnect.
+
+- id: CIP-34
+  subject: vendor_access
+  question: >
+    Is there a method to detect malicious communications over this low impact
+    asset's vendor electronic remote access path?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-003"
+      version: "9"
+      requirement: "R2"
+      part: "Attachment 1 Section 6"
+      text: >
+        Process to mitigate risks associated with vendor electronic remote
+        access, including detecting malicious communications.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      equals: low
+    - field: allows_vendor_electronic_remote_access
+      equals: true
+  fails_when:
+    - field: malicious_comms_detection
+      equals: false
+  gap_when:
+    - field: malicious_comms_detection
+      is_unknown: true
+  severity: medium
+  remediation: >
+    Apply detection to the vendor access path — at minimum logging and alerting
+    on the access point, proportionate to a low impact asset.
+  compensating_control: >
+    Review vendor session logs against the approved change record after every
+    maintenance window.

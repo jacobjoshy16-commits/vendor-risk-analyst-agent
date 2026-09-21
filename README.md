@@ -27,7 +27,7 @@ close it.
 | You get | What that is |
 | --- | --- |
 | **Real cryptographic verification** | Actual SHA-256 over the bytes on disk and actual Ed25519 signature verification against a registry of pinned vendor keys. No field asserts a verification result. Flip one bit in an 8 KB image and the answer changes. |
-| **A NERC CIP score** | **30 `CIP-*` controls** over four subjects — firmware deployments, procurement, vendor ESP access, vendor personnel. CIP-013 R1/R2/R3, CIP-010 R1.6, CIP-005 R2.4/2.5, CIP-004 R2–R5, scoped by CIP-002 impact rating. |
+| **A NERC CIP score** | **34 `CIP-*` controls** over four subjects — firmware deployments, procurement, vendor ESP access, vendor personnel. CIP-013 R1/R2/R3, CIP-010 R1.6, CIP-005 R2.4/2.5, CIP-004 R2–R5, scoped by CIP-002 impact rating. |
 | **Procurement detection** | The model reads the vendor's actual contract documents and locates each CIP-013 R1.2 obligation. **Code verifies every quote against the source** before it may affect a control. |
 | **An audit evidence pack** | Organised by requirement, not by finding, with a denominator on every row and the cryptographic working shown. Markdown, HTML and JSON. |
 | **A companion SaaS set** | A trimmed 7 `NHI-*` + 4 `AIV-*` controls citing 800-53 / SOC 2, for vendor agents and non-human identities. Not the load-bearing set. |
@@ -112,7 +112,7 @@ python3 vra.py cip build-fixtures   # regenerate keys, packages, firmware
 
 ### What it scores
 
-25 controls over four subjects, with the standards split the way they actually
+34 controls over four subjects, with the standards split the way they actually
 apply:
 
 | Standard | What it governs here | Controls |
@@ -121,6 +121,7 @@ apply:
 | **CIP-010 R1.6** | The per-installation technical check: verify software **source identity** (1.6.1) and **integrity** (1.6.2) before deviating from baseline | CIP-01 … CIP-06 |
 | **CIP-005 R2** | Vendor remote access into the ESP: methods to **determine** active sessions (2.4) and to **disable** them (2.5) | CIP-16 … CIP-18 |
 | **CIP-004** | Who may hold that access: training (R2), personnel risk assessment (R3), authorization and quarterly verification (R4), revocation (R5) | CIP-19 … CIP-25 |
+| **CIP-003-9** | Low impact assets that allow vendor electronic remote access: determine sessions, disable them, detect malicious communications | CIP-31 … CIP-34 |
 | **CIP-002** | Not encoded as controls. Its High/Medium/Low impact rating drives `applies_when` on everything above. | — |
 
 **CIP-013 does not impose the firmware check.** It is a plan standard; the
@@ -244,7 +245,7 @@ remediation, not 131. The pack **never asserts compliance** (that is the
 Regional Entity's determination), always declares the data synthetic, and prints
 a banner while any citation is unverified.
 
-> **Citations are currently unverified.** All 25 controls carry
+> **Citations are currently unverified.** All 34 controls carry
 > `citation_verified: false`. The standard revisions and part numbers were
 > written from knowledge, not checked against nerc.com. Confirm each and set the
 > flag before showing this to a compliance audience.
@@ -256,198 +257,12 @@ for the presentation script.
 
 ---
 
-## The SaaS companion: running the NHI / AIV monitor
+## The SaaS companion
 
-> This is the original product and it still works. It monitors vendor
-> non-human identities and agentic features against 800-53 / SOC 2, on a
-> timer. It is unrelated to the NERC path above and needs no OT data.
-
-Three commands. You do not need flags.
-
-```
-1. Connect a vendor     python3 vra.py connect
-2. Leave it running     python3 vra.py monitor
-3. Read the report      python3 vra.py report
-```
-
-**`connect`** asks what it needs — which vendor, the org URL, the API token
-(hidden) — stores the token in the OS keychain, checks the connection, pulls
-the identities, and writes a starter `vendors/{slug}.yaml`. Same command each
-time. Run it once per vendor.
-
-```
-Vendor? [okta / auth0 / slack / atlassian]  > okta
-Org URL?  > https://acme.okta.com
-Paste API token (hidden)  > ••••••••
-✓ stored in keychain   ✓ connection ok   ⚠ token has write scope — use read-only
-✓ discovered 12 identities   ✓ created vendors/okta.yaml
-```
-
-**`monitor`** turns itself on. It finds Ollama if you have it, otherwise uses
-the built-in checker. It re-checks every 15 minutes. The local console opens
-on `127.0.0.1:8765` and prints a URL with a one-time token — open that exact
-URL; the console 401s without it. Every vendor you connected is picked up on
-the next cycle.
-
-The console is loopback-only by default because its POST routes start
-processes and read local paths. `--host 0.0.0.0` still works for a preview
-proxy, warns when it does, and needs the proxy hostname in
-`VRA_WEBUI_ALLOWED_HOSTS`.
-
-**`report`** prints the finding summary and opens `out/latest.md`. One place
-to look. At ~20 vendors / ~60 identities, start with the portfolio rollup
-instead of scrolling per-vendor markdown:
-
-```
-python3 vra.py portfolio
-```
-
----
-
-## Connectors (how it scales past four vendors)
-
-The CLI menu is generated from a **connector registry**. Adding a vendor is
-registering a manifest (id, auth, fields, pagination, `list_nhis()`). There
-is no hardcoded vendor list in `connect` / `creds` / `discover`.
-
-Protocol connectors cover a *class* of APIs, not a brand:
-
-| Connector | What it lists | You give it |
-| --- | --- | --- |
-| `oidc_apps` | Registered apps + granted scopes | Org URL + token. Flavor (Okta / Auth0 / Entra / Ping / OneLogin) is inferred from the hostname. |
-| `entra` | Applications, service principals, **and the permissions actually granted** — appRole assignments resolved from GUID to name, plus delegated `oauth2PermissionGrants` | Graph token. |
-| `scim` | Service accounts from any SCIM 2.0 `/Users` | SCIM base URL + bearer. Humans are skipped. |
-| `generic_rest` | Whatever your endpoint returns | List URL + JSONPath mapping for `id` / `scopes` / `owner`. |
-
-**Microsoft Entra ID** is a first-class target, not a listing. Entra keeps
-entitlements on the service principal in two shapes — `appRoleAssignments`
-(a GUID that only means something against the resource principal's catalogue)
-and `oauth2PermissionGrants` (a space-separated string). Both are pulled, so an
-Entra agent holding `User.ReadWrite.All` is scored by NHI-01 rather than
-reported as having no scopes. An app registration and its service principal are
-collapsed into one identity; a managed identity with no registration is still
-inventoried. A permission whose catalogue is missing is kept as
-`appRole:<guid>` and warned about — never dropped.
-
-Native connectors stay for products that are not a protocol: **GitHub**
-(app installations), **Google Workspace** (directory service accounts),
-**AWS IAM** (users + roles), **Atlassian**, **Slack**.
-
-At this size the monitor also:
-
-- **Keys identities by immutable id**, not display name. A rename does not
-  fork history or drop entitlement tracking.
-- **Links identities through an inverted index.** Matching is exact-token
-  equality, so cross-plane linking is near-linear rather than comparing every
-  identity against every other one: 20k identities link in well under a second.
-- **Polls vendors on a bounded worker pool** (`VRA_WORKERS`, default 4).
-- **Isolates failure.** One vendor's 401 or timeout is logged; last-known
-  inventory is kept; the other 19 still run.
-
-### What you get on day one, and what waits
-
-The 3-step path starts **NHI discovery and entitlement tracking** immediately.
-The richer AIV-* feature score (autonomy, model provider, BAA/DPA coverage)
-needs register fields a stub cannot invent. Those show up as `unknown` — a
-21-day question, not a failure. Fill them later:
-
-```
-python3 vra.py enrich okta          # lists what is still unknown
-python3 vra.py enrich okta --edit   # opens the file; you type the answers
-```
-
-The model will not fill these in for you.
-
-Credentials survive a shell restart because they live in the OS keychain
-(macOS Keychain, Windows Credential Locker, Linux Secret Service), not in the
-terminal. If this machine has no keychain (a headless Linux box, this
-sandbox), they go in `~/.local/share/vra/keyring.json` at mode `0600` and
-the CLI says so. That is a last resort, not the desktop path. The monitor remints Auth0 from the stored client id/secret and
-retries once on 401. 429s honor `Retry-After` and keep a partial list. The
-same principal seen on your IdP and on the vendor API is linked
-(`also_seen_on`). If an agent **gains a write scope** since last cycle, that
-is recorded as an `entitlement_change` in `data/findings.json`.
-
-Two copies of the monitor cannot run (`data/monitor.lock`).
-
-### How long it keeps watching, and how long it keeps the record
-
-A stored token has **no expiry in this tool** — it is used until you run
-`vra creds rm`. Its age is tracked, though: `vra creds list` shows when each
-secret was stored and flags anything past `VRA_CREDENTIAL_MAX_AGE_DAYS`
-(default 365), and a run says so in its summary. NHI-03 asks vendors to rotate
-non-human credentials at least annually; this token is one, so it is held to
-the same rule rather than exempted. Re-running `vra creds set <connector>`
-restarts the clock. So the failure that matters is revocation, not expiry: the
-tenant stops answering and the inventory freezes. When a configured probe
-cannot run, its identities are kept but marked **last known**, the run reports
-INCOMPLETE and exits non-zero, and the report says which tenant was not reached
-and why. They are never presented as current.
-
-Entitlement changes are the only permanent record that a permission moved —
-`data/nhis.json` holds current state, not history. So the log is **archived,
-not deleted**: every save rolls anything past the retention window out to
-`data/events/events-YYYY-MM.jsonl`, keeping `findings.json` bounded (it is
-re-serialised every cycle, so an unbounded array there costs write bandwidth as
-well as space). At 50 vendors a simulated year of changes leaves 2.7 MB hot and
-6.4 MB archived, with every event still readable.
-
-```bash
-python3 vra.py events                    # counts, sizes, oldest record
-python3 vra.py events show --limit 20    # recent changes
-python3 vra.py events prune              # roll aged events out now
-python3 vra.py events purge --before 2025-01-01 --yes   # destroy them
-```
-
-`purge` is the only path that destroys anything, it refuses without `--yes`,
-and it tells you how many of the doomed events record an identity *gaining* a
-write scope. Tune with `VRA_EVENT_RETENTION_DAYS` (default 90) and
-`VRA_EVENT_HOT_MAX` (default 5000).
-
-```bash
-python3 vra.py monitor status
-python3 vra.py monitor stop
-python3 vra.py monitor install     # writes login units; does not enable them
-```
-
----
-
-## The companion control families
-
-> These are **not** the load-bearing set. `cip_controls.yaml` is — see
-> [NERC CIP module](#the-nerc-cip-assessment). Both sets below were trimmed
-> to a utility-relevant core (23 controls down to 11) when NERC became the
-> product identity; healthcare-specific and SaaS-governance controls were
-> dropped.
-
-**NHI-*** scores the *identity*.
-**AIV-*** scores the *agentic feature* that identity powers.
-
-Every control cites **NIST SP 800-53** and **SOC 2 TSC**. Tests refuse a
-control that does not.
-
-| ID | Sev | Question | 800-53 | SOC 2 |
-| --- | --- | --- | --- | --- |
-| **NHI-01** | critical | Agent principal holds write scopes and acts without human review | AC-3, AC-6 | CC6.1, CC6.3 |
-| **NHI-02** | high | Every NHI has a named human owner | AC-2 | CC6.1 |
-| **NHI-03** | high | Credentials rotated at least annually | IA-5, IA-5(1) | CC6.1 |
-| **NHI-04** | high | Every identity seen in a tenant is inventoried (no orphans) | AC-2, CM-8 | CC6.1 |
-| **NHI-06** | high | Cross-vendor NHIs declared on the home vendor | AC-3, CA-3 | CC6.6, CC9.2 |
-| **NHI-07** | medium | Disabled identities retain no write scopes | AC-2(3), AC-6 | CC6.2 |
-| **NHI-08** | high | A suggests-only identity does not hold standing write scopes | AC-6, AC-6(2) | CC6.3 |
-| AIV-01 | high | Model provider disclosed per AI feature | SA-9, SR-3 | CC9.2 |
-| **AIV-03** | critical | Every model provider named as subprocessor and BAA/DPA-covered | SA-9, CA-3 | CC9.2 |
-| **AIV-07** | critical | No autonomous action on production records without human review | AC-3, AC-6 | CC6.1, CC6.3 |
-| AIV-11 | high | Prompt-injection / adversarial testing shared | SI-10, SA-11 | CC7.1 |
-
-Edit `nhi_controls.yaml` / `controls.yaml` without touching code. Due dates:
-critical 7 days, high 30, medium 60, low 90, gaps 21 — counted from the day
-the finding was **first raised**, not from the current cycle, so a finding the
-monitor re-sees every 15 minutes still goes overdue and escalates. Re-rating a
-control in YAML moves the deadline; it does not restart the clock.
-
-AIV-07 and NHI-01 are AND conditions: acting **and** no human in the loop.
-An agent that acts under review is not a finding.
+The repo grew out of an independent monitor for vendor **non-human identities**
+and agentic SaaS features. That part still works and is documented separately in
+[`docs/SAAS-COMPANION.md`](docs/SAAS-COMPANION.md). It needs no OT data and
+nothing in the NERC path depends on it.
 
 ---
 
@@ -501,90 +316,27 @@ Python 3.10+.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt   # pyyaml requests pypdf keyring
-# optional, for live-model triage:
-ollama pull qwen2.5:7b-instruct
-```
+pip install -r requirements.txt
 
-Then the three commands above. To replay the planted sandbox scenario:
-
-```bash
-python3 vra.py --offline --snapshot v1          # sandbox baseline
-python3 vra.py --offline --snapshot v2          # planted change → exit 1
-python3 -m unittest discover -s tests -t .   # every test module, incl. new ones
+python3 vra.py cip build-fixtures     # generate keys, packages, signed firmware
+python3 vra.py cip --evidence         # assess and write the audit pack
 ```
 
 Exit codes: `0` clean · `1` open critical · `2` run error.
 
-### Outputs
-
-| Path | Contents |
-| --- | --- |
-| `out/latest.md` / `out/latest.json` | The assessment |
-| `data/nhis.json` | Portfolio NHI inventory — **this is the product** |
-| `data/findings.json` | Finding lifecycle — **back this up** |
-| `data/monitor.json` | Daemon heartbeat, last 20 cycles |
-| `data/registry_state.json` | Per-vendor last_assessed + snapshot hashes |
-| `data/events/` | Archived entitlement changes, one JSONL per month |
-| `data/llm_cache.json` | Model answers, keyed by prompt hash (LRU, capped) |
-| `data/snapshots/` | Normalized artifacts + hashes |
-| `pending_review/` | Model proposals (never auto-applied) |
-
----
-
-## Scripts and CI
-
-The 3-step path is the human front door. Flags stay underneath so a daemon
-or a pipeline never has to answer a prompt.
+Optional, for live-model contract extraction rather than the offline heuristic:
 
 ```bash
-# Store / list / forget a token without the wizard
-python3 vra.py creds set okta
-python3 vra.py creds list
-python3 vra.py creds test okta --base-url https://your-org.okta.com
-python3 vra.py creds rm slack
-
-# Discover without writing a stub
-python3 vra.py discover --provider okta --base-url https://your-org.okta.com
-python3 vra.py discover --fixture sandbox/probe/idp/okta_pages.json
-
-# Connect without prompts (token already in the keychain, or CI env)
-python3 vra.py connect --provider okta --base-url https://acme.okta.com --yes
-python3 vra.py connect --provider okta --base-url https://acme.okta.com --allow-env-creds --yes
-
-# Monitor without the console, or one cycle for cron
-python3 vra.py monitor --no-webui --offline --interval 15m
-python3 vra.py monitor --once --offline
-python3 vra.py report --no-open
+ollama pull qwen2.5:7b-instruct
 ```
 
-`--allow-env-creds` is CI only. It prints a warning. Prefer the keychain.
+### Tests
 
-| Flag | Effect |
-| --- | --- |
-| `--offline` | No network; heuristic backend. Report says so. |
-| `--vendor SLUG` | One vendor. Repeatable. Does not close others. |
-| `--dry-run` | Print only. |
-| `--once` | Monitor: one cycle then exit (cron). |
-| `--no-webui` | Monitor: do not serve the local console. |
-| `--yes` | Connect: never prompt; fail if a value is missing. |
-
----
-
-## Sandbox
-
-Three fictional vendors so the detector can be shown firing *and* staying quiet:
-
-| Vendor | v2 planted change |
-| --- | --- |
-| Aegis Identity Cloud | Agent Mode GA — directory writes, no per-action approval → AIV-07 + NHI-01 |
-| Loop Workspace | Perplexity added as row 6 of 9, BAA “Pending”, no changelog → AIV-03 |
-| Meridian RevCycle | Negative control. Wording churn. Must produce nothing new. |
-
-`sandbox/real_world/` is Slack / Atlassian / Zoom / Notion / Datadog public
-subprocessor pages. A JS shell with no table is `parse_failed`, not a pass.
-
----
+```bash
+python3 -m unittest discover -s tests -t .     # whole repo
+python3 -m unittest tests.test_cip -v          # the NERC control set + crypto
+python3 -m unittest tests.test_cip_onboarding  # procurement extraction, end to end
+```
 
 ## Limitations
 
@@ -637,7 +389,7 @@ on messy real vendor prose. Run against Ollama before relying on it.
 
 ```
 vra.py                  entry point — connect / monitor / report / cip
-cip_controls.yaml       30 CIP-* controls — the NERC set (NERC only). THE PRODUCT.
+cip_controls.yaml       34 CIP-* controls — the NERC set (NERC only). THE PRODUCT.
 nhi_controls.yaml       7 NHI-* controls — trimmed identity companion (800-53 + SOC 2)
 controls.yaml           4 AIV-* controls — trimmed feature companion (800-53 + SOC 2)
 vendors/*.yaml          YOUR registers (gitignored) — `vra connect` writes here
