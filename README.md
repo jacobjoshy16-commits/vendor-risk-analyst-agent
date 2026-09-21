@@ -257,8 +257,13 @@ a banner while any citation is unverified.
 > records `superseded_by` and `enforceable_until`, and every run re-checks them
 > against the assessment date — a warning inside a year, an error past it.
 
-See `VALIDATION-CIP.md` for what is proven (and what is not) and `DEMO-CIP.md`
-for the presentation script.
+**How it works, and who decided what:**
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — full technical breakdown, plus a
+decision register marking every design choice as **[OWNER]** or **[CLAUDE]** so
+the ones made during implementation can be found and reversed.
+
+See [`VALIDATION-CIP.md`](VALIDATION-CIP.md) for what is proven (and what is
+not) and [`DEMO-CIP.md`](DEMO-CIP.md) for the presentation script.
 
 ---
 
