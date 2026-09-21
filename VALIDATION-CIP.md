@@ -277,13 +277,21 @@ boundary untested in CI, which is the one place it must hold.
 Stated plainly, because a validation document that only lists successes is
 marketing.
 
-- **The citations themselves are unverified.** All 34 controls carry
-  `citation_verified: false`. The standard revision numbers (CIP-013-2,
-  CIP-004-7, CIP-005-7, CIP-010-4) and part numbers in this repo were written
-  from knowledge, not checked against the enforceable standards on nerc.com. The
-  tests assert the checkpoint *exists*; a human has to do the checking. Until
-  then every artifact prints a warning. **Do not present this to a compliance
-  audience without doing that pass first.**
+- **28 of 34 citations are still unverified.** The six CIP-010 controls the
+  demo exercises were checked on 2026-09-21 and are correct: NERC lists
+  CIP-010-4 as mandatory and subject to enforcement, with CIP-010-5 subject to
+  future enforcement. Everything else — CIP-013-2, CIP-004-7, CIP-005-7,
+  CIP-003-9 and their part numbers — was written from knowledge and still
+  carries `citation_verified: false`. The artifacts print a banner. **Verify
+  the rest before presenting to a compliance audience.**
+- **The verified ones expire.** CIP-010-5 takes effect 2028-04-01 under FERC
+  Order No. 919, and the software integrity requirement moves from R1 Part 1.6
+  to R1 Part 1.3. `citation_status()` re-checks this every run and
+  `tests/test_cip.py::CitationShelfLife` pins the transition, but somebody has
+  to act on the warning when it fires.
+- **CIP-003-9 may itself be superseded.** NERC Project 2023-04 has been
+  developing CIP-003-A / CIP-003-11. The Section 6 controls cite
+  "Attachment 1 Section 6" without asserting sub-part numbers for that reason.
 - **The impact ratings are a plausible distribution, not a categorisation.**
   Real CIP-002 categorisation runs Attachment 1 criteria against each BES Cyber
   System. `_impact_for` approximates the *shape* of a utility's estate; it is

@@ -18,7 +18,8 @@ import time
 from datetime import date
 from pathlib import Path
 
-from .cip import assess_estate, cip_citation, citations_verified, load_cip_controls, rollup
+from .cip import (assess_estate, cip_citation, citation_status, citations_verified,
+                  load_cip_controls, rollup)
 from .config import CIP_CONTROLS_FILE, DEFAULT_OUT_DIR, GRID_DIR, GRID_SUBSTATIONS
 from .grid import load_estate
 
@@ -161,14 +162,26 @@ def main(argv: list[str] | None = None) -> int:
         print(_c(line, mark, colour) if (cov.failed or cov.gapped) else line)
     print()
 
-    ok, total = citations_verified(controls)
-    if ok < total:
+    cites = citation_status(controls, when)
+    if cites.verified:
+        print(f"  {_c('✓', GREEN, colour)} {cites.verified} of {cites.total} NERC citations "
+              f"verified against the enforceable standards")
+    if cites.unverified:
         print(_c(
-            f"  ⚠ {total - ok} of {total} NERC citations have not been verified against the "
-            f"enforceable standards.\n"
-            f"    Confirm each against nerc.com and set citation_verified: true in "
+            f"  ⚠ {cites.unverified} of {cites.total} NERC citations not yet verified. "
+            f"Confirm against nerc.com and set citation_verified: true in "
             f"{args.controls.name}.", YELLOW, colour))
-        print()
+    for entry in cites.expired:
+        print(_c(
+            f"  ✗ {entry['control_id']} cites {entry['citation']}, which stopped being "
+            f"enforceable on {entry['enforceable_until']}. Re-cite to "
+            f"{entry['superseded_by']}.", RED, colour))
+    for entry in cites.expiring:
+        print(_c(
+            f"  ⚠ {entry['control_id']} cites {entry['citation']}, enforceable until "
+            f"{entry['enforceable_until']} ({entry['days']} days), then superseded by "
+            f"{entry['superseded_by']}.", YELLOW, colour))
+    print()
 
     if args.evidence:
         from .evidence import build_pack, write_findings, write_pack

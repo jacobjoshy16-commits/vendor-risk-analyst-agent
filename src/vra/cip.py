@@ -30,7 +30,7 @@ an order of magnitude more findings, almost all of them wrong.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
@@ -62,6 +62,59 @@ def citations_verified(controls: list[Control]) -> tuple[int, int]:
             if fw.get("citation_verified") is True:
                 verified += 1
     return verified, total
+
+
+@dataclass
+class CitationStatus:
+    """What is known about the citations backing a run.
+
+    Verifying a citation once is not durable: NERC revisions have effective
+    dates, and a citation that is correct today can be citing a superseded
+    revision in eighteen months without anything in the repository changing.
+    So a verified citation records what supersedes it and when, and every run
+    re-checks that against the assessment date.
+    """
+
+    verified: int = 0
+    total: int = 0
+    expiring: list[dict] = field(default_factory=list)   # verified, but not for long
+    expired: list[dict] = field(default_factory=list)    # verified, and no longer valid
+
+    @property
+    def unverified(self) -> int:
+        return self.total - self.verified
+
+
+def citation_status(
+    controls: list[Control], when: date | None = None, *, warn_within_days: int = 365
+) -> CitationStatus:
+    when = when or date.today()
+    status = CitationStatus()
+    for control in controls:
+        for fw in control.frameworks:
+            status.total += 1
+            if fw.get("citation_verified") is not True:
+                continue
+            status.verified += 1
+            until = fw.get("enforceable_until")
+            if not until:
+                continue
+            try:
+                expiry = date.fromisoformat(str(until)[:10])
+            except ValueError:
+                continue
+            entry = {
+                "control_id": control.id,
+                "citation": cip_citation(control),
+                "enforceable_until": expiry.isoformat(),
+                "superseded_by": fw.get("superseded_by", "(unspecified)"),
+                "days": (expiry - when).days,
+            }
+            if expiry < when:
+                status.expired.append(entry)
+            elif (expiry - when).days <= warn_within_days:
+                status.expiring.append(entry)
+    return status
 
 
 def load_cip_controls(path: Path | None = None) -> list[Control]:

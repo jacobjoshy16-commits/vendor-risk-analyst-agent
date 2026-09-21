@@ -473,3 +473,67 @@ class LowImpactVendorAccessScoping(unittest.TestCase):
         for control in self.controls:
             for framework in control.frameworks:
                 self.assertNotEqual(framework.get("standard"), "CIP-015", control.id)
+
+
+class CitationShelfLife(unittest.TestCase):
+    """A verified citation is a fact with an expiry date, not a permanent one.
+
+    CIP-010-4 is enforceable today and is superseded by CIP-010-5 on
+    2028-04-01, at which point the software integrity requirement moves from
+    R1 Part 1.6 to R1 Part 1.3. Verifying it once and never re-checking would
+    leave the tool confidently citing a superseded revision, which is the exact
+    failure the citation flag exists to prevent.
+    """
+
+    def setUp(self):
+        from vra.cip import citation_status
+
+        self.status = citation_status
+        self.controls = load_cip_controls()
+
+    def _cip010(self):
+        return [c for c in self.controls
+                if any(f.get("standard") == "CIP-010" for f in c.frameworks)]
+
+    def test_the_demo_controls_are_verified(self):
+        """CIP-01..CIP-06 are the controls the demo exercises."""
+        for control in self._cip010():
+            for fw in control.frameworks:
+                self.assertTrue(fw.get("citation_verified"), control.id)
+                self.assertTrue(str(fw.get("citation_verified_by", "")).strip(), control.id)
+
+    def test_a_verified_citation_records_what_supersedes_it(self):
+        for control in self._cip010():
+            for fw in control.frameworks:
+                self.assertEqual(fw.get("superseded_by"), "CIP-010-5", control.id)
+                self.assertEqual(fw.get("enforceable_until"), "2028-03-31", control.id)
+
+    def test_today_the_citation_is_current_and_not_yet_warned_about(self):
+        s = self.status(self.controls, date(2026, 9, 21))
+        self.assertEqual(s.verified, 6)
+        self.assertEqual(s.expired, [])
+        self.assertEqual(s.expiring, [], "2028 is more than a year out from 2026-09")
+
+    def test_it_warns_inside_a_year_of_the_sunset(self):
+        s = self.status(self.controls, date(2027, 6, 1))
+        self.assertEqual(len(s.expiring), 6)
+        self.assertEqual(s.expired, [])
+        self.assertTrue(all(e["superseded_by"] == "CIP-010-5" for e in s.expiring))
+
+    def test_it_errors_once_the_revision_is_superseded(self):
+        """2028-04-01 is when CIP-010-5 takes effect under FERC Order No. 919."""
+        s = self.status(self.controls, date(2028, 4, 1))
+        self.assertEqual(len(s.expired), 6)
+        self.assertEqual(s.expiring, [])
+
+    def test_unverified_citations_are_still_counted_and_surfaced(self):
+        s = self.status(self.controls, date(2026, 9, 21))
+        self.assertEqual(s.unverified, s.total - s.verified)
+        self.assertGreater(s.unverified, 0, "the remaining citations are still unverified")
+
+    def test_an_unverified_citation_never_counts_as_expiring(self):
+        """Only a citation somebody checked can be said to have an expiry."""
+        s = self.status(self.controls, date(2028, 4, 1))
+        flagged = {e["control_id"] for e in s.expired + s.expiring}
+        verified_ids = {c.id for c in self._cip010()}
+        self.assertEqual(flagged, verified_ids)

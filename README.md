@@ -245,10 +245,17 @@ remediation, not 131. The pack **never asserts compliance** (that is the
 Regional Entity's determination), always declares the data synthetic, and prints
 a banner while any citation is unverified.
 
-> **Citations are currently unverified.** All 34 controls carry
-> `citation_verified: false`. The standard revisions and part numbers were
-> written from knowledge, not checked against nerc.com. Confirm each and set the
-> flag before showing this to a compliance audience.
+> **Citation status: 6 of 34 verified.** The six CIP-010 controls the demo
+> exercises (CIP-01 … CIP-06) were checked against NERC's published standards
+> listing on 2026-09-21: **CIP-010-4 is mandatory and subject to enforcement**,
+> and CIP-010-5 is subject to *future* enforcement. The remaining 28 citations
+> are unverified and the tool prints a banner saying so.
+>
+> Verification has a shelf life. CIP-010-5 takes effect **2028-04-01** under
+> FERC Order No. 919, and the software integrity requirement moves from
+> **R1 Part 1.6 to R1 Part 1.3** at that transition. Each verified framework
+> records `superseded_by` and `enforceable_until`, and every run re-checks them
+> against the assessment date — a warning inside a year, an error past it.
 
 See `VALIDATION-CIP.md` for what is proven (and what is not) and `DEMO-CIP.md`
 for the presentation script.

@@ -190,15 +190,20 @@ system is worse than the demo being less impressive.
 The honest answer, which is stronger than a confident wrong one:
 
 > "Every control carries a pinned standard, revision, requirement and part, plus
-> a `citation_verified` flag. The flag is off until a human checks it against
-> nerc.com, and the evidence pack prints a banner while any are unverified.
+> a `citation_verified` flag. Six of thirty-four are verified — the CIP-010
+> controls this demo actually exercises. NERC lists CIP-010-4 as mandatory and
+> subject to enforcement, so what you're seeing is cited correctly. The other
+> twenty-eight are flagged and the pack says so.
 >
-> That flag already earned itself. When I checked CIP-010, I found the software
-> integrity requirement I'm citing as R1 Part 1.6 was carried into CIP-010-5 as
-> **Part 1.3**, and there's a CIP-010-6 document dated April 2026. I don't yet
-> know which revision is enforceable, so the tool says so rather than guessing.
-> That's the failure mode the flag exists to catch, and it caught it before an
-> auditor would have."
+> And the verified ones aren't verified forever. CIP-010-5 takes effect
+> 1 April 2028 under FERC Order 919, and the software integrity requirement
+> moves from Part 1.6 to Part 1.3. The tool knows that date, and it'll start
+> warning a year out and error after. A citation check with no expiry is how
+> you end up confidently citing a superseded revision."
+
+That last paragraph is the one to land. Anyone who has worked a CIP program has
+been bitten by a standard revision, and a tool that tracks the sunset rather
+than trusting a one-time check is saying something they will recognise.
 
 ### "Doesn't CIP-015 require monitoring inside the ESP now?"
 
@@ -220,11 +225,12 @@ The bit-flip test settles it in ten seconds.
 
 ## Before the fair — the one task worth doing
 
-You cannot verify all 34 citations. **Verify the six the demo touches**
-(CIP-01 … CIP-06, the CIP-010 R1.6 firmware controls), starting with whether
-CIP-010-4 is still the enforceable revision and whether the part is 1.6 or 1.3.
-Flip `citation_verified: true` on those and leave the banner on the rest.
+**Done.** The six the demo touches (CIP-01 … CIP-06) are verified: CIP-010-4 is
+mandatory and subject to enforcement, the part is 1.6, and the sunset to
+CIP-010-5 Part 1.3 on 2028-04-01 is recorded and re-checked every run.
 
-Then the answer to "are your citations right" becomes *"the demo path is
-verified against nerc.com; the remainder is flagged and the tool says so"* —
-which is a much better sentence than a blanket disclaimer.
+If you have time before the fair, the next most valuable are **CIP-12**
+(R1.2.5, software integrity — the critical one) and **CIP-31 … CIP-34**
+(CIP-003-9 Section 6, the low-impact story), since those are the two things you
+will be talking about. Confirm the revision and part, then set
+`citation_verified: true` and `citation_verified_by`.

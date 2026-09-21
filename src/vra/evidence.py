@@ -31,7 +31,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from .cip import Coverage, cip_citation, citations_verified
+from .cip import Coverage, cip_citation, citation_status, citations_verified
 from .cipcrypto import VerificationResult, utc_now_iso
 from .evaluate import Assessment, Control, to_record
 from .grid import Estate
@@ -75,6 +75,7 @@ def build_pack(
     """Assemble the pack as data. Renderers below format it; neither adds facts."""
     when = when or date.today()
     ok, total = citations_verified(controls)
+    cites = citation_status(controls, when)
     by_control: dict[str, list[Assessment]] = {}
     for a in findings:
         by_control.setdefault(a.control.id, []).append(a)
@@ -126,6 +127,12 @@ def build_pack(
         "citations_verified": ok,
         "citations_total": total,
         "citations_unverified": total - ok,
+        # A verified citation has a shelf life. NERC revisions have effective
+        # dates, so the pack records which verified citations are close to
+        # being superseded and which already are, rather than presenting a
+        # one-time check as permanent.
+        "citations_expiring": cites.expiring,
+        "citations_expired": cites.expired,
         "estate": estate.summary(),
         "totals": {
             "findings": len(findings),
@@ -211,6 +218,26 @@ def render_markdown(pack: dict[str, Any]) -> str:
     add("")
     add(f"> **{pack['disclaimer']}**")
     add("")
+    if pack["citations_verified"]:
+        add(
+            f"> ✓ **{pack['citations_verified']} of {pack['citations_total']} citations "
+            f"verified** against the enforceable NERC standards."
+        )
+        add("")
+    for entry in pack.get("citations_expired", []):
+        add(
+            f"> ✗ **SUPERSEDED CITATION.** {entry['control_id']} cites "
+            f"{entry['citation']}, which stopped being enforceable on "
+            f"{entry['enforceable_until']}. Re-cite to {entry['superseded_by']}."
+        )
+        add("")
+    for entry in pack.get("citations_expiring", []):
+        add(
+            f"> ⚠ **CITATION EXPIRES SOON.** {entry['control_id']} cites "
+            f"{entry['citation']}, enforceable until {entry['enforceable_until']} "
+            f"({entry['days']} days), then superseded by {entry['superseded_by']}."
+        )
+        add("")
     if pack["citations_unverified"]:
         add(
             f"> ⚠ **CITATIONS NOT VERIFIED.** {pack['citations_unverified']} of "
