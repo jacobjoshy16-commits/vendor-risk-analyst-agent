@@ -75,13 +75,17 @@ def main(argv: list[str] | None = None) -> int:
 
         from .gridbuild import build_onboarding
 
-        result = build(args.grid_dir, today=when)
+        # Deliberately not `when`: `when` defaults to today, and fixtures are
+        # committed files that must not change because the calendar did.
+        # Passing --date explicitly still overrides.
+        fixture_date = date.fromisoformat(args.as_of) if args.as_of else None
+        result = build(args.grid_dir, today=fixture_date)
         print(f"{_c('✓', GREEN, colour)} regenerated sandbox estate in {args.grid_dir}")
         for k, v in result.items():
             print(f"    {k:20} {v}")
         onboarding_dir = args.grid_dir.parent / "procurement" / "kestrel-grid"
         if onboarding_dir.is_dir():
-            extra = build_onboarding(onboarding_dir, today=when)
+            extra = build_onboarding(onboarding_dir, today=fixture_date)
             print(f"{_c('✓', GREEN, colour)} regenerated onboarding fixtures in {onboarding_dir}")
             for k, v in extra.items():
                 print(f"    {k:20} {v}")

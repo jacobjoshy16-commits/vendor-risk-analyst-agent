@@ -143,8 +143,15 @@ class TestControlEvaluation(unittest.TestCase):
         }
 
     def test_control_set_size_and_coverage(self):
-        self.assertGreaterEqual(len(self.controls), 12)
-        self.assertLessEqual(len(self.controls), 20)
+        # The AIV set was deliberately trimmed to a utility-relevant core when
+        # the NERC module became the product identity. Healthcare-specific
+        # controls (clinical bias testing) and SaaS-governance controls
+        # (retention schedules, tenant disable switches) were dropped; what
+        # remains is what bears on a vendor agent touching an operational
+        # estate. The bound is tight on purpose, so re-growing the set is a
+        # decision rather than a drift.
+        self.assertGreaterEqual(len(self.controls), 4)
+        self.assertLessEqual(len(self.controls), 8)
         for c in self.controls:
             self.assertTrue(c.frameworks, f"{c.id} has no framework citation")
             self.assertIn(c.severity, ("critical", "high", "medium", "low"))
@@ -202,15 +209,32 @@ class TestControlEvaluation(unittest.TestCase):
         self.assertEqual(findings, [])
         self.assertEqual(gaps, [])
 
-    def test_applies_when_scopes_bias_control(self):
-        """AIV-13 only applies to features touching clinical data."""
-        non_clinical, _ = ev.evaluate_vendor(
-            self._vendor(bias_tested_clinical=False), self.controls)
-        self.assertNotIn("AIV-13", [f.control.id for f in non_clinical])
-        clinical, _ = ev.evaluate_vendor(
-            self._vendor(bias_tested_clinical=False,
-                         data_reach=["clinical_documentation"]), self.controls)
-        self.assertIn("AIV-13", [f.control.id for f in clinical])
+    def test_applies_when_scopes_a_control_out_entirely(self):
+        """A control whose applies_when does not hold is skipped, not passed.
+
+        This used to assert against AIV-13, which was dropped when the set was
+        trimmed to a utility-relevant core. Pinning it to whichever control
+        happens to carry an applies_when today would just move the coupling, so
+        the mechanism is tested with a control defined here.
+        """
+        scoped = ev.Control(
+            id="TEST-SCOPED",
+            question="Does a scoped control fire outside its scope?",
+            frameworks=[{"name": "NIST SP 800-53", "id": "SA-11"},
+                        {"name": "SOC 2 TSC", "id": "CC7.1"}],
+            severity="high",
+            applies_when=[{"field": "data_reach", "contains_any": ["telemetry"]}],
+            fails_when=[{"field": "output_logged", "equals": False}],
+            remediation="n/a",
+        )
+        out_of_scope, _ = ev.evaluate_vendor(
+            self._vendor(output_logged=False, data_reach=["identity_attributes"]), [scoped])
+        self.assertEqual([f.control.id for f in out_of_scope], [],
+                         "applies_when must skip the control entirely")
+
+        in_scope, _ = ev.evaluate_vendor(
+            self._vendor(output_logged=False, data_reach=["telemetry"]), [scoped])
+        self.assertEqual([f.control.id for f in in_scope], ["TEST-SCOPED"])
 
     def test_every_aiv_control_cites_nist_800_53_and_soc2(self):
         """Product integrity: this is a NIST 800-53 / SOC 2 monitor, not a HIPAA-only tool."""

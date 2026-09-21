@@ -33,7 +33,12 @@ class TestNHIInventory(unittest.TestCase):
 
     def test_nhi_control_set_is_separate_from_aiv(self):
         ids = [c.id for c in self.controls]
-        self.assertEqual(len(ids), 8)
+        # Trimmed from 8 when NHI-05 (exportable action log) was dropped: the
+        # NERC set covers audit evidence for operational assets directly, and
+        # two controls asking the same question of different subjects is the
+        # kind of duplication that makes a report longer without making it
+        # more defensible.
+        self.assertEqual(len(ids), 7)
         self.assertTrue(all(i.startswith("NHI-") for i in ids))
         aiv = ev.load_controls()
         self.assertTrue(all(c.id.startswith("AIV-") for c in aiv))

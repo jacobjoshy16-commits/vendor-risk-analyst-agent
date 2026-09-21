@@ -175,6 +175,103 @@ reconciled against the one filed last quarter.
 
 ---
 
+## 9. The agent reads; the code decides
+
+The extractor lets a model read vendor contracts. Everything below tests the
+boundary that keeps a model reading from becoming a control failure.
+
+```bash
+python3 -m unittest tests.test_cip_onboarding -v   # 31 tests
+```
+
+### 9.1 Quote verification
+
+| Assertion | Test |
+| --- | --- |
+| A verbatim quote verifies | `test_a_verbatim_quote_verifies` |
+| Reflowed whitespace still verifies | `test_reflowed_whitespace_still_verifies` |
+| **A plausible paraphrase does not verify** | `test_a_paraphrase_does_not_verify` |
+| An invented clause does not verify | `test_an_invented_clause_does_not_verify` |
+| A short fragment cannot evidence anything | `test_a_short_fragment_cannot_verify` |
+
+The paraphrase test is the important one. The model is asked to quote verbatim;
+asking is not a control. A model that summarises puts its own prose into a
+finding's evidence block under the vendor's name.
+
+The fragment test guards the other direction: `"Supplier shall"` appears in
+every contract ever written, so a quote under 40 normalised characters is
+refused regardless of whether it matches.
+
+### 9.2 The two adjudication rules
+
+| Rule | Behaviour | Test |
+| --- | --- | --- |
+| **Absence cannot be evidenced** | Model says "not present" → gap, never a failure | `test_absence_never_becomes_a_failure` |
+| Verified presence below critical | Applied to the register, drives findings | `test_verified_presence_below_critical_is_applied` |
+| **Critical ceiling** | Verified quote on a critical field → withheld for ratification | `test_critical_field_is_withheld_even_when_verified` |
+| Unverifiable quote | Withheld regardless of confidence | `test_unverifiable_quote_is_withheld` |
+| The ceiling tracks the control set | Re-rating a control in YAML moves it | `test_the_ceiling_is_read_from_the_control_set` |
+
+The last one matters more than it looks. The ceiling is derived from
+`cip_controls.yaml` at call time rather than hardcoded, so a control lowered
+from critical to high becomes something extraction may decide — and a control
+raised to critical stops being. The policy lives in one place.
+
+### 9.3 End to end: a vendor arrives as documents
+
+`tests/test_cip_onboarding.py::EndToEndOnboarding` runs the real sequence
+against the real sandbox documents and asserts every step.
+
+```
+1. documents read              2 (msa-excerpt.txt, security-questionnaire.txt)
+2. clauses examined            8
+   quotes offered              7, all located in the source
+3. applied to register         6
+   withheld with a reason      2
+4. signing key registered      kestrel-grid-2026, fingerprint confirmed OOB
+5. releases verified           2  (SHA-256 then Ed25519)
+   accepted                    KG-RTU-100-2.4.0
+   rejected                    KG-RTU-100-2.4.1   hash MATCH, signature INVALID
+6. exceptions                  2 critical, 6 information gaps
+```
+
+The assertions that carry weight are the refusals:
+
+- `test_the_absent_clause_was_not_invented` — R1.2.3 is genuinely missing from
+  the documents, and questionnaire answer A9 is written to look like it
+  addresses the obligation while committing the vendor to nothing. The
+  extractor does not claim it.
+- `test_the_absent_clause_became_a_gap_not_a_failure` — CIP-10 must appear in
+  gaps and must NOT appear in findings.
+- `test_the_critical_clause_was_withheld_from_the_register` — the R1.2.5 quote
+  verified, and the field still did not reach the register.
+- `test_withheld_claims_were_queued_for_a_human` — with a stated reason per
+  item, so ratifying is a decision rather than a re-investigation.
+- `test_the_clean_release_produced_no_finding` — the negative control for the
+  onboarding path.
+- `test_verification_order_is_hash_then_signature` — the evidence log must read
+  in the order the work was done, or it is not a record of what happened.
+
+### 9.4 The extractor is not trusted to be friendly
+
+| Assertion | Test |
+| --- | --- |
+| A furniture supply contract yields zero applied claims | `test_a_document_with_no_clauses_yields_no_applied_claims` |
+| An unreadable PDF is reported, not silently skipped | `test_an_unreadable_document_is_reported_not_skipped` |
+
+The second matters because silently skipping a document means assessing a
+vendor on a partial document set while reporting full coverage.
+
+### 9.5 The offline extractor is held to the same rules
+
+Without a local model the extractor falls back to a keyword heuristic. It is
+**not** exempt from verification: it must return a real verbatim sentence from
+the document, and that sentence goes through `verify_quote` like any model
+output. A heuristic that could bypass the check would leave the entire safety
+boundary untested in CI, which is the one place it must hold.
+
+---
+
 ## What this does NOT validate
 
 Stated plainly, because a validation document that only lists successes is
@@ -201,6 +298,18 @@ marketing.
 - **No live OT integration exists.** There is no connector to a configuration
   management database, a patch management system, or a substation gateway.
   Deployments are generated, not observed.
+- **The extraction has only been run against the offline heuristic.** The
+  sandbox contract documents are clean, well-structured prose written for this
+  demo. A real master services agreement is 90 pages of cross-referenced
+  exhibits and amendments, and the heuristic would do badly on it. The
+  *adjudication* is validated; the *extraction quality* on messy real contracts
+  is not. Run it against Ollama and real documents before relying on it.
+- **Quote verification does not validate interpretation.** It proves the text
+  exists in the document. It cannot tell whether a clause was struck by a later
+  amendment, scoped to a different product line, or is a definition rather than
+  an obligation. That is precisely why criticals are withheld — but it also
+  means an applied `high` finding rests on the model having read scope
+  correctly.
 - **CIP-004 findings come from generated data.** The PRA and training ages that
   drive CIP-20 and CIP-21 are synthetic distributions, not records. Those
   controls are exercised, but they have never seen a real access roster.

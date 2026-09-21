@@ -2,7 +2,7 @@
   vendor: Kestrel Grid Systems
   public_key: enBP79fb1hgvoYi+GqOYUPhN31daha+jobjCwXoXbOA=
   status: active
-  valid_from: '2026-03-05'
-  valid_until: '2029-03-09'
+  valid_from: '2026-03-04'
+  valid_until: '2029-03-08'
   fingerprint_confirmed_out_of_band: true
   note: DEMO KEY. Fictional vendor. Derived deterministically; signs nothing real.

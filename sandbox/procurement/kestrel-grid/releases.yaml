@@ -7,7 +7,7 @@
   published_sha256: cb2bb1872d483b5067a0d9e476a35322a69a9dbf4bb83d49ed2f04042fdf19bb
   signature: DaOweMD23Cb5XkdAr0UWrNU52AwHVyHyNF2/blF6AlPi1uEjG5VY0j8gygphWltJ/gpV4bUKCe92/9hcFVn9BQ==
   signing_key_id: kestrel-grid-2026
-  released_on: '2026-06-23'
+  released_on: '2026-06-22'
   note: Genuine release as published by the vendor.
 - package_id: KG-RTU-100-2.4.1
   vendor: Kestrel Grid Systems
@@ -18,6 +18,6 @@
   published_sha256: c3abc3e85257abb5bf434db6c5ea665229c3ff84fca09123610ba3a13a75a91c
   signature: nRhkEBDFdx6f9tf3SoPQv6GIHG6iwslg8J2Cj1Be377I6Xunf+aw5CKrVZuN6ugFfRsztUPGEbDCsleHFXMMDw==
   signing_key_id: kestrel-grid-2026
-  released_on: '2026-08-22'
+  released_on: '2026-08-21'
   note: Substituted on the distribution mirror; published hash updated to match, vendor
     signature still covers the genuine build.

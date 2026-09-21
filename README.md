@@ -25,7 +25,7 @@ This tool is the independent monitor for that gap.
 | --- | --- |
 | **A multi-vendor NHI inventory** | Every service account / OAuth app / agent / bot pulled from **that vendor’s API** — Atlassian, Slack, Okta, Auth0, … — paginated, not typed into YAML. Two planes: identities inside the vendor product, and vendor apps that landed in your IdP. |
 | **A daemon** | `vra.py monitor` — the same assess, on a timer, while the PC is on. A critical is a finding, not a crash. |
-| **A NIST 800-53 / SOC 2 score** | 8 identity controls (`NHI-*`) + 15 feature controls (`AIV-*`). Severity and whether something is a finding come from YAML + code. **The language model cannot create or re-severity a finding.** |
+| **A NERC CIP score** | 30 `CIP-*` controls over substation assets, firmware, vendor access and procurement — the load-bearing set. Plus a trimmed companion of 7 `NHI-*` and 4 `AIV-*` controls citing 800-53 / SOC 2. Severity and whether something is a finding come from YAML + code. **The language model cannot create or re-severity a finding.** |
 | **A draft pack** | Narrative, vendor email, POA&M row — citing 800-53 and SOC 2, not a chatbot opinion. |
 
 ### What it is not
@@ -195,10 +195,16 @@ python3 vra.py monitor install     # writes login units; does not enable them
 
 ---
 
-## The two control families
+## The companion control families
 
-**NHI-*** is the product. It scores the *identity*.
-**AIV-*** is the companion. It scores the *agentic feature* that identity powers.
+> These are **not** the load-bearing set. `cip_controls.yaml` is — see
+> [NERC CIP module](#nerc-cip-module-utility--ot). Both sets below were trimmed
+> to a utility-relevant core (23 controls down to 11) when NERC became the
+> product identity; healthcare-specific and SaaS-governance controls were
+> dropped.
+
+**NHI-*** scores the *identity*.
+**AIV-*** scores the *agentic feature* that identity powers.
 
 Every control cites **NIST SP 800-53** and **SOC 2 TSC**. Tests refuse a
 control that does not.
@@ -209,25 +215,13 @@ control that does not.
 | **NHI-02** | high | Every NHI has a named human owner | AC-2 | CC6.1 |
 | **NHI-03** | high | Credentials rotated at least annually | IA-5, IA-5(1) | CC6.1 |
 | **NHI-04** | high | Every identity seen in a tenant is inventoried (no orphans) | AC-2, CM-8 | CC6.1 |
-| **NHI-05** | medium | NHI actions written to an exportable audit log | AU-2, AU-12 | CC7.2 |
 | **NHI-06** | high | Cross-vendor NHIs declared on the home vendor | AC-3, CA-3 | CC6.6, CC9.2 |
 | **NHI-07** | medium | Disabled identities retain no write scopes | AC-2(3), AC-6 | CC6.2 |
 | **NHI-08** | high | A suggests-only identity does not hold standing write scopes | AC-6, AC-6(2) | CC6.3 |
 | AIV-01 | high | Model provider disclosed per AI feature | SA-9, SR-3 | CC9.2 |
-| AIV-02 | medium | AI addendum executed | SA-9, SA-4 | CC9.2 |
 | **AIV-03** | critical | Every model provider named as subprocessor and BAA/DPA-covered | SA-9, CA-3 | CC9.2 |
-| AIV-04 | high | Customer data not used to train / fine-tune | SI-12, AC-4 | CC6.1 |
-| AIV-05 | medium | Prompt/output retention documented and bounded | SI-12, AU-11 | C1.1 |
-| AIV-06 | high | Data reach limited to minimum necessary | AC-6 | CC6.1 |
 | **AIV-07** | critical | No autonomous action on production records without human review | AC-3, AC-6 | CC6.1, CC6.3 |
-| AIV-08 | high | AI actions written to an exportable audit log | AU-2, AU-12 | CC7.2 |
-| AIV-09 | medium | Advance notice of material model changes | CM-3, SA-9 | CC8.1 |
-| AIV-10 | medium | Error / accuracy rates disclosed | SI-10, SA-11 | CC7.1 |
 | AIV-11 | high | Prompt-injection / adversarial testing shared | SI-10, SA-11 | CC7.1 |
-| AIV-12 | high | Inference inside contracted residency | SC-28, SA-9 | CC6.7 |
-| AIV-13 | high | Bias / performance testing *(when the feature touches clinical records)* | SA-11, SI-10 | CC7.1 |
-| AIV-14 | medium | AI-specific incident response | IR-4, IR-6 | CC7.3, CC7.4 |
-| AIV-15 | medium | Feature disableable at tenant level | CM-7, AC-3 | CC6.3 |
 
 Edit `nhi_controls.yaml` / `controls.yaml` without touching code. Due dates:
 critical 7 days, high 30, medium 60, low 90, gaps 21 — counted from the day
@@ -435,6 +429,72 @@ FIRMWARE VERIFICATION FAILED  SPS-421-4.7.2
 A hash-and-spreadsheet process passes that package. It is deployed on 131
 protective relays.
 
+### Detecting the procurement process (the agent reads the contract)
+
+CIP-013 R1.2.1–R1.2.6 ask whether your procurement process addresses six
+obligations. Answering that from a boolean somebody typed into YAML just moves
+the work — a human still has to read the master services agreement. So the model
+reads it.
+
+```bash
+python3 vra.py cip onboard --vendor "Kestrel Grid Systems" \
+    --docs sandbox/procurement/kestrel-grid
+```
+
+**The model finds and quotes the clause. The code decides what it means.** This
+adds one tier to the existing provenance model in `observe.py`:
+
+| Tier | What it is | Drives a finding? |
+| --- | --- | --- |
+| `register` | A human wrote it down | **Yes** |
+| `observed` | Parsed deterministically from a table or API | **Yes** |
+| **`extracted`** | **A model read prose AND the quote it gave was located in the source document** | **Yes — capped** |
+| `proposed` | A model said something it could not evidence | **Never** |
+
+Two rules are not negotiable:
+
+**1. Presence can be evidenced. Absence cannot.** The model can quote MSA §9.1 to
+show an incident-notification clause exists. It cannot quote anything to show a
+clause is *missing* — an absence has no text. So "this clause is not present"
+never produces a control failure; it produces an information gap with a question
+for the vendor. Inverting this would let a model fail a vendor on a clause it
+merely failed to find in a 90-page contract.
+
+**2. A verified extraction may not raise a critical on its own.** Quote
+verification proves the text exists. It does not prove the model read the *scope*
+right — a definition, a struck exhibit, or a clause scoped to a different product
+line all quote perfectly. Criticals route to `pending_review/` with the reason.
+The ceiling is derived from the control set, so re-rating a control in YAML moves
+it.
+
+On the sandbox vendor, six clauses are applied and two are withheld:
+
+```
+CIP-013 R1.2.1   incident_notification_clause      found  verified   yes
+CIP-013 R1.2.3   access_termination_notice_clause  -      -          held
+CIP-013 R1.2.5   software_integrity_clause         found  verified   held
+CIP-013 R1.2.6   remote_access_coordination_clause found  verified   yes
+```
+
+R1.2.3 is genuinely absent from the documents, and the questionnaire answer that
+*looks* like it addresses the obligation commits the vendor to nothing — the case
+a human skimming would tick off. R1.2.5 was quoted correctly but drives a
+critical, so it waits for ratification.
+
+Then the same run registers the vendor's signing key and verifies each release —
+**SHA-256 first, then Ed25519**:
+
+```
+ACCEPTED  KG-RTU-100-2.4.0    hash MATCH · signature VALID
+REJECTED  KG-RTU-100-2.4.1    hash MATCH · signature INVALID
+```
+
+Without a local model the extractor falls back to a deterministic keyword
+heuristic, labelled `offline-heuristic` everywhere it appears. It is held to the
+same rules: it must return a real verbatim sentence, and that sentence goes
+through the same verification. A heuristic that could bypass the check would
+leave the safety boundary untested in CI, which is where it matters most.
+
 ### The evidence pack
 
 `--evidence` writes `out/cip/evidence-pack.{md,html,json}` plus `findings.json`.
@@ -487,9 +547,9 @@ on messy real vendor prose. Run against Ollama before relying on it.
 
 ```
 vra.py                  entry point — connect / monitor / report / cip
-nhi_controls.yaml       8 NHI-* controls — the identity set (800-53 + SOC 2)
-controls.yaml           15 AIV-* controls — the feature set (800-53 + SOC 2)
-cip_controls.yaml       25 CIP-* controls — the NERC set (NERC only, no 800-53)
+cip_controls.yaml       30 CIP-* controls — the NERC set (NERC only). THE PRODUCT.
+nhi_controls.yaml       7 NHI-* controls — trimmed identity companion (800-53 + SOC 2)
+controls.yaml           4 AIV-* controls — trimmed feature companion (800-53 + SOC 2)
 vendors/*.yaml          YOUR registers (gitignored) — `vra connect` writes here
 sandbox/registers/      the three demo registers that ship with the repo
 src/vra/connect.py      the interactive front door
@@ -509,7 +569,10 @@ src/vra/cipcrypto.py    real Ed25519 + SHA-256 firmware verification
 src/vra/grid.py         the simulated substation estate
 src/vra/gridbuild.py    fixture builder — signs the firmware, plants the compromise
 src/vra/evidence.py     CIP audit evidence pack (md / html / json)
-src/vra/cipcli.py       `vra.py cip`
+src/vra/procure.py      reads vendor contracts; verifies every quote in code
+src/vra/onboard_cip.py  documents -> procurement -> key -> firmware -> score
+src/vra/cipcli.py       `vra.py cip` / `vra.py cip onboard`
+sandbox/procurement/    contract documents for the vendor onboarding demo
 sandbox/grid/           signing keys, packages, signed firmware images
 VALIDATION.md           including every defect found
 VALIDATION-CIP.md       what the NERC module proves, and what it does not

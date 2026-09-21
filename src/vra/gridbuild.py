@@ -45,6 +45,14 @@ from .grid import DEVICE_MODELS, VENDORS
 # the planted case without reverse-engineering the generator.
 TAMPERED_PACKAGE = "SPS-421-4.7.2"
 
+# Fixtures are committed, so they must not depend on the day they were built.
+# Key validity windows and release dates are all relative to a date, and
+# defaulting that to today meant regenerating on a Tuesday rewrote every file
+# built on a Monday -- which would either churn the repo or make the
+# "fixtures reproduce byte-for-byte" CI check fail for no real reason. Callers
+# that need a different date pass one explicitly.
+FIXTURE_EPOCH = date(2026, 9, 20)
+
 RELEASES = {
     "SPS-411": ["3.8.0", "3.9.1"],
     "SPS-421": ["4.6.0", "4.7.2"],
@@ -87,7 +95,7 @@ def _firmware_blob(vendor: str, model: str, version: str, *, payload_seed: int) 
 
 def build(grid_dir: Path, *, today: date | None = None) -> dict:
     """Generate keys.yaml, packages.yaml, vendors.yaml and the firmware images."""
-    today = today or date.today()
+    today = today or FIXTURE_EPOCH
     fw_dir = grid_dir / "firmware"
     fw_dir.mkdir(parents=True, exist_ok=True)
     for stale in fw_dir.glob("*.bin"):
@@ -255,7 +263,7 @@ def build_onboarding(vendor_dir: Path, *, today: date | None = None) -> dict:
     left over the original -- so the onboarding path exercises both outcomes:
     a vendor that verifies, and a release that does not.
     """
-    today = today or date.today()
+    today = today or FIXTURE_EPOCH
     releases = vendor_dir / "releases"
     releases.mkdir(parents=True, exist_ok=True)
     for stale in releases.glob("*.bin"):

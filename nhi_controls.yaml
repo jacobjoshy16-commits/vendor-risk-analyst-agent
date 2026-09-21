@@ -10,7 +10,13 @@
 #                             CC9 (vendor / third party)
 #
 # AIV-* in controls.yaml is the companion set: the *feature* those identities
-# power. NHI-* is the identity itself. Same evaluation semantics
+# power. NHI-* is the identity itself. Both are companions to the NERC set in
+# cip_controls.yaml, which is the load-bearing set for a utility.
+#
+# NHI-05 (exportable action log) was dropped when the sets were trimmed: the
+# NERC set evidences audit records for operational assets directly, and two
+# controls asking the same question of different subjects makes a report
+# longer without making it more defensible. Same evaluation semantics
 # (src/vra/nhi.py + evaluate.py):
 #
 #   fails_when:  ALL must hold (AND) → finding
@@ -107,28 +113,6 @@
     hand. An identity nobody claimed is an identity nobody is watching.
   compensating_control: >
     Disable the identity in the tenant pending inventory and owner assignment.
-
-- id: NHI-05
-  question: >
-    Are actions taken by the non-human identity written to an auditable log
-    the customer can export?
-  frameworks:
-    - { name: "NIST SP 800-53", id: "AU-2" }
-    - { name: "NIST SP 800-53", id: "AU-12" }
-    - { name: "SOC 2 TSC", id: "CC7.2" }
-  fails_when:
-    - field: output_logged
-      equals: false
-  gap_when:
-    - field: output_logged
-      is_unknown: true
-  severity: medium
-  remediation: >
-    Enable exportable audit logging attributable to the principal and retain
-    it per the organisation's log-retention standard.
-  compensating_control: >
-    Ingest whatever vendor telemetry exists into the SIEM and alert on gaps
-    in the principal's event stream.
 
 - id: NHI-06
   question: >
