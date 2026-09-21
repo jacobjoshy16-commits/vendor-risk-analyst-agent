@@ -831,11 +831,11 @@ class TestOnboarding(unittest.TestCase):
 
 class TestModelDefaultAndWebUI(unittest.TestCase):
     def test_default_model_is_a_small_local_model(self):
-        # Changed from qwen2.5:7b-instruct to gemma3:4b. The target is a
-        # workstation running Ollama, and vendor risk data does not leave it,
-        # so the default should be the smallest model that reliably holds the
-        # JSON schemas this tool asks for. Override with VRA_MODEL or --model.
-        self.assertEqual(RunConfig().model, "gemma3:4b")
+        # Qwen 2.5 7B instruct: the target is a workstation running Ollama with
+        # vendor data staying on it, and instruction-tuned Qwen holds the strict
+        # JSON schemas this tool asks for more reliably than the smaller
+        # options. qwen2.5:3b is the low-memory fallback.
+        self.assertEqual(RunConfig().model, "qwen2.5:7b-instruct")
 
     def test_webui_summary_and_vendors(self):
         from vra import webui

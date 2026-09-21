@@ -152,11 +152,16 @@ class RunConfig:
     dry_run: bool = False
     out_dir: Path = field(default_factory=lambda: DEFAULT_OUT_DIR)
     vendors: list[str] = field(default_factory=list)  # empty = all
-    # Small local models are the target: this runs on a workstation, and vendor
-    # risk data does not leave it. Gemma 3 4B is the default because it is the
-    # smallest model that reliably holds the JSON schemas this tool asks for.
-    # Override with VRA_MODEL or --model (gemma:7b, qwen2.5:7b-instruct, ...).
-    model: str = field(default_factory=lambda: os.environ.get("VRA_MODEL", "gemma3:4b"))
+    # Small local models are the target: this runs on a workstation and vendor
+    # risk data does not leave it. qwen2.5:7b-instruct is the default because
+    # instruction-tuned Qwen holds the strict JSON schemas this tool asks for
+    # more reliably than the smaller alternatives, and every model answer here
+    # is schema-checked rather than trusted.
+    #
+    # qwen2.5:3b runs on less memory and is a reasonable fallback; expect more
+    # schema rejections and therefore more retries. Override with VRA_MODEL or
+    # --model.
+    model: str = field(default_factory=lambda: os.environ.get("VRA_MODEL", "qwen2.5:7b-instruct"))
     ollama_host: str = field(
         default_factory=lambda: os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     )

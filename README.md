@@ -286,12 +286,89 @@ model sees pattern, history and blast radius that the rules do not.
 Disagreement is printed rather than hidden. Either the model saw something the
 rules do not encode, or it got it wrong, and both are worth knowing.
 
-**Model:** runs locally through Ollama. Default `gemma3:4b`; override with
+**Model:** runs locally through Ollama. Default `qwen2.5:7b-instruct`
+(`qwen2.5:3b` is the low-memory fallback); override with
 `--model` or `VRA_MODEL`. The brief is rendered as short labelled lines rather
 than JSON because a small model reasons better over facts than over braces, and
 every model answer is schema-validated with the rejection reason fed back on
 retry. A model that cannot produce a usable judgement **escalates** — it never
 becomes an allow.
+
+### Sealed baselines: no change until it is deliberate
+
+Verifying a package once says it was authentic *then*. It says nothing about the
+vendor's posture drifting afterwards — a signing key quietly rotated, a release
+re-published under the same version, a package appearing nobody ordered, a
+contract clause changing.
+
+So once the initial verification is reviewed and accepted, the posture is
+**sealed**:
+
+```bash
+python3 vra.py cip seal      # this is the approved state
+python3 vra.py cip drift     # what moved since?  exit 1 on undeclared change
+```
+
+Every later cycle compares live posture against the seal. Anything that moved is
+drift, and drift alerts **unless it carries a recorded approval**:
+
+```
+Cascade Grid Controls
+  UNDECLARED [high] key status changed on cascade-grid-2026 ('active' -> 'revoked')
+Halcyon Instruments
+  UNDECLARED [critical] package hash changed on HAL-MU-40-1.1.7 ('2ac85d70…' -> '12de4076…')
+```
+
+```bash
+python3 vra.py cip drift --approve "<drift key>" \
+    --by "J. Analyst" --why "Vendor confirmed rotation by phone, fingerprint re-verified"
+```
+
+That change is now `declared` and stays quiet. The other still exits 1.
+
+Approval keys include the *after* value, so approving one key rotation does not
+bless the next one. Baselines carry a digest of their own contents, so an edited
+seal no longer matches itself and says so.
+
+**Change is not forbidden — unannounced change is indistinguishable from
+compromise, and is treated as such until a human says otherwise.**
+
+### The agent action ledger
+
+Entergy's Item 1A names **"threats fueled by artificial intelligence"** and
+states it cannot anticipate or detect all threats. A tool that answers that by
+putting an AI in the decision path had better be able to say what the AI did.
+
+```bash
+python3 vra.py cip agent-log
+```
+
+```
+AGENT ACTION LEDGER  ·  3 recorded
+
+  behaviour by model build
+    ollama/qwen2.5:7b-instruct           allow 1  block 2
+
+  2026-09-21T23:47:17  BLOCK  KG-RTU-100-2.4.1  [high] conf 0.90
+    inputs f6b6863ace848d5f…  via ollama
+```
+
+Every model invocation is appended: the task, a **digest of what it was shown**,
+what it decided, with what confidence, on which model build. Append-only, never
+rewritten.
+
+That gives three things a security team actually needs:
+
+- **Did the agent's behaviour change?** Dispositions are counted per model build,
+  so a model that starts allowing what it used to block is visible.
+- **Same inputs, different answer?** Repeated input digests with differing
+  dispositions are flagged.
+- **What was the AI allowed to do?** A record for an auditor, independent of
+  what it decided.
+
+The brief is digested rather than stored — it is large and reproducible from the
+estate and the bytes, and what matters is whether the agent saw *the same*
+inputs.
 
 ### Continuous monitoring, alerting, and the deployment gate
 

@@ -727,8 +727,8 @@
         Have one or more methods for determining active vendor remote access
         sessions (including Interactive Remote Access and system-to-system remote
         access).
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "CIP-005-7 R2 Parts 2.4/2.5 standard text, checked 2026-09-21"
   applies_when:
     - field: impact_rating
       in: [high, medium]
@@ -760,8 +760,8 @@
       text: >
         Have one or more method(s) to disable active vendor remote access (including
         Interactive Remote Access and system-to-system remote access).
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "CIP-005-7 R2 Parts 2.4/2.5 standard text, checked 2026-09-21"
   applies_when:
     - field: impact_rating
       in: [high, medium]
@@ -794,8 +794,8 @@
         Have one or more methods for determining active vendor remote access
         sessions (including Interactive Remote Access and system-to-system remote
         access).
-      citation_verified: false
-      citation_verified_by: ""
+      citation_verified: true
+      citation_verified_by: "CIP-005-7 R2 Parts 2.4/2.5 standard text, checked 2026-09-21"
   applies_when:
     - field: impact_rating
       in: [high, medium]
@@ -828,6 +828,20 @@
     - name: "NERC CIP"
       standard: "CIP-004"
       version: "7"
+      # PARTIALLY VERIFIED 2026-09-21. The revision is right: NERC lists
+      # CIP-004-7 as mandatory and subject to enforcement, with CIP-004-8
+      # subject to FUTURE enforcement from 2028-07-01. The requirement-level
+      # framing is confirmed too -- R3 personnel risk assessment program, R4
+      # access management program with verification at least once each calendar
+      # quarter, R5 access revocation program.
+      #
+      # NOT confirmed: the exact part numbers below and the thresholds they
+      # carry (seven years, 24 hours, 30 days). Those live in the standard's
+      # requirement tables, which were not read. Part-level precision is what an
+      # auditor cites, so citation_verified stays false until someone reads the
+      # table.
+      superseded_by: "CIP-004-8"
+      enforceable_until: "2028-06-30"
       requirement: "R3"
       part: "3.4"
       text: >
@@ -865,6 +879,20 @@
     - name: "NERC CIP"
       standard: "CIP-004"
       version: "7"
+      # PARTIALLY VERIFIED 2026-09-21. The revision is right: NERC lists
+      # CIP-004-7 as mandatory and subject to enforcement, with CIP-004-8
+      # subject to FUTURE enforcement from 2028-07-01. The requirement-level
+      # framing is confirmed too -- R3 personnel risk assessment program, R4
+      # access management program with verification at least once each calendar
+      # quarter, R5 access revocation program.
+      #
+      # NOT confirmed: the exact part numbers below and the thresholds they
+      # carry (seven years, 24 hours, 30 days). Those live in the standard's
+      # requirement tables, which were not read. Part-level precision is what an
+      # auditor cites, so citation_verified stays false until someone reads the
+      # table.
+      superseded_by: "CIP-004-8"
+      enforceable_until: "2028-06-30"
       requirement: "R3"
       part: "3.5"
       text: >
@@ -901,6 +929,20 @@
     - name: "NERC CIP"
       standard: "CIP-004"
       version: "7"
+      # PARTIALLY VERIFIED 2026-09-21. The revision is right: NERC lists
+      # CIP-004-7 as mandatory and subject to enforcement, with CIP-004-8
+      # subject to FUTURE enforcement from 2028-07-01. The requirement-level
+      # framing is confirmed too -- R3 personnel risk assessment program, R4
+      # access management program with verification at least once each calendar
+      # quarter, R5 access revocation program.
+      #
+      # NOT confirmed: the exact part numbers below and the thresholds they
+      # carry (seven years, 24 hours, 30 days). Those live in the standard's
+      # requirement tables, which were not read. Part-level precision is what an
+      # auditor cites, so citation_verified stays false until someone reads the
+      # table.
+      superseded_by: "CIP-004-8"
+      enforceable_until: "2028-06-30"
       requirement: "R2"
       part: "2.3"
       text: >
@@ -935,6 +977,20 @@
     - name: "NERC CIP"
       standard: "CIP-004"
       version: "7"
+      # PARTIALLY VERIFIED 2026-09-21. The revision is right: NERC lists
+      # CIP-004-7 as mandatory and subject to enforcement, with CIP-004-8
+      # subject to FUTURE enforcement from 2028-07-01. The requirement-level
+      # framing is confirmed too -- R3 personnel risk assessment program, R4
+      # access management program with verification at least once each calendar
+      # quarter, R5 access revocation program.
+      #
+      # NOT confirmed: the exact part numbers below and the thresholds they
+      # carry (seven years, 24 hours, 30 days). Those live in the standard's
+      # requirement tables, which were not read. Part-level precision is what an
+      # auditor cites, so citation_verified stays false until someone reads the
+      # table.
+      superseded_by: "CIP-004-8"
+      enforceable_until: "2028-06-30"
       requirement: "R4"
       part: "4.1"
       text: >
@@ -969,6 +1025,20 @@
     - name: "NERC CIP"
       standard: "CIP-004"
       version: "7"
+      # PARTIALLY VERIFIED 2026-09-21. The revision is right: NERC lists
+      # CIP-004-7 as mandatory and subject to enforcement, with CIP-004-8
+      # subject to FUTURE enforcement from 2028-07-01. The requirement-level
+      # framing is confirmed too -- R3 personnel risk assessment program, R4
+      # access management program with verification at least once each calendar
+      # quarter, R5 access revocation program.
+      #
+      # NOT confirmed: the exact part numbers below and the thresholds they
+      # carry (seven years, 24 hours, 30 days). Those live in the standard's
+      # requirement tables, which were not read. Part-level precision is what an
+      # auditor cites, so citation_verified stays false until someone reads the
+      # table.
+      superseded_by: "CIP-004-8"
+      enforceable_until: "2028-06-30"
       requirement: "R4"
       part: "4.2"
       text: >
@@ -1003,6 +1073,20 @@
     - name: "NERC CIP"
       standard: "CIP-004"
       version: "7"
+      # PARTIALLY VERIFIED 2026-09-21. The revision is right: NERC lists
+      # CIP-004-7 as mandatory and subject to enforcement, with CIP-004-8
+      # subject to FUTURE enforcement from 2028-07-01. The requirement-level
+      # framing is confirmed too -- R3 personnel risk assessment program, R4
+      # access management program with verification at least once each calendar
+      # quarter, R5 access revocation program.
+      #
+      # NOT confirmed: the exact part numbers below and the thresholds they
+      # carry (seven years, 24 hours, 30 days). Those live in the standard's
+      # requirement tables, which were not read. Part-level precision is what an
+      # auditor cites, so citation_verified stays false until someone reads the
+      # table.
+      superseded_by: "CIP-004-8"
+      enforceable_until: "2028-06-30"
       requirement: "R5"
       part: "5.1"
       text: >
@@ -1039,6 +1123,20 @@
     - name: "NERC CIP"
       standard: "CIP-004"
       version: "7"
+      # PARTIALLY VERIFIED 2026-09-21. The revision is right: NERC lists
+      # CIP-004-7 as mandatory and subject to enforcement, with CIP-004-8
+      # subject to FUTURE enforcement from 2028-07-01. The requirement-level
+      # framing is confirmed too -- R3 personnel risk assessment program, R4
+      # access management program with verification at least once each calendar
+      # quarter, R5 access revocation program.
+      #
+      # NOT confirmed: the exact part numbers below and the thresholds they
+      # carry (seven years, 24 hours, 30 days). Those live in the standard's
+      # requirement tables, which were not read. Part-level precision is what an
+      # auditor cites, so citation_verified stays false until someone reads the
+      # table.
+      superseded_by: "CIP-004-8"
+      enforceable_until: "2028-06-30"
       requirement: "R5"
       part: "5.3"
       text: >

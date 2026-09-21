@@ -44,7 +44,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("action", nargs="?", default="run",
                    choices=["run", "build-fixtures", "onboard", "monitor", "gate",
-                            "alerts", "commission"])
+                            "alerts", "commission", "seal", "drift", "agent-log"])
+    p.add_argument("--vendor-name", default=None,
+                   help="seal/drift: limit to one vendor")
+    p.add_argument("--approve", default=None,
+                   help="drift: approve a drift key, making the change deliberate")
+    p.add_argument("--by", default="operator", help="drift --approve: who approved it")
+    p.add_argument("--why", default="", help="drift --approve: why")
     p.add_argument("--plant", default=None, help="commission: plant name")
     p.add_argument("--batch", type=Path, default=None,
                    help="commission: directory of the vendor firmware batch")
@@ -57,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--decision", default="both", choices=["code", "model", "both"],
                    help="who decides the disposition (default: both, stricter wins)")
     p.add_argument("--model", default=None,
-                   help="model tag for Ollama, e.g. gemma3:4b (default: $VRA_MODEL)")
+                   help="model tag for Ollama, e.g. qwen2.5:3b (default: $VRA_MODEL)")
     p.add_argument("--vendor", default=None, help="onboard: vendor name")
     p.add_argument("--docs", type=Path, default=None,
                    help="onboard: directory of vendor contract documents")
@@ -95,6 +101,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "commission":
         return _commission(args, colour, when)
+
+    if args.action == "seal":
+        return _seal(args, colour, when)
+
+    if args.action == "drift":
+        return _drift(args, colour, when)
+
+    if args.action == "agent-log":
+        return _agent_log(args, colour)
 
     if args.action == "alerts":
         return _alerts(args, colour)
@@ -624,6 +639,11 @@ def _gate(args, colour: bool, when) -> int:
     brief = build_brief(package, result, estate=estate,
                         store=FindingStore().load())
     judgment = judge(brief, cfg)
+    # Every model invocation goes to the append-only ledger, so what the agent
+    # did is auditable independently of what it decided.
+    from .ledger import action_from_judgment, record_action
+
+    record_action(action_from_judgment(judgment, subject=args.package, brief=brief))
     decision = decide(brief, judgment, mode=args.decision)
     _print_judgment(decision, colour)
 
@@ -759,3 +779,170 @@ def _commission(args, colour: bool, when) -> int:
     if args.no_fail:
         return 0
     return 1
+
+
+# ---------------------------------------------------------------------------
+# Sealed baselines and drift
+# ---------------------------------------------------------------------------
+def _postures(args, when):
+    """Current posture for every vendor in the estate, plus the estate itself."""
+    from .grid import load_estate
+    from .ledger import posture_from_estate
+
+    estate = load_estate(args.grid_dir, substations=args.substations,
+                         seed=args.seed, today=when)
+    verified = estate.verify_all(when=when)
+    names = sorted({str(p.get("vendor", "")) for p in estate.packages.values() if p.get("vendor")})
+    if args.vendor_name:
+        names = [n for n in names if n.lower() == args.vendor_name.lower()]
+    return estate, verified, [posture_from_estate(n, estate, verified) for n in names]
+
+
+def _seal(args, colour: bool, when) -> int:
+    """Seal the current vendor posture as the approved state.
+
+    Run once the initial verification has been reviewed and accepted. From then
+    on every cycle compares against this, and anything that moved is drift.
+    """
+    from .ledger import BaselineStore
+
+    _, _, postures = _postures(args, when)
+    if not postures:
+        print(f"{_c('no vendors matched', RED, colour)}", file=sys.stderr)
+        return 2
+
+    store = BaselineStore().load()
+    print()
+    print(f"{_c('SEALING VENDOR POSTURE', BOLD, colour)}  ·  {when.isoformat()}")
+    print(_c("  from here, any unannounced change is drift", DIM, colour))
+    print()
+    for posture in postures:
+        record = store.seal(posture, sealed_by=f"cip seal @ {when.isoformat()}")
+        print(f"  {_c('sealed', GREEN, colour)}  {posture.vendor}")
+        print(f"    {len(posture.packages)} package(s), {len(posture.keys)} key(s), "
+              f"{len(posture.clauses)} contract clause(s)")
+        print(f"    {_c('seal digest ' + record['seal_digest'][:32] + '…', DIM, colour)}")
+    path = store.save()
+    print()
+    print(f"  baselines {path}")
+    return 0
+
+
+def _drift(args, colour: bool, when) -> int:
+    """Compare live posture against the seal. Exit 1 on undeclared drift."""
+    from . import cipalert
+    from .ledger import (BaselineStore, approve, detect_drift, load_approvals,
+                         mark_deliberate)
+
+    store = BaselineStore().load()
+    if not store.vendors():
+        print(f"{_c('nothing sealed yet.', YELLOW, colour)} Run: python3 vra.py cip seal")
+        return 2
+
+    _, _, postures = _postures(args, when)
+    approvals = load_approvals()
+    all_drift = []
+
+    print()
+    print(f"{_c('VENDOR POSTURE DRIFT', BOLD, colour)}  ·  {when.isoformat()}")
+    print()
+    for posture in postures:
+        baseline = store.get(posture.vendor)
+        if baseline is None:
+            print(f"  {_c('UNSEALED', YELLOW, colour)}  {posture.vendor} — never baselined")
+            continue
+        if store.tampered(posture.vendor):
+            print(f"  {_c('SEAL TAMPERED', RED, colour)}  {posture.vendor} — the stored "
+                  f"baseline no longer matches its own digest")
+        drifts = mark_deliberate(detect_drift(posture, baseline), approvals)
+        undeclared = [d for d in drifts if not d.deliberate]
+        all_drift.extend(undeclared)
+
+        if not drifts:
+            print(f"  {_c('unchanged', GREEN, colour)}  {posture.vendor}")
+            continue
+        print(f"  {posture.vendor}")
+        for drift in drifts:
+            if drift.deliberate:
+                who = (drift.approval or {}).get("approved_by", "?")
+                print(f"    {_c('declared', GREEN, colour)}   {drift.describe()}")
+                reason = (drift.approval or {}).get("reason", "")
+                print(f"      {_c(f'approved by {who}: {reason}', DIM, colour)}")
+            else:
+                tint = RED if drift.severity == "critical" else YELLOW
+                print(f"    {_c('UNDECLARED', tint, colour)} [{drift.severity}] {drift.describe()}")
+                print(f"      {_c('approve with: vra.py cip drift --approve ' + drift.key, DIM, colour)}")
+    print()
+
+    if args.approve:
+        target = next((d for d in all_drift if d.key == args.approve), None)
+        if target is None:
+            print(f"{_c('no undeclared drift with that key', RED, colour)}", file=sys.stderr)
+            return 2
+        path = approve(target, who=args.by, why=args.why or "(no reason given)")
+        print(f"  {_c('approved', GREEN, colour)} {target.describe()}")
+        print(f"    recorded in {path}")
+        return 0
+
+    if not all_drift:
+        print(f"  {_c('no undeclared drift', GREEN, colour)}")
+        return 0
+
+    alerts = []
+    for drift in all_drift:
+        alert = cipalert.Alert(
+            kind="posture_drift", severity=drift.severity,
+            control_id="CIP-013 R1.2.5 / CIP-010 R1.6", citation="NERC CIP",
+            asset=f"{drift.vendor} / {drift.subject}",
+            vendor=drift.vendor,
+            message=(f"Undeclared vendor posture change — {drift.describe()}. "
+                     f"Not approved; treat as unverified until confirmed with the vendor."),
+            route_to=cipalert.ROUTE_BY_SEVERITY.get(drift.severity, "Vendor risk analyst"),
+            raised_at=cipalert._now(),
+            remediation="Confirm with the vendor out of band, then approve or investigate.",
+            context={"drift_key": drift.key, "kind": drift.kind,
+                     "before": drift.before, "after": drift.after},
+        )
+        alerts.append(alert)
+    log = cipalert.append(alerts)
+    print(f"  {_c(f'{len(all_drift)} undeclared change(s)', RED, colour)} — "
+          f"{len(alerts)} alert(s) logged to {log}")
+    if args.no_fail:
+        return 0
+    return 1
+
+
+def _agent_log(args, colour: bool) -> int:
+    """What the agent has actually been doing."""
+    from .ledger import AGENT_LOG, agent_behaviour_summary, read_actions
+
+    actions = read_actions(limit=max(args.limit, 200))
+    if not actions:
+        print(f"no agent actions recorded yet ({AGENT_LOG})")
+        return 0
+
+    summary = agent_behaviour_summary(actions)
+    print()
+    print(f"{_c('AGENT ACTION LEDGER', BOLD, colour)}  ·  {summary['actions']} recorded  ·  {AGENT_LOG}")
+    print()
+    print(f"  {_c('behaviour by model build', BOLD, colour)}")
+    for model, counts in summary["by_model"].items():
+        spread = "  ".join(f"{k} {v}" for k, v in sorted(counts.items()))
+        print(f"    {model:36} {spread}")
+    if summary["schema_failures"]:
+        print(f"  {_c(str(summary['schema_failures']) + ' schema failure(s)', YELLOW, colour)}"
+              f" — the model returned something unusable and the call escalated")
+    if summary["inconsistent_repeats"]:
+        note = (f"{summary['inconsistent_repeats']} input(s) got different answers "
+                f"on different runs")
+        print(f"  {_c(note, YELLOW, colour)}")
+    print()
+    for action in actions[-args.limit:]:
+        tint = {"block": RED, "escalate": YELLOW, "allow": GREEN}.get(action.get("disposition"), DIM)
+        print(f"  {action.get('at', '')}  {_c(action.get('disposition', '?').upper(), tint, colour)}"
+              f"  {action.get('subject', '')}  [{action.get('risk', '')}] "
+              f"conf {action.get('confidence', 0):.2f}")
+        trace = (f"inputs {str(action.get('input_digest', ''))[:16]}…  "
+                 f"via {action.get('backend', '')}")
+        print(f"    {_c(trace, DIM, colour)}")
+    return 0
