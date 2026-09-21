@@ -367,3 +367,88 @@ class ExtractionIsNotTrustedBlindly(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrioritizedReadingCannotChangeTheVerdict(unittest.TestCase):
+    """Machine context steers attention. It must not steer the outcome.
+
+    The footprint tells the model what the vendor supplies and whether a signing
+    key is already held, and reorders the obligations so the highest-stakes ones
+    are read first. That is an efficiency mechanism. The moment a large footprint
+    made a claim easier to accept, the footprint would be an input to a decision
+    — which is the boundary this whole design exists to hold.
+    """
+
+    def setUp(self):
+        from vra.procure import VendorFootprint
+
+        self.docs = load_documents(DOCS)
+        self.controls = load_cip_controls()
+        self.big = VendorFootprint(
+            vendor="Kestrel Grid Systems", devices=3400, substations=1200,
+            high_impact_devices=231, medium_impact_devices=584,
+            deployments=3400, packages=6, publishes_signing_key=True,
+            trusted_key_ids=["kestrel-grid-2026"],
+        )
+        self.small = VendorFootprint(
+            vendor="Kestrel Grid Systems", devices=2, substations=1,
+            high_impact_devices=0, medium_impact_devices=0,
+            deployments=2, packages=1, publishes_signing_key=False,
+        )
+
+    def _run(self, footprint):
+        return extract_procurement(
+            "Kestrel Grid Systems", "kestrel-grid", self.docs,
+            RunConfig(offline=True), controls=self.controls, footprint=footprint)
+
+    def test_the_adjudicated_result_is_identical_under_opposite_footprints(self):
+        """The assertion that matters."""
+        big = {(c.field, c.tier, c.applied_value, c.quote_verified) for c in self._run(self.big).claims}
+        small = {(c.field, c.tier, c.applied_value, c.quote_verified) for c in self._run(self.small).claims}
+        none = {(c.field, c.tier, c.applied_value, c.quote_verified) for c in self._run(None).claims}
+        self.assertEqual(big, small)
+        self.assertEqual(big, none)
+
+    def test_the_register_block_is_identical_under_opposite_footprints(self):
+        self.assertEqual(
+            self._run(self.big).register_contract_block(),
+            self._run(self.small).register_contract_block(),
+        )
+
+    def test_the_reading_order_does_change(self):
+        """If it never reordered, the feature would be doing nothing."""
+        from vra.procure import reading_order
+
+        self.assertNotEqual(
+            [t["field"] for t in reading_order(self.small)],
+            [t["field"] for t in reading_order(None)],
+        )
+
+    def test_a_vendor_with_no_key_is_asked_about_integrity_first(self):
+        """No key held means CIP-010 R1.6.1 is unevaluable for every release
+        this vendor ships, so whether the contract even obliges one is the most
+        useful thing to establish."""
+        from vra.procure import reading_order
+
+        order = [t["field"] for t in reading_order(self.small)]
+        self.assertEqual(order[0], "contract.software_integrity_clause")
+        self.assertIn("contract.key_rotation_notice_clause", order[:3])
+
+    def test_every_obligation_is_still_read(self):
+        """Prioritisation reorders. It must never skip: a silently dropped
+        obligation is a coverage gap the report cannot see."""
+        from vra.procure import CLAUSE_TARGETS, reading_order
+
+        for footprint in (self.big, self.small, None):
+            self.assertEqual(
+                {t["field"] for t in reading_order(footprint)},
+                {t["field"] for t in CLAUSE_TARGETS},
+            )
+        self.assertEqual(len(self._run(self.small).claims), len(CLAUSE_TARGETS))
+
+    def test_the_footprint_context_states_facts_not_conclusions(self):
+        """The model is told where it is, not what to find."""
+        text = self.big.as_prompt_context().lower()
+        for leading in ("should", "must", "likely", "probably", "expect to find",
+                        "therefore", "compliant", "violation"):
+            self.assertNotIn(leading, text, f"footprint context editorialises: {leading!r}")

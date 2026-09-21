@@ -388,3 +388,88 @@ class EvidencePack(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LowImpactVendorAccessScoping(unittest.TestCase):
+    """CIP-003-9 Attachment 1 Section 6 — the population CIP-013 does not cover.
+
+    The earlier scoping treated high and medium impact as the whole story. These
+    tests pin the correction: vendor remote access has a wider population than
+    CIP-013, and the two must not be collapsed in either direction.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.grid = Path(tempfile.mkdtemp()) / "grid"
+        build(cls.grid, today=AS_OF)
+        cls.controls = load_cip_controls()
+        cls.estate = load_estate(cls.grid, substations=600, today=AS_OF)
+        cls.findings, cls.gaps, _, cls.coverage = assess_estate(
+            cls.estate, cls.controls, when=AS_OF
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.grid.parent, ignore_errors=True)
+
+    def _cip003(self):
+        return [c for c in self.controls
+                if any(f.get("standard") == "CIP-003" for f in c.frameworks)]
+
+    def test_cip003_controls_exist_and_target_low_impact(self):
+        controls = self._cip003()
+        self.assertTrue(controls, "CIP-003-9 Section 6 controls are missing")
+        for c in controls:
+            scope = {cond.get("field"): cond for cond in c.applies_when}
+            self.assertEqual(scope["impact_rating"].get("equals"), "low", c.id)
+            self.assertTrue(
+                scope["allows_vendor_electronic_remote_access"].get("equals"),
+                f"{c.id} must only apply where vendor access is actually allowed",
+            )
+
+    def test_low_impact_assets_with_vendor_access_are_assessed(self):
+        """The whole point of the correction: these used not to exist."""
+        expected = sum(
+            1 for a in self.estate.access_sessions
+            if a.get("impact_rating") == "low"
+            and a.get("allows_vendor_electronic_remote_access")
+        )
+        self.assertGreater(expected, 0, "the estate should generate low impact vendor access")
+        for control in self._cip003():
+            self.assertEqual(self.coverage[control.id].applicable, expected, control.id)
+
+    def test_low_impact_without_vendor_access_stays_out_of_scope(self):
+        """Not every low impact asset is swept in. Only those with a path."""
+        low_total = sum(1 for s in self.estate.substations if s["impact_rating"] == "low")
+        for control in self._cip003():
+            self.assertLess(
+                self.coverage[control.id].applicable, low_total,
+                f"{control.id} must not apply to every low impact asset",
+            )
+
+    def test_cip013_still_excludes_low_impact(self):
+        """The correction must not leak upward. CIP-013 did not change."""
+        for control in self.controls:
+            if not any(f.get("standard") == "CIP-013" for f in control.frameworks):
+                continue
+            scoping = [c for c in control.applies_when
+                       if c.get("field") in ("impact_rating", "supplies_impact_rating")]
+            self.assertTrue(scoping, control.id)
+            self.assertEqual(scoping[0].get("in"), ["high", "medium"], control.id)
+
+    def test_the_two_populations_are_different(self):
+        """A vendor-access population identical to the CIP-013 population would
+        mean the correction did nothing."""
+        cip003_pop = self.coverage["CIP-31"].applicable
+        cip005_pop = self.coverage["CIP-16"].applicable
+        self.assertNotEqual(cip003_pop, cip005_pop)
+
+    def test_no_control_cites_cip015(self):
+        """CIP-015-1 is approved but not enforceable until 1 October 2028.
+
+        Citing it would be claiming an obligation that does not yet apply, which
+        is the same class of error as citing a superseded revision.
+        """
+        for control in self.controls:
+            for framework in control.frameworks:
+                self.assertNotEqual(framework.get("standard"), "CIP-015", control.id)
