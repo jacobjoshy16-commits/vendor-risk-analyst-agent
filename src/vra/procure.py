@@ -326,6 +326,34 @@ def verify_quote(quote: str, documents: list[SourceDocument]) -> tuple[bool, str
     return False, ""
 
 
+def quote_is_relevant(field_name: str, quote: str) -> bool:
+    """Is this quote plausibly ABOUT the obligation it was offered for?
+
+    Quote verification proves the text exists in the document. It does not prove
+    the text answers the question asked -- and a model can satisfy an
+    existence check by quoting any sufficiently long real sentence. Found
+    exactly that way: a model claimed the R1.2.3 access-termination clause was
+    present and backed it with a genuine sentence about R1.2.1 incident
+    notification. The quote verified, the claim was applied, and the register
+    gained a clause the contract does not contain.
+
+    So the quote must also match at least one term-group for the obligation it
+    is offered against. OFFLINE_SIGNATURES already encodes "what words indicate
+    this obligation", so the same table now does double duty: it drives the
+    offline extractor AND checks a model's quote for topical relevance.
+
+    This is a keyword heuristic and will not catch a model quoting a sentence
+    that is topically adjacent but legally different. It does close the case
+    where the quote is about a visibly different obligation, which is the one
+    that actually occurred.
+    """
+    signatures = OFFLINE_SIGNATURES.get(field_name)
+    if not signatures:
+        return True  # nothing to check against; do not invent a failure
+    low = normalize(quote)
+    return any(all(token in low for token in signature) for signature in signatures)
+
+
 def critical_fields_from_controls(controls: list) -> set[str]:
     """Which register fields drive a critical control.
 
@@ -356,6 +384,16 @@ def adjudicate(
     between "a model read a contract" and "a control failed", and it is
     deliberately short enough to read in one sitting.
     """
+    # A quote offered for two different obligations can be right about at most
+    # one of them. Rather than guess which, all of them are withheld: a model
+    # reusing one sentence to answer several questions is not evidencing any of
+    # them.
+    seen: dict[str, int] = {}
+    for claim in claims:
+        if claim.present is True and claim.quote.strip():
+            key = normalize(claim.quote)
+            seen[key] = seen.get(key, 0) + 1
+
     for claim in claims:
         claim.quote_verified, claim.source_document = verify_quote(claim.quote, documents)
 
@@ -376,6 +414,26 @@ def adjudicate(
             claim.withheld_reason = (
                 "the quote the model gave was not found in any source document. A claim "
                 "that cannot be located is treated as unevidenced, not as a near miss."
+            )
+            continue
+
+        if seen.get(normalize(claim.quote), 0) > 1:
+            claim.tier = "proposed"
+            claim.applied_value = None
+            claim.withheld_reason = (
+                "the same quote was offered as evidence for more than one obligation. "
+                "One sentence can answer at most one of them, so none is treated as "
+                "evidenced."
+            )
+            continue
+
+        if not quote_is_relevant(claim.field, claim.quote):
+            claim.tier = "proposed"
+            claim.applied_value = None
+            claim.withheld_reason = (
+                f"the quote is genuinely in the document, but it does not read as being "
+                f"about {claim.requirement}. Verification proves the text exists; it does "
+                f"not prove the text answers the obligation asked."
             )
             continue
 

@@ -539,6 +539,29 @@ The run flips a bit in a firmware image, detects it, restores it, seals a
 baseline, drifts it, approves the drift, and reverts everything. The repository
 is unchanged afterwards apart from `RESULTS.md`.
 
+### Proving the model path
+
+`prove.py` runs everything through the deterministic offline stand-in, which is
+the right way to test the pipeline and the **wrong** way to test the model.
+
+```bash
+python3 scripts/prove_live.py          # against your running Ollama
+python3 scripts/prove_live.py --fake   # against a stub, needs nothing
+```
+
+`--fake` stands up a local server that speaks Ollama's HTTP API and behaves like
+a small model having a bad day — prose instead of JSON, code fences, invalid
+enum values, and one genuine sentence offered as evidence for every obligation.
+Everything downstream of the socket is the real code path.
+
+That last behaviour found a real bug. **Quote verification alone is not enough:**
+a model can satisfy it by quoting any sufficiently long real sentence, and the
+register then gains a clause the contract does not contain. The offline
+heuristic could never expose this, because it finds quotes *by* keyword, so its
+quotes are topically relevant by construction. A quote must now also read as
+being about the obligation it answers, and a quote reused across obligations
+evidences none of them.
+
 ---
 
 ## Setup

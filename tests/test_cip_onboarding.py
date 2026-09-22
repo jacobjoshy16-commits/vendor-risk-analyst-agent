@@ -123,8 +123,13 @@ class AdjudicationRules(unittest.TestCase):
         self.assertIn("absence", claim.withheld_reason.lower())
 
     def test_verified_presence_below_critical_is_applied(self):
+        # The field is software_integrity_clause because that is what this quote
+        # is actually about. It previously said vulnerability_disclosure_clause,
+        # which the new relevance check correctly rejects: the quote is genuine
+        # but it answers a different obligation. critical_fields is empty here so
+        # the ceiling does not fire and this tests the applied path.
         claim = self._claim(
-            "contract.vulnerability_disclosure_clause", True,
+            "contract.software_integrity_clause", True,
             "Supplier shall publish a cryptographic signature generated with "
             "Supplier's code signing key together with a SHA-256 digest")
         adjudicate([claim], self.docs, critical_fields=set())
@@ -452,3 +457,91 @@ class PrioritizedReadingCannotChangeTheVerdict(unittest.TestCase):
         for leading in ("should", "must", "likely", "probably", "expect to find",
                         "therefore", "compliant", "violation"):
             self.assertNotIn(leading, text, f"footprint context editorialises: {leading!r}")
+
+
+class AQuoteMustBeAboutTheObligationItAnswers(unittest.TestCase):
+    """Regression: quote verification alone is not enough.
+
+    Found by driving the live model path against a fake Ollama that returned the
+    same genuine sentence for every obligation. The quote verified -- it really
+    was in the document -- and the claim was applied, so the register gained a
+    CIP-013 R1.2.3 clause the contract does not contain.
+
+    The offline heuristic never exposed this because it finds quotes BY keyword,
+    so its quotes are topically relevant by construction. Only a model that
+    behaved badly showed the hole.
+    """
+
+    def setUp(self):
+        self.docs = load_documents(DOCS)
+        # A real sentence from the MSA. It is about incident notification
+        # (R1.2.1) and nothing else.
+        self.incident_quote = (
+            "Supplier shall notify Customer's designated security contact of any "
+            "Security Incident affecting the products or services provided under "
+            "this Agreement")
+
+    def _claim(self, field_name, requirement, quote):
+        return ExtractedClaim(field=field_name, requirement=requirement,
+                              present=True, quote=quote, confidence=0.9)
+
+    def test_a_real_quote_about_the_wrong_obligation_is_withheld(self):
+        """THE BUG. The quote is genuine; it answers a different question."""
+        claim = self._claim("contract.access_termination_notice_clause",
+                            "CIP-013 R1.2.3", self.incident_quote)
+        adjudicate([claim], self.docs, critical_fields=set())
+        self.assertTrue(claim.quote_verified, "the quote really is in the document")
+        self.assertEqual(claim.tier, "proposed")
+        self.assertIsNone(claim.applied_value)
+        self.assertIn("obligation asked", claim.withheld_reason)
+
+    def test_the_same_quote_reused_across_obligations_withholds_all_of_them(self):
+        """One sentence can answer at most one obligation. Rather than guess
+        which, none is treated as evidenced."""
+        claims = [
+            self._claim("contract.incident_notification_clause", "R1.2.1", self.incident_quote),
+            self._claim("contract.incident_coordination_clause", "R1.2.2", self.incident_quote),
+        ]
+        adjudicate(claims, self.docs, critical_fields=set())
+        for claim in claims:
+            self.assertEqual(claim.tier, "proposed")
+            self.assertIn("more than one obligation", claim.withheld_reason)
+
+    def test_the_correct_quote_for_the_correct_obligation_still_applies(self):
+        """NEGATIVE CONTROL. The fix must not reject good extractions."""
+        claim = self._claim("contract.incident_notification_clause",
+                            "CIP-013 R1.2.1", self.incident_quote)
+        adjudicate([claim], self.docs, critical_fields=set())
+        self.assertEqual(claim.tier, "extracted")
+        self.assertTrue(claim.applied_value)
+
+    def test_relevance_is_checked_against_the_same_table_the_extractor_uses(self):
+        """OFFLINE_SIGNATURES does double duty: it drives the offline extractor
+        and checks a model's quote for topical relevance. One table, so the two
+        paths cannot drift apart."""
+        from vra.procure import OFFLINE_SIGNATURES, quote_is_relevant
+
+        self.assertTrue(quote_is_relevant("contract.incident_notification_clause",
+                                          self.incident_quote))
+        self.assertFalse(quote_is_relevant("contract.access_termination_notice_clause",
+                                           self.incident_quote))
+        for target in CLAUSE_TARGETS:
+            self.assertIn(target["field"], OFFLINE_SIGNATURES,
+                          f"{target['field']} has no relevance signature")
+
+    def test_a_field_with_no_signature_is_not_failed_on_relevance(self):
+        """Absent a signature there is nothing to check against, and inventing a
+        failure would be worse than not checking."""
+        from vra.procure import quote_is_relevant
+
+        self.assertTrue(quote_is_relevant("contract.some_future_clause", "anything at all"))
+
+    def test_the_real_sandbox_extraction_is_unaffected(self):
+        """The offline extractor's own output must still pass the new checks."""
+        result = extract_procurement(
+            "Kestrel Grid Systems", "kestrel-grid", self.docs,
+            RunConfig(offline=True), controls=load_cip_controls())
+        for claim in result.applied:
+            self.assertNotIn("obligation asked", claim.withheld_reason)
+        self.assertGreaterEqual(len(result.applied), 5,
+                                "the genuine clauses must still be applied")
