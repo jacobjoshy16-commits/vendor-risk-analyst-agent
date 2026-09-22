@@ -520,6 +520,27 @@ Set `VRA_LLM_CACHE=0` to re-ask every cycle.
 
 ---
 
+## Proving it works
+
+```bash
+python3 scripts/prove.py
+```
+
+Runs 18 checks end to end and writes [`RESULTS.md`](RESULTS.md): for each claim,
+the exact command, the expected outcome, the **real captured output**, and
+PASS/FAIL. Exits non-zero if any claim fails.
+
+Nothing in that file is asserted in prose. Every block was produced by running
+the command in it. The checks are ordered so the negative controls come first —
+"it caught the bad firmware" means nothing until you have seen it stay silent on
+the fourteen good ones.
+
+The run flips a bit in a firmware image, detects it, restores it, seals a
+baseline, drifts it, approves the drift, and reverts everything. The repository
+is unchanged afterwards apart from `RESULTS.md`.
+
+---
+
 ## Setup
 
 Python 3.10+.

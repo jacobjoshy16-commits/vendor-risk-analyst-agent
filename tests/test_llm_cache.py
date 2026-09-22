@@ -1,4 +1,11 @@
-"""The prompt cache must never serve a stale answer.
+"""NOTE ON ISOLATION: every RunConfig here passes llm_cache=True explicitly.
+
+RunConfig reads VRA_LLM_CACHE from the environment, so a developer or a script
+with VRA_LLM_CACHE=0 exported would turn caching off and see six mystery
+failures in this file. Tests that exercise a behaviour must force that
+behaviour rather than inherit it from the ambient environment.
+
+The prompt cache must never serve a stale answer.
 
 Reusing a narrative is only safe if a hit is impossible whenever the next call
 would have sent different bytes. So the key is a hash of the exact
@@ -56,7 +63,7 @@ class _CacheTestCase(unittest.TestCase):
 
     def call(self, backend, *, system="SYS", prompt="PROMPT", task="finding_narrative",
              cfg=None):
-        cfg = cfg or RunConfig(offline=False)
+        cfg = cfg or RunConfig(offline=False, llm_cache=True)
         return llm.call_json(
             system=system, prompt=prompt, cfg=cfg,
             schema_check=_ok, task=task, backend=backend,
@@ -103,9 +110,9 @@ class TestCacheHitsAndMisses(_CacheTestCase):
     def test_different_model_misses(self):
         """Swapping the model must not reuse the previous model's words."""
         backend = _CountingBackend()
-        cfg_a = RunConfig(offline=False)
+        cfg_a = RunConfig(offline=False, llm_cache=True)
         cfg_a.model = "qwen2.5:7b-instruct"
-        cfg_b = RunConfig(offline=False)
+        cfg_b = RunConfig(offline=False, llm_cache=True)
         cfg_b.model = "llama3.1:8b"
         self.call(backend, cfg=cfg_a)
         self.call(backend, cfg=cfg_b)
@@ -122,7 +129,7 @@ class TestCacheHitsAndMisses(_CacheTestCase):
 
     def test_cache_can_be_disabled(self):
         backend = _CountingBackend()
-        cfg = RunConfig(offline=False)
+        cfg = RunConfig(offline=False, llm_cache=True)
         cfg.llm_cache = False
         self.call(backend, cfg=cfg)
         self.call(backend, cfg=cfg)
@@ -142,12 +149,12 @@ class TestFailuresAreNotCached(_CacheTestCase):
                 return "not json at all", None
 
         backend = Bad()
-        first = llm.call_json(system="S", prompt="P", cfg=RunConfig(offline=False),
+        first = llm.call_json(system="S", prompt="P", cfg=RunConfig(offline=False, llm_cache=True),
                               schema_check=_ok, task="t", backend=backend, max_attempts=1)
         self.assertFalse(first.ok)
         self.assertEqual(self.cache.entries, {}, "a failure must not be cached")
 
-        llm.call_json(system="S", prompt="P", cfg=RunConfig(offline=False),
+        llm.call_json(system="S", prompt="P", cfg=RunConfig(offline=False, llm_cache=True),
                       schema_check=_ok, task="t", backend=backend, max_attempts=1)
         self.assertEqual(backend.calls, 2, "the model is asked again after a failure")
 
@@ -156,7 +163,7 @@ class TestCacheFile(_CacheTestCase):
     def test_survives_a_new_process(self):
         backend = _CountingBackend()
         self.call(backend)
-        self.cache.save(RunConfig())
+        self.cache.save(RunConfig(llm_cache=True))
 
         # A fresh cache object over the same file is what the next `--once` sees.
         reloaded = llm.reset_cache(self.cache.path)
@@ -170,14 +177,14 @@ class TestCacheFile(_CacheTestCase):
         backend = _CountingBackend()
         secret_ish = "VENDOR-CONFIDENTIAL-PROMPT-BODY"
         self.call(backend, prompt=secret_ish)
-        self.cache.save(RunConfig())
+        self.cache.save(RunConfig(llm_cache=True))
         blob = self.cache.path.read_text(encoding="utf-8")
         self.assertNotIn(secret_ish, blob, "only the hash is stored, never the prompt")
 
     def test_dry_run_writes_nothing(self):
         backend = _CountingBackend()
         self.call(backend)
-        self.cache.save(RunConfig(dry_run=True))
+        self.cache.save(RunConfig(dry_run=True, llm_cache=True))
         self.assertFalse(self.cache.path.exists())
 
     def test_entries_are_capped_evicting_least_recently_used(self):
@@ -185,7 +192,7 @@ class TestCacheFile(_CacheTestCase):
         for i in range(6):
             cache.put(f"key-{i}", data={"n": i}, call_id="c", task="t")
             cache.entries[f"key-{i}"]["last_used"] = f"2026-01-0{i + 1}T00:00:00"
-        cache.save(RunConfig())
+        cache.save(RunConfig(llm_cache=True))
         kept = set(json.loads(cache.path.read_text(encoding="utf-8"))["entries"])
         self.assertEqual(len(kept), 3)
         self.assertEqual(kept, {"key-3", "key-4", "key-5"}, "oldest evicted first")
@@ -233,7 +240,7 @@ class TestAuditTrailRecordsHits(_CacheTestCase):
 
     def test_dry_run_writes_no_audit_log(self):
         """--dry-run says it persists nothing; the log is on disk like the rest."""
-        self.call(_CountingBackend(), cfg=RunConfig(dry_run=True))
+        self.call(_CountingBackend(), cfg=RunConfig(dry_run=True, llm_cache=True))
         self.assertFalse(self._audit.exists())
 
 
@@ -257,7 +264,7 @@ class TestAssessReusesAcrossCycles(unittest.TestCase):
         # `state:` block into the human-authored register). The cache still
         # demonstrates reuse: it lives in memory for the process, and the file
         # round-trip is covered by TestCacheFile.test_survives_a_new_process.
-        cfg = RunConfig(offline=True, snapshot_version="v2", dry_run=True)
+        cfg = RunConfig(offline=True, snapshot_version="v2", dry_run=True, llm_cache=True)
         with redirect_stdout(io.StringIO()):
             return assess(cfg)
 

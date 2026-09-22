@@ -315,7 +315,8 @@ def main() -> int:
               "to say what the AI did, on which model build.",
         cmd=cip("agent-log", "--limit", "5"),
         expect_exit=0,
-        must_contain=["AGENT ACTION LEDGER", "behaviour by model build", "inputs"],
+        must_contain=["AGENT ACTION LEDGER", "behaviour by model build",
+                      "allow", "block", "inputs"],
         show_lines=14,
     )))
 
