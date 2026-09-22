@@ -319,3 +319,30 @@ class CommissioningBatch(unittest.TestCase):
         before = (self.dir / "releases.yaml").read_text()
         build_commissioning(self.dir, today=AS_OF)
         self.assertEqual((self.dir / "releases.yaml").read_text(), before)
+
+
+class DaysOpenIsNeverNegative(unittest.TestCase):
+    """Regression: a pinned assessment date can precede first_seen.
+
+    Runs pin --date for reproducibility while first_seen is real wall-clock
+    time, which made "open -1d" reachable in an alert. A negative age in an
+    audit artifact reads as a broken tool.
+    """
+
+    def test_an_assessment_date_before_first_seen_reports_zero(self):
+        from vra.cipstate import TrackedFinding
+
+        finding = TrackedFinding(id="F", kind="finding", control_id="CIP-01",
+                                 citation="c", severity="high", subject="s",
+                                 substation_id="", vendor="v", question="q",
+                                 first_seen="2026-09-22T00:00:00+00:00")
+        self.assertEqual(finding.days_open(date(2026, 9, 21)), 0)
+
+    def test_a_normal_age_is_still_counted(self):
+        from vra.cipstate import TrackedFinding
+
+        finding = TrackedFinding(id="F", kind="finding", control_id="CIP-01",
+                                 citation="c", severity="high", subject="s",
+                                 substation_id="", vendor="v", question="q",
+                                 first_seen="2026-09-01T00:00:00+00:00")
+        self.assertEqual(finding.days_open(date(2026, 9, 21)), 20)

@@ -32,6 +32,28 @@ check**. The spreadsheet process approves it.
 
 ---
 
+## Walk the whole lifecycle
+
+```bash
+python3 scripts/walkthrough.py           # straight through
+python3 scripts/walkthrough.py --pause   # stop between stages, for a demo
+python3 scripts/walkthrough.py --live    # use Ollama instead of the stand-in
+```
+
+Six stages, in the order they happen, with the real command printed at each step
+so you can run any stage on its own:
+
+| | Stage | What you see |
+| --- | --- | --- |
+| 1 | **Onboard** | The model reads the vendor's contracts and quotes each CIP-013 clause; code verifies every quote |
+| 2 | **Cryptography** | SHA-256 then Ed25519 over the bytes they shipped — one release passes, one does not |
+| 3 | **NERC controls** | Which requirements applied, to how many assets, with a denominator |
+| 4 | **The model** | It reasons over everything the code found and decides |
+| 5 | **Memory** | Seal the state, flip one bit, watch it get caught next cycle |
+| 6 | **Output** | Audit pack, agent ledger, the alert a security team receives |
+
+---
+
 ## The demo: a vendor pushes an update that is not from the vendor
 
 ```bash

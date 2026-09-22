@@ -75,8 +75,15 @@ class TrackedFinding:
             return False
 
     def days_open(self, when: date) -> int:
+        """Never negative.
+
+        `when` is the assessment date, which can be pinned in the past for a
+        reproducible run, while first_seen is real wall-clock time. That made
+        "open -1d" reachable, and a negative age in an audit artifact reads as
+        a broken tool rather than a pinned clock.
+        """
         try:
-            return (when - date.fromisoformat(self.first_seen[:10])).days
+            return max(0, (when - date.fromisoformat(self.first_seen[:10])).days)
         except (ValueError, IndexError):
             return 0
 
