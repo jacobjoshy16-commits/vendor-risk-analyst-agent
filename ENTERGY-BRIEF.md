@@ -76,6 +76,21 @@ And, critically:
 
 ## 1a. The three hooks, ranked
 
+### Hook 0 — their suppliers have already been attacked
+
+The strongest line in the filing, and the one easiest to miss. Item 1A states
+that Entergy **and its third-party suppliers** have been the target of cyber
+attacks and expect to continue being targeted.
+
+That is not a hypothetical in their disclosure. It is a stated history.
+
+> **"You told investors your suppliers have been attacked and will be again.
+> This verifies what those suppliers ship, before it reaches a relay."**
+
+Pair it with the other Item 1A line naming attacks on *"critical suppliers and
+contractors or other third parties interconnected through the grid"* — with
+consequences named as loss of operational control, outages and data loss.
+
 ### Hook 1 — they already run this program; this feeds it
 
 They are not missing the idea. They have a vendor risk program and they
