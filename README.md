@@ -1,677 +1,233 @@
 # Substation Supply-Chain Integrity Monitor
 
-**A working model of NERC CIP-013 / CIP-010 R1.6 supply-chain verification,
-built on a synthetic utility estate.**
+**Verifies vendor firmware is authentic before it reaches grid equipment, and
+produces the NERC CIP evidence for it.**
 
-> **What this is not.** It is not a product, and it does not fill a gap in
-> anyone's compliance program. A utility of any size already has a CIP-013
-> program, a GRC platform and vendor processes. This is a working model of the
-> problem those programs solve — built to understand it end to end, on data that
-> is synthetic throughout.
-
-```bash
-python3 vra.py cip gate --package X    # verify a vendor package; exit 1 = do not deploy
-python3 vra.py cip --evidence          # assess the estate, write the audit pack
-python3 vra.py cip monitor             # re-assess on a timer, alert on change
-```
-
-Everything runs locally. Nothing leaves the machine.
+Built on a synthetic utility estate. Runs locally; nothing leaves the machine.
 
 ---
 
-## What this is
+## The problem
 
-Firmware verification at most utilities is semi-manual: an engineer downloads a
-binary, compares the hash to the vendor's release notes, and records it on a
-spreadsheet. That process has a specific blind spot, and this tool exists to
-close it.
+A protective relay in a substation decides whether high-voltage power flows. Its
+firmware comes from a vendor. Before install, someone has to prove it is
+authentic — that is **NERC CIP-010 R1 Part 1.6**.
 
-| You get | What that is |
-| --- | --- |
-| **Real cryptographic verification** | Actual SHA-256 over the bytes on disk and actual Ed25519 signature verification against a registry of pinned vendor keys. No field asserts a verification result. Flip one bit in an 8 KB image and the answer changes. **Flat key registry — no X.509 chain validation, no revocation checking.** |
-| **A NERC CIP score** | **34 `CIP-*` controls** over four subjects — firmware deployments, procurement, vendor ESP access, vendor personnel. CIP-013 R1/R2/R3, CIP-010 R1.6, CIP-005 R2.4/2.5, CIP-004 R2–R5, scoped by CIP-002 impact rating. |
-| **Procurement detection** | The model reads the vendor's actual contract documents and locates each CIP-013 R1.2 obligation. **Code verifies every quote against the source** before it may affect a control. |
-| **An audit evidence pack** | Organised by requirement, not by finding, with a denominator on every row and the cryptographic working shown. Markdown, HTML and JSON. |
-| **A companion SaaS set** | A trimmed 7 `NHI-*` + 4 `AIV-*` controls citing 800-53 / SOC 2, for vendor agents and non-human identities. Not the load-bearing set. |
+Today that is often an engineer downloading a file, comparing a SHA-256 to the
+vendor's release notes, and recording it on a spreadsheet.
 
-Severity and whether something is a finding come from YAML plus code.
-**The language model cannot create a finding or set a severity.**
+**That has a specific blind spot.** A hash proves the file matches *a published
+string*. It does not prove the string came from the vendor — whoever can swap
+the binary on a mirror can swap the hash printed beside it. Same channel.
 
-### Why two cryptographic checks, not one
+A signature is the part they cannot forge.
 
-Both are computed, in this order, and they answer different questions:
-
-| Check | Question | NERC part |
+| Check | Answers | NERC |
 | --- | --- | --- |
-| **SHA-256** | Are these the bytes the published digest describes? | CIP-010 R1.6.2 (integrity) |
-| **Ed25519 signature** | Did those bytes come from the vendor, and are they unmodified since signing? | CIP-010 R1.6.1 (source identity) + R1.6.2 |
+| SHA-256 | Are these the bytes the published digest describes? | R1.6.2 |
+| Ed25519 signature | Did the vendor vouch for these exact bytes? | R1.6.1 + R1.6.2 |
 
-A hash proves the file matches *a published string*. It does not prove the
-string came from the vendor — an attacker who can substitute a binary on a
-distribution mirror can substitute the digest printed beside it, because both
-travel the same channel. A signature is the part they cannot forge without the
-vendor's private key.
-
-So **where a vendor publishes a signing key, a matching hash does not close
-CIP-010 R1.6.2.** Where a vendor publishes no key, the hash is the only method
-available from the source, it is used, and the result is recorded as
-`verification_strength: hash_only` rather than dressed up as the stronger check.
-
-**In the real OT market, `hash_only` is probably the common case, not the edge
-case.** Many device vendors publish a digest and nothing else, and where signing
-does exist it is usually X.509 code signing rather than raw Ed25519. This tool's
-trust model is a flat registry of pinned keys: it checks key status and validity
-windows, and it does **not** do certificate chain validation or revocation
-checking. The revoked-key path is real and worth showing; it is not PKI.
-
-This is the argument of the whole project, and the planted demo scenario is
-built to show it: a package that **passes the hash check and fails the
-signature check**. The spreadsheet process returns green on it.
-
-### What it is not
-
-- **Not a compliance determination.** It automates the evidence CIP-010 R1.6 and
-  CIP-004 R4 require you to produce. Whether you are compliant is a Regional
-  Entity's finding, not a tool's output, and the evidence pack never claims
-  otherwise.
-- **Not connected to any OT network.** The estate, vendors, personnel and
-  firmware are synthetic throughout.
-- **Not an auto-remediator.** It does not quarantine binaries, revoke access, or
-  write answers into the register.
-- **Not a certificate-chain implementation.** The trust model is a flat registry
-  of pinned keys. Real relay vendors sign with RSA or ECDSA under X.509 with
-  path validation and revocation checking; see
-  [`VALIDATION-CIP.md`](VALIDATION-CIP.md) for the full list of gaps.
-
-### Where the model sits
-
-The model reads prose. It does not decide anything.
-
-```
-vendor contract documents ──▶ [ MODEL ] ──▶ claim + verbatim quote
-                                                   │
-                                                   ▼
-                                         [ CODE ] quote located in source?
-                                                   │  severity ceiling?
-                                                   │  absence or presence?
-                                                   ▼
-                                         finding · gap · review queue
-```
-
-It never sees a hash, a signature result, a key, or an asset inventory. Those
-are computed by code and consumed by code. See
-[Detecting the procurement process](#detecting-the-procurement-process-the-agent-reads-the-contract).
+The demo shows a package that **passes the hash check and fails the signature
+check**. The spreadsheet process approves it.
 
 ---
 
----
-
-## The NERC CIP assessment
-
-The load-bearing control set. It cites **NERC and nothing else** — a utility is
-audited against NERC, and carrying 800-53 and SOC 2 alongside it makes the file
-longer without making it more defensible. It is scored by the same deterministic
-evaluator as the companion sets further down.
+## Quick start
 
 ```bash
-python3 vra.py cip                  # assess the estate
-python3 vra.py cip --evidence       # + write the audit evidence pack
-python3 vra.py cip build-fixtures   # regenerate keys, packages, firmware
+pip install -r requirements.txt
+python3 vra.py cip build-fixtures
 ```
 
-### What it scores
-
-34 controls over four subjects, with the standards split the way they actually
-apply:
-
-| Standard | What it governs here | Controls |
-| --- | --- | --- |
-| **CIP-013** | The procurement *plan* layer: R1.1 risk assessment process, R1.2.1–R1.2.6 contract clauses, R2 implementation, R3 15-month CIP Senior Manager approval | CIP-07 … CIP-15 |
-| **CIP-010 R1.6** | The per-installation technical check: verify software **source identity** (1.6.1) and **integrity** (1.6.2) before deviating from baseline | CIP-01 … CIP-06 |
-| **CIP-005 R2** | Vendor remote access into the ESP: methods to **determine** active sessions (2.4) and to **disable** them (2.5) | CIP-16 … CIP-18 |
-| **CIP-004** | Who may hold that access: training (R2), personnel risk assessment (R3), authorization and quarterly verification (R4), revocation (R5) | CIP-19 … CIP-25 |
-| **CIP-003-9** | Low impact assets that allow vendor electronic remote access: determine sessions, disable them, detect malicious communications | CIP-31 … CIP-34 |
-| **CIP-002** | Not encoded as controls. Its High/Medium/Low impact rating drives `applies_when` on everything above. | — |
-
-**CIP-013 does not impose the firmware check.** It is a plan standard; the
-operational requirement to verify source identity and software integrity is
-CIP-010 R1 Part 1.6, and vendor session control is CIP-005 R2.4/R2.5. Getting
-this split right is why findings cite a requirement that actually governs them.
-
-### The verification is real
-
-`src/vra/cipcrypto.py` performs actual Ed25519 verification and actual SHA-256
-over the bytes on disk. No field asserts a verification result.
-
-The judgement that matters: **where a vendor publishes a signing key, a matching
-published hash does not close CIP-010 R1.6.2.** The bytes matching a published
-string does not establish that the string came from the vendor — an attacker who
-can substitute a binary on a mirror can substitute the hash beside it. Where a
-vendor publishes no key, the hash is the only available method and is used, but
-recorded as `verification_strength: hash_only` rather than dressed up.
-
-### The simulated estate
-
-**Synthetic throughout.** 1,300 substations and ~7,500 cyber assets across four
-states, generated deterministically from a seed — a model sized to resemble a
-mid-size utility, containing no real utility's data. Every substation, device,
-technician, vendor and firmware image is fabricated. Impact ratings are deliberately lopsided — 26
-high, 116 medium, 1,158 low — because CIP-013 attaches to high and medium impact
-systems and a tool that ignores that is ~89% false positives.
-
-All vendors are **fictional**. Real relay vendors are deliberately absent: this
-repo is public and the planted scenario is a package that fails verification.
-
-One planted compromise, built the way a mirror compromise actually looks — the
-attacker substitutes the binary *and* the published hash, but cannot forge the
-signature:
-
-```
-FIRMWARE VERIFICATION FAILED  SPS-421-4.7.2
-    vendor published SHA-256 cf57cc28…: MATCH
-    Ed25519 verify against key sentinel-protective-2026: INVALID
-```
-
-A hash-and-spreadsheet process passes that package. It is deployed on 131
-protective relays.
-
-### Detecting the procurement process (the agent reads the contract)
-
-CIP-013 R1.2.1–R1.2.6 ask whether your procurement process addresses six
-obligations. Answering that from a boolean somebody typed into YAML just moves
-the work — a human still has to read the master services agreement. So the model
-reads it.
+The one command that shows the point:
 
 ```bash
-python3 vra.py cip onboard --vendor "Kestrel Grid Systems" \
-    --docs sandbox/procurement/kestrel-grid
-```
-
-**The model finds and quotes the clause. The code decides what it means.** This
-adds one tier to the existing provenance model in `observe.py`:
-
-| Tier | What it is | Drives a finding? |
-| --- | --- | --- |
-| `register` | A human wrote it down | **Yes** |
-| `observed` | Parsed deterministically from a table or API | **Yes** |
-| **`extracted`** | **A model read prose AND the quote it gave was located in the source document** | **Yes — capped** |
-| `proposed` | A model said something it could not evidence | **Never** |
-
-Two rules are not negotiable:
-
-**1. Presence can be evidenced. Absence cannot.** The model can quote MSA §9.1 to
-show an incident-notification clause exists. It cannot quote anything to show a
-clause is *missing* — an absence has no text. So "this clause is not present"
-never produces a control failure; it produces an information gap with a question
-for the vendor. Inverting this would let a model fail a vendor on a clause it
-merely failed to find in a 90-page contract.
-
-**2. A verified extraction may not raise a critical on its own.** Quote
-verification proves the text exists. It does not prove the model read the *scope*
-right — a definition, a struck exhibit, or a clause scoped to a different product
-line all quote perfectly. Criticals route to `pending_review/` with the reason.
-The ceiling is derived from the control set, so re-rating a control in YAML moves
-it.
-
-On the sandbox vendor, six clauses are applied and two are withheld:
-
-```
-CIP-013 R1.2.1   incident_notification_clause      found  verified   yes
-CIP-013 R1.2.3   access_termination_notice_clause  -      -          held
-CIP-013 R1.2.5   software_integrity_clause         found  verified   held
-CIP-013 R1.2.6   remote_access_coordination_clause found  verified   yes
-```
-
-R1.2.3 is genuinely absent from the documents, and the questionnaire answer that
-*looks* like it addresses the obligation commits the vendor to nothing — the case
-a human skimming would tick off. R1.2.5 was quoted correctly but drives a
-critical, so it waits for ratification.
-
-Then the same run registers the vendor's signing key and verifies each release —
-**SHA-256 first, then Ed25519**:
-
-```
-ACCEPTED  KG-RTU-100-2.4.0    hash MATCH · signature VALID
-REJECTED  KG-RTU-100-2.4.1    hash MATCH · signature INVALID
-```
-
-Without a local model the extractor falls back to a deterministic keyword
-heuristic, labelled `offline-heuristic` everywhere it appears. It is held to the
-same rules: it must return a real verbatim sentence, and that sentence goes
-through the same verification. A heuristic that could bypass the check would
-leave the safety boundary untested in CI, which is where it matters most.
-
-### The analyst: the model reasons, the code's output is one of its inputs
-
-There are two model roles in this tool, and they are deliberately different
-shapes.
-
-**Reading a contract is a fact question** — "is this clause present?" — so in
-`procure.py` the model extracts and the code adjudicates against a verified
-quote.
-
-**Deciding what to do about a firmware package is a judgement**, and judgement
-is what a model is for. So in `analyst_cip.py` the code runs first and hands the
-model everything it established, and the model reasons over all of it:
-
-```
-CODE COMPUTES                          MODEL RECEIVES AND WEIGHS
-  SHA-256 over the bytes          ──▶    the full verification result
-  Ed25519 verification            ──▶    which controls the rule engine failed
-  key status and trust            ──▶    how many devices run this build
-  control evaluation              ──▶    what this vendor has done before
-  blast radius from inventory     ──▶    what the contract obliges them to do
-  vendor history from the store   ──▶    the rule engine's own verdict
-                                            ↓
-                                   disposition · risk · reasoning
-                                   recommended actions · questions for the vendor
-```
-
-The rule engine's verdict is **an input to the brief**, not a conclusion hidden
-from the model. The model can reach a different one.
-
-**Who decides is yours to set:**
-
-```bash
-python3 vra.py cip gate --package X --decision model   # the model decides
-python3 vra.py cip gate --package X --decision code    # the rule engine decides
-python3 vra.py cip gate --package X --decision both    # default: stricter wins
-```
-
-`both` is not the code overruling the model — it is the same rule in both
-directions, so **the model can block a package the rules would have passed**.
-That is the direction that matters: the rules encode what we thought of, and the
-model sees pattern, history and blast radius that the rules do not.
-
-Disagreement is printed rather than hidden. Either the model saw something the
-rules do not encode, or it got it wrong, and both are worth knowing.
-
-**Model:** runs locally through Ollama. Default `qwen2.5:7b-instruct`
-(`qwen2.5:3b` is the low-memory fallback); override with
-`--model` or `VRA_MODEL`. The brief is rendered as short labelled lines rather
-than JSON because a small model reasons better over facts than over braces, and
-every model answer is schema-validated with the rejection reason fed back on
-retry. A model that cannot produce a usable judgement **escalates** — it never
-becomes an allow.
-
-### Sealed baselines: no change until it is deliberate
-
-Verifying a package once says it was authentic *then*. It says nothing about the
-vendor's posture drifting afterwards — a signing key quietly rotated, a release
-re-published under the same version, a package appearing nobody ordered, a
-contract clause changing.
-
-So once the initial verification is reviewed and accepted, the posture is
-**sealed**:
-
-```bash
-python3 vra.py cip seal      # this is the approved state
-python3 vra.py cip drift     # what moved since?  exit 1 on undeclared change
-```
-
-Every later cycle compares live posture against the seal. Anything that moved is
-drift, and drift alerts **unless it carries a recorded approval**:
-
-```
-Cascade Grid Controls
-  UNDECLARED [high] key status changed on cascade-grid-2026 ('active' -> 'revoked')
-Halcyon Instruments
-  UNDECLARED [critical] package hash changed on HAL-MU-40-1.1.7 ('2ac85d70…' -> '12de4076…')
-```
-
-```bash
-python3 vra.py cip drift --approve "<drift key>" \
-    --by "J. Analyst" --why "Vendor confirmed rotation by phone, fingerprint re-verified"
-```
-
-That change is now `declared` and stays quiet. The other still exits 1.
-
-Approval keys include the *after* value, so approving one key rotation does not
-bless the next one. Baselines carry a digest of their own contents, so an edited
-seal no longer matches itself and says so.
-
-**Change is not forbidden — unannounced change is indistinguishable from
-compromise, and is treated as such until a human says otherwise.**
-
-### The agent action ledger
-
-Entergy's Item 1A names **"threats fueled by artificial intelligence"** and
-states it cannot anticipate or detect all threats. A tool that answers that by
-putting an AI in the decision path had better be able to say what the AI did.
-
-```bash
-python3 vra.py cip agent-log
+python3 vra.py cip gate --package SPS-421-4.7.2 --offline
 ```
 
 ```
-AGENT ACTION LEDGER  ·  3 recorded
-
-  behaviour by model build
-    ollama/qwen2.5:7b-instruct           allow 1  block 2
-
-  2026-09-21T23:47:17  BLOCK  KG-RTU-100-2.4.1  [high] conf 0.90
-    inputs f6b6863ace848d5f…  via ollama
-```
-
-Every model invocation is appended: the task, a **digest of what it was shown**,
-what it decided, with what confidence, on which model build. Append-only, never
-rewritten.
-
-That gives three things a security team actually needs:
-
-- **Did the agent's behaviour change?** Dispositions are counted per model build,
-  so a model that starts allowing what it used to block is visible.
-- **Same inputs, different answer?** Repeated input digests with differing
-  dispositions are flagged.
-- **What was the AI allowed to do?** A record for an auditor, independent of
-  what it decided.
-
-The brief is digested rather than stored — it is large and reproducible from the
-estate and the bytes, and what matters is whether the agent saw *the same*
-inputs.
-
-### Continuous monitoring, alerting, and the deployment gate
-
-The assessment above is one-shot. `monitor` is the same assessment on a timer,
-with memory:
-
-```bash
-python3 vra.py cip monitor --interval 15m     # re-assess and alert on changes
-python3 vra.py cip monitor --once             # one cycle, for cron
-python3 vra.py cip alerts                     # read the alert log
-python3 vra.py cip gate --package SPS-421-4.7.2   # exit 1 = do not deploy
-```
-
-**State** lives in `data/cip_findings.json`: when a finding was *first* raised,
-whether anyone has been told, and whether it has since cleared. Due dates are
-anchored to first sighting, so a finding the monitor re-sees every fifteen
-minutes still goes overdue — if the deadline were recomputed each cycle nothing
-would ever be late.
-
-**Alerts** fire on transitions only — `new_finding`, `overdue`, `resolved`,
-`firmware_rejected` — and append to `data/cip_alerts.jsonl`. Two rules keep the
-channel readable:
-
-- **Cold start is a baseline, not an alert storm.** The first run records what
-  is already open and sends nothing. That is how a channel survives day one.
-- **Findings group by root cause.** 131 relays running one substituted package
-  is one alert naming 17 assets, not 131 pages.
-
-Flip one bit in a firmware image and the next cycle says so:
-
-```
-NEW FINDING  [critical] -> CIP Senior Manager / Security on-call
-  17 assets: Was the integrity of the firmware obtained from the software source
-  verified... — observed integrity_verified=False. CIP-010-4 R1 Part 1.6.2.
-  e.g. AR-SUB-0001-RTU-05-FW, LA-SUB-0002-RTU-04-FW, +14 more. Remediate by 2026-09-28.
-```
-
-Restore it and the next cycle reports `CLEARED — 17 assets`.
-
-**The alert names the obligation, not the vendor.** CIP-003-9 obliges the
-*Responsible Entity*. "This vendor is not compliant with CIP-003-9" is wrong on
-the facts and a compliance lead will say so.
-
-### Enforcement — one place, deliberately
-
-```
-$ python3 vra.py cip gate --package KG-RTU-100-2.4.1 --grid-dir ./vendor-release
+  vendor published SHA-256 cf57cc28…: MATCH
+  Ed25519 verify against key sentinel-protective-2026: INVALID
   BLOCKED — do not deploy
-    DEPLOYMENT BLOCKED — failed CIP-010 R1.6 (hash_match=True,
-    signature_verified=False). Not flashed.
-$ echo $?
-1
 ```
 
-CIP-010 R1.6 requires verification *prior to* a change that deviates from
-baseline, so a gate that blocks the deployment **is** the requirement. Drop it
-in a patch pipeline and unverified firmware cannot be flashed.
-
-Terminating a live vendor session into a substation would also be
-"enforcement". This tool will not do it. That has reliability consequences and
-belongs to a human with operational authority — those findings alert instead.
-
-### The evidence pack
-
-`--evidence` writes `out/cip/evidence-pack.{md,html,json}` plus `findings.json`.
-Organised **by requirement, not by finding**, because an audit opens with "show
-me you checked", so every requirement carries its denominator:
-
-```
-CIP-01  CIP-010-4 R1 Part 1.6.2   7,464 population · 1,724 applicable · 1,593 passed · 131 exceptions
-```
-
-Exceptions collapse to root causes — 131 relays running one bad build is one
-remediation, not 131. The pack **never asserts compliance** (that is the
-Regional Entity's determination), always declares the data synthetic, and prints
-a banner while any citation is unverified.
-
-> **Citation status: 19 of 34 verified.** Checked against the standard text on
-> 2026-09-21: the six **CIP-010 R1.6** controls (CIP-010-4 is mandatory and
-> subject to enforcement; CIP-010-5 is subject to *future* enforcement), nine
-> **CIP-013-2 R1** controls (Parts 1.1, 1.2.1, 1.2.2, 1.2.3, 1.2.5, 1.2.6), and
-> the four **CIP-003-9** controls (Attachment 1 Section 6, enforceable since
-> 1 April 2026). The remaining 15 — CIP-004, CIP-005, and CIP-013 R2/R3/1.2.4 —
-> are unverified and the tool prints a banner saying so.
->
-> Verification has a shelf life. CIP-010-5 takes effect **2028-04-01** under
-> FERC Order No. 919, and the software integrity requirement moves from
-> **R1 Part 1.6 to R1 Part 1.3** at that transition. Each verified framework
-> records `superseded_by` and `enforceable_until`, and every run re-checks them
-> against the assessment date — a warning inside a year, an error past it.
-
-See [`VALIDATION-CIP.md`](VALIDATION-CIP.md) for what is proven (and what is
-not) and [`DEMO-CIP.md`](DEMO-CIP.md) for the presentation script.
+Exit code `1`. In a deployment pipeline, that firmware does not get flashed.
 
 ---
 
----
+## Commands
 
-## The SaaS companion
-
-The repo grew out of an independent monitor for vendor **non-human identities**
-and agentic SaaS features. That part still works and is documented separately in
-[`docs/SAAS-COMPANION.md`](docs/SAAS-COMPANION.md). It needs no OT data and
-nothing in the NERC path depends on it.
-
----
-
-## Design rules (why the score is usable in an audit)
-
-**1. The model never invents a finding.** No code path from model output to a
-severity, a due date, or the existence of a finding.
-
-**2. The model reads unstructured vendor text and drafts language.** It does
-not decide what is true.
-
-**3. A claim drives a finding only if it is quotable** to an artifact line or
-an API field.
-
-| Tier | Source | Drives a finding? |
+| Command | What it does | Exit |
 | --- | --- | --- |
-| `register` | Human YAML in `vendors/` | **Yes** |
-| `observed` | Parsed table / tenant API | **Yes** — with provenance |
-| `extracted` | Model read prose **and** the quote it gave was located in the source document | **Yes** — capped below critical |
-| `proposed` | Model inference it could not evidence | **No** — `pending_review/` only |
+| `cip gate --package X` | Verify one package | **1 = do not deploy** |
+| `cip commission --batch DIR` | Verify a whole plant's firmware delivery | 1 if any blocked |
+| `cip onboard --vendor X --docs DIR` | Read a vendor's contracts, score CIP-013 | 1 if critical |
+| `cip` | Assess the whole estate | 1 if critical |
+| `cip monitor` | Re-assess on a timer, alert on change | 0 |
+| `cip seal` / `cip drift` | Baseline a vendor, then detect undeclared change | 1 on drift |
+| `cip agent-log` | What the AI decided, and on which model | 0 |
 
-The `extracted` tier is where the model does real work. It is bounded by two
-rules in `src/vra/procure.py`: a claim of *absence* can never fail a control
-(an absence has no text to quote), and a verified quote may not raise a
-critical on its own (verification proves the text exists, not that its scope
-was read correctly).
-
-**4. Unknown is a question, not a failure.** Unanswered fields are 21-day
-information gaps, not “non-compliant.”
-
-**4a. The register is yours.** A run never rewrites `vendors/*.yaml`. Machine
-bookkeeping goes to `data/registry_state.json`, so your comments survive and a
-cycle leaves no diff. Your registers are gitignored; the three demo vendors
-ship in `sandbox/registers/` and a register of yours shadows a demo one with
-the same slug. Point elsewhere with `VRA_VENDORS_DIR`.
-
-**5. Local by default.** Ollama on the workstation, or the built-in checker.
-
-**6. The model is asked once per distinct prompt.** Narrative and outreach text
-is cached in `data/llm_cache.json`, keyed by a hash of the exact
-backend/model/task/system/prompt. A finding the monitor re-sees unchanged costs
-zero model calls; change anything that reaches the prompt and that entry — only
-that entry — is regenerated. Only the hash is stored, never the prompt text.
-Set `VRA_LLM_CACHE=0` to re-ask every cycle.
+Add `--evidence` to write the audit pack. Add `--offline` to skip the model.
 
 ---
 
-## Proving it works
+## How it works
+
+```
+firmware .bin ──▶ SHA-256 + Ed25519 against a registry of pinned vendor keys
+                        │
+                        ▼
+                  34 NERC controls over four subjects,
+                  scoped by CIP-002 impact rating
+                        │
+                        ▼
+                  a local model receives the crypto result, the failed
+                  controls, the blast radius and the vendor's history,
+                  and reaches a disposition
+                        │
+                        ▼
+                  block · allow · escalate  →  audit pack + routed alert
+                        │
+                        ▼
+                  seal the approved state; alert on later change
+                  that carries no recorded approval
+```
+
+### The four subjects
+
+| Subject | Standards |
+| --- | --- |
+| Firmware deployments | CIP-010 R1.6 |
+| Procurement, per vendor | CIP-013 R1/R2/R3 |
+| Vendor ESP access | CIP-005 R2, CIP-003-9 §6 |
+| Vendor personnel | CIP-004 R2–R5 |
+
+CIP-002 impact ratings gate every control, producing two populations: high and
+medium impact for CIP-013 and CIP-010, and low-impact assets *that allow vendor
+remote access* for CIP-003-9. Low-impact assets with no vendor path are reported
+**not applicable** — never **passing**.
+
+### Where the AI sits
+
+**Reading a contract is a fact question.** The model locates a CIP-013 clause and
+quotes it; code then checks the quote exists in the document, is *about* that
+obligation, and was not reused for another one.
+
+Two rules bound it:
+
+- **Presence can be evidenced; absence cannot.** Nothing a model can quote proves
+  a clause is *missing*, so "not present" becomes a question for the vendor —
+  never a control failure.
+- **A verified quote cannot raise a critical alone.** Verification proves the text
+  exists, not that its scope was read right.
+
+**Deciding about a package is a judgement.** There the code runs first and hands
+the model everything it found. `--decision code|model|both` picks the authority.
+
+**Every model call is logged** — task, input digest, disposition, confidence,
+model build. Append-only.
+
+---
+
+## Running the proof yourself
+
+Nothing below is a claim you have to take on faith. Both scripts write a report
+of what actually happened on your machine.
+
+### 1. The pipeline
 
 ```bash
 python3 scripts/prove.py
 ```
 
-Runs 18 checks end to end and writes [`RESULTS.md`](RESULTS.md): for each claim,
-the exact command, the expected outcome, the **real captured output**, and
-PASS/FAIL. Exits non-zero if any claim fails.
-
-Nothing in that file is asserted in prose. Every block was produced by running
-the command in it. The checks are ordered so the negative controls come first —
-"it caught the bad firmware" means nothing until you have seen it stay silent on
-the fourteen good ones.
+18 checks end to end → writes **`RESULTS.md`**: for each claim, the command, the
+expected outcome, the real captured output, PASS/FAIL. Exits non-zero if any
+check fails.
 
 The run flips a bit in a firmware image, detects it, restores it, seals a
-baseline, drifts it, approves the drift, and reverts everything. The repository
-is unchanged afterwards apart from `RESULTS.md`.
+baseline, drifts it, approves the drift, and reverts everything. Your repo is
+unchanged afterwards.
 
-### Proving the model path
+Checks are ordered **negative controls first** — "it caught the bad firmware"
+means nothing until you have seen it stay silent on the fourteen good ones.
 
-`prove.py` runs everything through the deterministic offline stand-in, which is
-the right way to test the pipeline and the **wrong** way to test the model.
+### 2. The model path
 
 ```bash
-python3 scripts/prove_live.py          # against your running Ollama
-python3 scripts/prove_live.py --fake   # against a stub, needs nothing
+ollama serve &
+ollama pull qwen2.5:7b-instruct        # or qwen2.5:3b on less memory
+python3 scripts/prove_live.py
 ```
 
-`--fake` stands up a local server that speaks Ollama's HTTP API and behaves like
-a small model having a bad day — prose instead of JSON, code fences, invalid
-enum values, and one genuine sentence offered as evidence for every obligation.
-Everything downstream of the socket is the real code path.
+Five steps against your real model → writes **`LIVE-RESULTS.md`** with what the
+model actually said. If Ollama is not reachable it tells you the commands to fix
+it rather than failing quietly.
 
-That last behaviour found a real bug. **Quote verification alone is not enough:**
-a model can satisfy it by quoting any sufficiently long real sentence, and the
+No Ollama handy:
+
+```bash
+python3 scripts/prove_live.py --fake
+```
+
+Stands up a local server speaking Ollama's HTTP API that behaves like a small
+model having a bad day — prose instead of JSON, code fences, invalid enums, and
+one genuine sentence offered as evidence for every obligation. Everything past
+the socket is the real code path.
+
+That last behaviour found a real bug: **quote verification alone is not enough.**
+A model can satisfy it by quoting any sufficiently long real sentence, and the
 register then gains a clause the contract does not contain. The offline
-heuristic could never expose this, because it finds quotes *by* keyword, so its
-quotes are topically relevant by construction. A quote must now also read as
-being about the obligation it answers, and a quote reused across obligations
-evidences none of them.
+heuristic could never expose it, because it finds quotes *by* keyword.
+
+### 3. The test suite
+
+```bash
+python3 -m unittest discover -s tests -t .      # 574 tests
+```
+
+`RESULTS.md` and `LIVE-RESULTS.md` are gitignored. They are yours to generate,
+not something the repo ships.
 
 ---
 
-## Setup
+## Honest limits
 
-Python 3.10+.
+- **Everything is synthetic.** ~7,500 devices across 1,300 substations, modelled
+  on a mid-size utility. Invented vendors. No OT connection, no real data.
+- **22 of 34 citations verified** against the standard text (CIP-010 R1.6,
+  CIP-013 R1, CIP-005 R2, CIP-003-9). The rest are flagged and the tool prints a
+  banner. CIP-004 part numbers are unread.
+- **Ed25519 is not what most OT vendors ship.** Many publish a digest only; where
+  signing exists it is usually X.509. The `hash_only` path is probably the common
+  real-world case.
+- **Flat key registry** — status and validity windows, no certificate chain
+  validation, no revocation checking. It is not PKI.
+- **Contract extraction has never seen a real MSA.**
+- **No vendor tenant integration.** Drift compares against sealed data, not a
+  vendor's live system.
 
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-python3 vra.py cip build-fixtures     # generate keys, packages, signed firmware
-python3 vra.py cip --evidence         # assess and write the audit pack
-```
-
-Exit codes: `0` clean · `1` open critical · `2` run error.
-
-Optional, for live-model contract extraction rather than the offline heuristic:
-
-```bash
-ollama pull qwen2.5:7b-instruct
-```
-
-### Tests
-
-```bash
-python3 -m unittest discover -s tests -t .     # whole repo
-python3 -m unittest tests.test_cip -v          # the NERC control set + crypto
-python3 -m unittest tests.test_cip_onboarding  # procurement extraction, end to end
-```
-
-## Limitations
-
-**On the NERC path specifically:**
-
-- **The NERC citations are unverified.** All 30 controls carry
-  `citation_verified: false`. Standard revisions (CIP-013-2, CIP-004-7,
-  CIP-005-7, CIP-010-4) and part numbers were written from knowledge, not
-  checked against the enforceable standards. Every artifact prints a banner
-  until a human does that pass.
-- **Extraction has only run against the offline heuristic and clean demo
-  prose.** A real master services agreement is 90 pages of cross-referenced
-  exhibits and amendments. The *adjudication* is validated; *extraction quality
-  on messy contracts* is not.
-- **Quote verification does not validate interpretation.** It proves the text is
-  in the document. It cannot tell whether a clause was struck by a later
-  amendment or scoped to a different product line. That is why criticals are
-  withheld — but an applied `high` still rests on the model reading scope right.
-- **Impact ratings are a plausible distribution, not a categorisation.** Real
-  CIP-002 work runs Attachment 1 criteria against each BES Cyber System.
-- **No live OT integration.** Deployments are generated, not read from a CMDB or
-  a patch management system.
-
-**On the SaaS companion:**
-
-
-
-The scored sandbox runs used the offline heuristic, not a live 7B model. That
-validates the pipeline and the control mapping. It does **not** validate triage
-on messy real vendor prose. Run against Ollama before relying on it.
-
-- NDA / login walls stop the parse, loudly (`blocked` + outreach).
-- Unpublished change with no probe → nothing fires.
-- Sandbox probes are fixture-mode. Live API drift is unexercised.
-- A stale register produces confident, wrong output except where a probe or
-  parsed table overlays it.
-- A connect stub is enough for NHI discovery. It is **not** a complete AIV-*
-  register — those fields stay `unknown` until a human fills them.
-- **NHI-01 cannot fire from IdP discovery alone.** It needs `human_in_loop`,
-  and no directory API reports whether a vendor's agent asks before it acts —
-  Okta, Entra and the rest return identities and scopes, not the vendor
-  product's approval setting. Live discovery therefore gets you as far as an
-  NHI-01 *gap* naming the missing field; `vra enrich <slug>` (or a vendor probe
-  that reads the product's own tenant settings) is what turns it into a
-  critical. The tool will not guess the field from a display name.
+**This does not fill a gap in anyone's compliance program.** A utility of any
+size already has CIP-013 processes, a GRC platform, and vendor management. It is
+a working model of the problem those programs solve.
 
 ---
 
 ## Repository
 
 ```
-vra.py                  entry point — connect / monitor / report / cip
-cip_controls.yaml       34 CIP-* controls — the NERC set (NERC only). THE PRODUCT.
-nhi_controls.yaml       7 NHI-* controls — trimmed identity companion (800-53 + SOC 2)
-controls.yaml           4 AIV-* controls — trimmed feature companion (800-53 + SOC 2)
-vendors/*.yaml          YOUR registers (gitignored) — `vra connect` writes here
-sandbox/registers/      the three demo registers that ship with the repo
-src/vra/connect.py      the interactive front door
-src/vra/idp.py          IdP connectors (Okta / Auth0) + dispatcher
-src/vra/connectors.py   vendor connectors (Atlassian, Slack, …)
-src/vra/discover.py     `vra.py discover`
-src/vra/monitor.py      the daemon
-src/vra/nhi.py          inventory + NHI-* evaluation
-src/vra/cli.py          one assess pass
-src/vra/onboard.py      onboard / bootstrap (trust-center path)
-src/vra/creds.py        OS keychain
-src/vra/webui.py        local console
-sandbox/                planted scenario + real-world page fixtures
-sandbox/probe/idp/      recorded Okta / Auth0 pages (same walker as live)
-src/vra/cip.py          NERC assessment over the estate
-src/vra/cipcrypto.py    real Ed25519 + SHA-256 firmware verification
-src/vra/grid.py         the simulated substation estate
-src/vra/gridbuild.py    fixture builder — signs the firmware, plants the compromise
-src/vra/evidence.py     CIP audit evidence pack (md / html / json)
-src/vra/procure.py      reads vendor contracts; verifies every quote in code
-src/vra/onboard_cip.py  documents -> procurement -> key -> firmware -> score
-src/vra/cipcli.py       `vra.py cip` / `vra.py cip onboard`
-sandbox/procurement/    contract documents for the vendor onboarding demo
-sandbox/grid/           signing keys, packages, signed firmware images
-VALIDATION.md           including every defect found
-VALIDATION-CIP.md       what the NERC module proves, and what it does not
-DEMO-CIP.md             career-fair script for the NERC demo
-docs/ARCHITECTURE-CIP-BRIEF.md   the decision record behind the module
+cip_controls.yaml       34 NERC controls — the policy, editable without code
+src/vra/cipcrypto.py    SHA-256, Ed25519, key registry
+src/vra/grid.py         the synthetic estate
+src/vra/cip.py          control evaluation + coverage
+src/vra/procure.py      contract reading, quote verification
+src/vra/analyst_cip.py  the model's judgement
+src/vra/ledger.py       sealed baselines, drift, agent log
+src/vra/evidence.py     audit pack
+src/vra/cipcli.py       the commands
+scripts/prove.py        proves the pipeline
+scripts/prove_live.py   proves the model path
+PORTFOLIO.md            the write-up
 ```
+
+The SaaS monitor this grew out of is documented separately in
+[`docs/SAAS-COMPANION.md`](docs/SAAS-COMPANION.md).
