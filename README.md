@@ -32,6 +32,50 @@ check**. The spreadsheet process approves it.
 
 ---
 
+## The demo: a vendor pushes an update that is not from the vendor
+
+```bash
+python3 scripts/simulate_push.py
+```
+
+Stands up a fake vendor distribution server on localhost and drives the whole
+chain against it over HTTP — twice.
+
+**Round 1, genuine release:** fetched, hash matches, signature valid, `ACCEPTED`,
+exit 0.
+
+**Then the attacker takes the mirror.** They replace the binary *and* update the
+SHA-256 published beside it — both are served from a host they control. What they
+cannot do is forge the signature; the vendor publishes their key through a
+separate channel.
+
+**Round 2, substituted release:**
+
+```
+vendor published SHA-256 086b04f8…: MATCH
+Ed25519 verify against key sentinel-protective-2026: INVALID
+BLOCKED — do not deploy                                        exit 1
+```
+
+Then the governance half runs: NERC controls evaluate, an audit record is written
+back, and an alert is routed.
+
+```
+blocked-SPS-680-2.3.0-2026-09-21.json
+  disposition              block
+  citation                 NERC CIP-010-4 R1 Part 1.6
+  hash_match               True
+  signature_verified       False
+  integrity_verified       False
+
+alert → CIP Senior Manager / Security on-call
+```
+
+The vendor was never breached. Their mirror was. The hash check passed and the
+signature check is what caught it.
+
+---
+
 ## Quick start
 
 ```bash
@@ -228,6 +272,3 @@ scripts/prove.py        proves the pipeline
 scripts/prove_live.py   proves the model path
 PORTFOLIO.md            the write-up
 ```
-
-The SaaS monitor this grew out of is documented separately in
-[`docs/SAAS-COMPANION.md`](docs/SAAS-COMPANION.md).
