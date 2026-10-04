@@ -181,6 +181,11 @@ def discover_entra(
     scopes_by_target: dict[str, set[str]] = {}
     issued_by_target: dict[str, str] = {}
     names_by_target: dict[str, str] = {}
+    # Which resource each permission is held on. A bare "Write.All" says what
+    # the principal may do but not to what; the resource principal's id is
+    # what tells an EMS integration API apart from Microsoft Graph.
+    resources_by_target: dict[str, set[tuple[str, str, str]]] = {}
+    sp_names = {str(sp.get("id")): str(sp.get("displayName") or "") for sp in sps if sp.get("id")}
 
     def _target_for(sp: dict[str, Any]) -> tuple[str, str]:
         """Attribute a grant to the app registration when there is one."""
@@ -233,6 +238,12 @@ def discover_entra(
                 scopes_by_target.setdefault(target, set()).add(resolved)
                 names_by_target[target] = name
                 issued_by_target.setdefault(target, row.get("createdDateTime") or "")
+                resource_id = str(row.get("resourceId") or "")
+                resources_by_target.setdefault(target, set()).add((
+                    resource_id,
+                    str(row.get("resourceDisplayName") or sp_names.get(resource_id, "")),
+                    resolved,
+                ))
 
     # -- delegated permissions, tenant-wide ----------------------------------
     sp_by_id = {str(sp.get("id")): sp for sp in sps if sp.get("id")}
@@ -251,8 +262,12 @@ def discover_entra(
         target, name = _target_for(sp)
         if not target:
             continue
+        resource_id = str(grant.get("resourceId") or "")
         for scope in str(grant.get("scope") or "").split():
             scopes_by_target.setdefault(target, set()).add(scope)
+            resources_by_target.setdefault(target, set()).add(
+                (resource_id, sp_names.get(resource_id, ""), scope)
+            )
         names_by_target[target] = name
         issued_by_target.setdefault(target, grant.get("createdDateTime") or "")
 
@@ -273,6 +288,10 @@ def discover_entra(
             "client_name": names_by_target.get(target) or target,
             "principal": names_by_target.get(target) or target,
             "scopes": sorted(scopes),
+            "resource_grants": [
+                {"resource_id": rid, "resource_name": rname, "permission": perm}
+                for rid, rname, perm in sorted(resources_by_target.get(target, ()))
+            ],
             "issued": issued_by_target.get(target) or None,
             "idp": "entra",
             "discovered_via": "entra_grants",
@@ -353,6 +372,10 @@ def _normalise_entra_sp(sp: dict[str, Any]) -> dict[str, Any]:
         "userType": "servicePrincipal",
         "app_type": "servicePrincipal",
         "service_principal_type": sp_type,
+        # The tenant the backing application is registered in. A principal
+        # owned by a tenant other than yours is a third party's identity
+        # holding access in your directory -- quotable, not inferred from a name.
+        "app_owner_org": sp.get("appOwnerOrganizationId"),
         "idp": "entra",
         "discovered_via": "entra_service_principals",
     }

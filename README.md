@@ -131,6 +131,7 @@ Exit code `1`. In a deployment pipeline, that firmware does not get flashed.
 | `cip` | Assess the whole estate | 1 if critical |
 | `cip monitor` | Re-assess on a timer, alert on change | 0 |
 | `cip seal` / `cip drift` | Baseline a vendor, then detect undeclared change | 1 on drift |
+| `cip vendor-agents` | Third-party agents the IdP shows reaching the ESP | 1 if any finding |
 | `cip agent-log` | What the AI decided, and on which model | 0 |
 
 Add `--evidence` to write the audit pack. Add `--offline` to skip the model.
@@ -143,7 +144,7 @@ Add `--evidence` to write the audit pack. Add `--offline` to skip the model.
 firmware .bin ──▶ SHA-256 + Ed25519 against a registry of pinned vendor keys
                         │
                         ▼
-                  34 NERC controls over four subjects,
+                  36 NERC controls over five subjects,
                   scoped by CIP-002 impact rating
                         │
                         ▼
@@ -159,7 +160,7 @@ firmware .bin ──▶ SHA-256 + Ed25519 against a registry of pinned vendor ke
                   that carries no recorded approval
 ```
 
-### The four subjects
+### The five subjects
 
 | Subject | Standards |
 | --- | --- |
@@ -167,6 +168,7 @@ firmware .bin ──▶ SHA-256 + Ed25519 against a registry of pinned vendor ke
 | Procurement, per vendor | CIP-013 R1/R2/R3 |
 | Vendor ESP access | CIP-005 R2, CIP-003-9 §6 |
 | Vendor personnel | CIP-004 R2–R5 |
+| Vendor agents, read from the IdP | CIP-005 R2.4, CIP-004 R4 |
 
 CIP-002 impact ratings gate every control, producing two populations: high and
 medium impact for CIP-013 and CIP-010, and low-impact assets *that allow vendor
@@ -192,6 +194,48 @@ the model everything it found. `--decision code|model|both` picks the authority.
 
 **Every model call is logged** — task, input digest, disposition, confidence,
 model build. Append-only.
+
+---
+
+## Following third-party agents through the IdP
+
+A vendor's AI agent that can call your EMS API is vendor remote access. CIP-005
+R2.4 and R2.5 say so directly: they cover *system-to-system* remote access, not
+just people. So every `cip` and `cip monitor` cycle re-reads the utility's
+identity provider (Microsoft Entra, through Graph) and follows every
+third-party identity that holds a role on an ESP-facing system.
+
+```bash
+python3 vra.py cip vendor-agents
+python3 vra.py cip vendor-agents --idp-fixture sandbox/grid/idp/entra_v2.json
+```
+
+```
+  agent                      vendor                       reaches                  status
+  Cascade Grid Assist        Cascade Grid Controls        EMS integration API      ok
+  Sentinel RelayOps Agent    Sentinel Protective Systems  Relay settings service   UNAPPROVED RelaySettings.Write.All
+  Ironwood Field Copilot     tenant 10000000-…            Relay settings service   NOT DECLARED
+```
+
+Scope comes from what Graph quotes, never from a name:
+
+| Question | Answered by |
+| --- | --- |
+| Is it a third party's? | `servicePrincipal.appOwnerOrganizationId` is not your tenant |
+| Can it reach the ESP? | `appRoleAssignment.resourceId` is listed in `sandbox/grid/agents.yaml` |
+
+| Control | Fails when | Cites |
+| --- | --- | --- |
+| CIP-35 | A third party's identity reaches the ESP and nobody declared it | CIP-005 R2.4 |
+| CIP-36 | A declared agent holds a permission nobody approved | CIP-004 R4.3 (unverified) |
+
+Under `cip monitor`, each cycle prints what changed since the last read (new
+agent, permission added or removed, disabled, gone) and the findings alert
+through the normal lifecycle. If the IdP can't be read, the agent controls are
+reported **unassessed** and their open findings are carried forward. An
+unreachable directory never sends an all-clear.
+
+The model is not on this path. Who exists and what they hold comes from an API.
 
 ---
 
@@ -248,7 +292,7 @@ heuristic could never expose it, because it finds quotes *by* keyword.
 ### 3. The test suite
 
 ```bash
-python3 -m unittest discover -s tests -t .      # 574 tests
+python3 -m unittest discover -s tests -t .      # 616 tests
 ```
 
 `RESULTS.md` and `LIVE-RESULTS.md` are gitignored. They are yours to generate,
@@ -260,7 +304,7 @@ not something the repo ships.
 
 - **Everything is synthetic.** ~7,500 devices across 1,300 substations, modelled
   on a mid-size utility. Invented vendors. No OT connection, no real data.
-- **22 of 34 citations verified** against the standard text (CIP-010 R1.6,
+- **23 of 36 citations verified** against the standard text (CIP-010 R1.6,
   CIP-013 R1, CIP-005 R2, CIP-003-9). The rest are flagged and the tool prints a
   banner. CIP-004 part numbers are unread.
 - **Ed25519 is not what most OT vendors ship.** Many publish a digest only; where
@@ -271,6 +315,16 @@ not something the repo ships.
 - **Contract extraction has never seen a real MSA.**
 - **No vendor tenant integration.** Drift compares against sealed data, not a
   vendor's live system.
+- **The IdP shows who can reach the ESP, not what they did there.** That lives in
+  the resource's own logs, which this does not read.
+- **No IdP field reliably says "this is an AI."** `ai: true` in `agents.yaml` is a
+  label a human supplies. The CIP obligation is the same either way.
+- **Only Entra reports which resource a permission is on.** Against other IdPs,
+  only declared agents are followed and the run says so.
+- **Live Entra uses a pasted Graph token, which expires within about an hour.**
+  Continuous live following needs client-credential token minting, which is not
+  built. Past expiry each cycle reports the IdP unread and carries findings; it
+  does not fail open. Never run against a real tenant.
 
 **This does not fill a gap in anyone's compliance program.** A utility of any
 size already has CIP-013 processes, a GRC platform, and vendor management. It is
@@ -281,11 +335,12 @@ a working model of the problem those programs solve.
 ## Repository
 
 ```
-cip_controls.yaml       34 NERC controls — the policy, editable without code
+cip_controls.yaml       36 NERC controls — the policy, editable without code
 src/vra/cipcrypto.py    SHA-256, Ed25519, key registry
 src/vra/grid.py         the synthetic estate
 src/vra/cip.py          control evaluation + coverage
 src/vra/procure.py      contract reading, quote verification
+src/vra/cipagents.py    third-party agents, followed through the IdP
 src/vra/analyst_cip.py  the model's judgement
 src/vra/ledger.py       sealed baselines, drift, agent log
 src/vra/evidence.py     audit pack

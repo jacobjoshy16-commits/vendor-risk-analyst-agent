@@ -4,6 +4,7 @@
     python3 vra.py cip --evidence         also write the audit evidence pack
     python3 vra.py cip --substations 25   smaller estate for a screen demo
     python3 vra.py cip build-fixtures     regenerate keys, packages, firmware
+    python3 vra.py cip vendor-agents      third-party agents the IdP shows reaching the ESP
 
 Exit codes match the rest of the tool: 0 clean, 1 open critical, 2 run error.
 A critical exception is a non-zero exit so this can gate a pipeline rather than
@@ -44,7 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("action", nargs="?", default="run",
                    choices=["run", "build-fixtures", "onboard", "monitor", "gate",
-                            "alerts", "commission", "seal", "drift", "agent-log"])
+                            "alerts", "commission", "seal", "drift", "agent-log",
+                            "vendor-agents"])
     p.add_argument("--vendor-name", default=None,
                    help="seal/drift: limit to one vendor")
     p.add_argument("--approve", default=None,
@@ -70,7 +72,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--impact", default="high", choices=["high", "medium", "low"],
                    help="onboard: impact rating of the systems this vendor supplies")
     p.add_argument("--offline", action="store_true",
-                   help="onboard: use the deterministic extractor, no model")
+                   help="onboard: use the deterministic extractor, no model; "
+                        "also skips a live IdP read")
+    p.add_argument("--idp-fixture", type=Path, default=None,
+                   help="run/vendor-agents/monitor: read this recorded IdP page set instead "
+                        "of the one agents.yaml names")
     p.add_argument("--substations", type=int, default=GRID_SUBSTATIONS,
                    help=f"estate size (default {GRID_SUBSTATIONS})")
     p.add_argument("--grid-dir", type=Path, default=GRID_DIR)
@@ -110,6 +116,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "agent-log":
         return _agent_log(args, colour)
+
+    if args.action == "vendor-agents":
+        return _vendor_agents(args, colour, when)
 
     if args.action == "alerts":
         return _alerts(args, colour)
@@ -159,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    sighting = _sight(args, estate)
     findings, gaps, verified, coverage = assess_estate(estate, controls, when=when)
     elapsed = time.time() - started
     summary = estate.summary()
@@ -180,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
           f"{_c('— CIP-003-9 Attachment 1 Section 6 scope', DIM, colour)}")
     print(_c("  low impact assets with no vendor access path are out of scope, not passing",
              DIM, colour))
+    _print_sighting(sighting, colour)
     print(f"  {summary['distinct_packages']} distinct packages cryptographically verified "
           f"in {elapsed:.2f}s")
     print()
@@ -237,7 +248,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.evidence:
         from .evidence import build_pack, write_findings, write_pack
 
-        pack = build_pack(estate, controls, findings, gaps, verified, coverage, when=when)
+        pack = build_pack(estate, controls, findings, gaps, verified, coverage, when=when,
+                          unassessed=_agent_gaps(sighting, controls))
         paths = write_pack(pack, args.out)
         fpath = write_findings(findings, gaps, args.out)
         print(f"  {_c('evidence pack', BOLD, colour)}")
@@ -398,7 +410,7 @@ def _parse_interval(raw: str) -> int:
 
 
 def _cycle(args, colour: bool, when, store, *, quiet: bool = False,
-           baseline: bool = False) -> tuple[int, dict]:
+           baseline: bool = False, ledger=None) -> tuple[int, dict]:
     """One assessment pass: assess, reconcile against memory, alert on changes.
 
     `baseline` is the cold-start case. On the very first run every open finding
@@ -407,18 +419,32 @@ def _cycle(args, colour: bool, when, store, *, quiet: bool = False,
     ask for. That is how a channel gets muted on day one. So the first cycle
     records the state, reports a summary, and alerts nothing. Everything after
     it alerts on transitions.
+
+    Third-party agents are re-read from the IdP every cycle and folded into
+    `ledger`, so a role granted at 3am is reported at the next cycle rather
+    than at the next audit.
     """
-    from . import cipalert
+    from . import cipagents, cipalert
     from .evaluate import to_record
     from .grid import load_estate
 
     controls = load_cip_controls(args.controls)
     estate = load_estate(args.grid_dir, substations=args.substations,
                          seed=args.seed, today=when)
+    sighting = _sight(args, estate)
+    events = cipagents.follow(sighting, ledger if ledger is not None
+                              else cipagents.open_ledger())
+    if not quiet:
+        if sighting.configured and not sighting.complete:
+            _print_sighting(sighting, colour)
+        for event in events:
+            tint = {"gone": GREEN, "first_read": DIM}.get(event["kind"], YELLOW)
+            print(f"  {_c('AGENT', tint, colour)}  {cipagents.describe(event)}")
     findings, gaps, verified, coverage = assess_estate(estate, controls, when=when)
     records = [to_record(a) for a in findings] + [to_record(a) for a in gaps]
 
-    delta = store.reconcile(records, when)
+    delta = store.reconcile(records, when,
+                            unassessed=cipagents.unassessed(sighting, controls))
 
     if baseline:
         store.mark_alerted(delta.new)
@@ -493,7 +519,10 @@ def _monitor(args, colour: bool, when) -> int:
               f"Remove the lock if that is wrong.", file=sys.stderr)
         return 2
 
+    from . import cipagents
+
     store = FindingStore().load()
+    ledger = cipagents.open_ledger()
     cold_start = not store.all()
     print()
     print(f"{_c('NERC CIP monitor', BOLD, colour)}  ·  every {interval}s  ·  "
@@ -508,7 +537,7 @@ def _monitor(args, colour: bool, when) -> int:
             print()
             print(f"{_c(f'cycle {cycles}', BOLD, colour)}  {stamp}")
             count, summary = _cycle(args, colour, when, store,
-                                    baseline=(cold_start and cycles == 1))
+                                    baseline=(cold_start and cycles == 1), ledger=ledger)
             parts = "  ".join(f"{k} {v}" for k, v in summary.items() if v)
             print(f"  {parts or _c('no change', DIM, colour)}")
             if args.once:
@@ -522,6 +551,124 @@ def _monitor(args, colour: bool, when) -> int:
         except OSError:
             pass
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Third-party agents, through the IdP
+# ---------------------------------------------------------------------------
+def _sight(args, estate):
+    """Read the IdP and put its in-scope agents on the estate."""
+    from . import cipagents
+    from .config import RunConfig
+
+    return cipagents.attach(estate, args.grid_dir, fixture=args.idp_fixture,
+                            cfg=RunConfig(offline=getattr(args, "offline", False)))
+
+
+def _agent_gaps(sighting, controls) -> dict[str, str]:
+    """Agent controls that were not assessed this run, and why."""
+    from . import cipagents
+
+    if not sighting.configured:
+        why = f"no {cipagents.AGENTS_FILE}: third-party agents are not followed"
+    elif not sighting.observed:
+        why = f"IdP not read ({sighting.error})"
+    else:
+        why = "IdP listing truncated; agents missing from it were not examined"
+    return {cid: why for cid in cipagents.unassessed(sighting, controls)}
+
+
+def _shown(path: str) -> str:
+    """A path relative to where the user is standing, when it is under it."""
+    try:
+        return str(Path(path).resolve().relative_to(Path.cwd()))
+    except (ValueError, OSError):
+        return path
+
+
+def _print_sighting(sighting, colour: bool) -> None:
+    if not sighting.configured:
+        return
+    if not sighting.observed:
+        print(_c(f"  ⚠ IdP not read ({sighting.error}) — third-party agent controls "
+                 f"not assessed; open agent findings are carried, not resolved",
+                 YELLOW, colour))
+        return
+    n = len(sighting.agents)
+    print(f"  {n} third-party agent{'' if n == 1 else 's'} followed in the "
+          f"{sighting.provider} IdP ({sighting.pages_fetched} pages) "
+          f"{_c('— CIP-005 R2 system-to-system scope', DIM, colour)}")
+    if sighting.truncated:
+        print(_c("  ⚠ the IdP listing was truncated — an agent missing from it is not "
+                 "concluded gone", YELLOW, colour))
+    for warning in sighting.warnings:
+        print(_c(f"  ⚠ {warning}", YELLOW, colour))
+
+
+def _vendor_agents(args, colour: bool, when) -> int:
+    """Who, outside the utility, the IdP shows holding a path into the ESP.
+
+    Reads the IdP and scores the agent controls. Does not write the ledger:
+    the monitor owns that, so looking cannot change what it reports next.
+    """
+    from . import cipagents
+    from .cip import assess_estate
+    from .grid import Estate
+
+    try:
+        controls = [c for c in load_cip_controls(args.controls)
+                    if c.subject == cipagents.SUBJECT]
+    except (ValueError, OSError) as exc:
+        print(f"{_c('control set error:', RED, colour)} {exc}", file=sys.stderr)
+        return 2
+    estate = Estate(root=args.grid_dir)
+    sighting = _sight(args, estate)
+    print()
+    print(f"{_c('Third-party agents in the IdP', BOLD, colour)}  ·  {when.isoformat()}")
+    if not sighting.configured:
+        print(f"  no {cipagents.AGENTS_FILE} in {args.grid_dir} — nothing to follow")
+        return 0
+    print(_c(f"  {sighting.provider or '?'} · {sighting.mode} · {_shown(sighting.source)}",
+             DIM, colour))
+    if not sighting.observed:
+        print(_c(f"  ⚠ IdP not read: {sighting.error}", YELLOW, colour))
+        return 2
+
+    findings, gaps, _, _ = assess_estate(estate, controls, when=when)
+    problems: dict[str, list[str]] = {}
+    for a in findings:
+        if a.control.id == "CIP-35":
+            problems.setdefault(a.subject, []).append("NOT DECLARED")
+        else:
+            perms = ", ".join(a.observed.get("unapproved_esp_permissions") or [])
+            problems.setdefault(a.subject, []).append(f"UNAPPROVED {perms}")
+    for a in gaps:
+        problems.setdefault(a.subject, []).append("no approvals on file")
+
+    ledger = cipagents.open_ledger()
+    print()
+    print(f"  {'agent':26} {'vendor':28} {'reaches':30} {'since':10}  status")
+    for agent in sighting.agents:
+        reach = ", ".join(f"{s}" for s in agent["esp_systems"]) or "no ESP-facing system"
+        row = ledger.identities.get(f"{cipagents.LEDGER_SLUG}|{agent['agent_id']}") or {}
+        state = "; ".join(problems.get(agent["agent_id"], [])) or "ok"
+        if agent.get("status") != "active":
+            state = f"{agent.get('status')} · {state}"
+        line = (f"  {agent['name'][:26]:26} {agent['vendor'][:28]:28} {reach[:30]:30} "
+                f"{(row.get('first_seen') or '—'):10}  ")
+        print(line + (_c(state, RED, colour) if state != "ok" else _c(state, GREEN, colour)))
+        print(_c(f"      {', '.join(agent['esp_permissions']) or 'no ESP-facing permission'}",
+                 DIM, colour))
+    if sighting.out_of_scope:
+        print(_c(f"  {sighting.out_of_scope} other third-party identit"
+                 f"{'y holds' if sighting.out_of_scope == 1 else 'ies hold'} permissions "
+                 f"on no ESP-facing system — out of CIP scope", DIM, colour))
+    for warning in sighting.warnings:
+        print(_c(f"  ⚠ {warning}", YELLOW, colour))
+    print()
+    if args.no_fail:
+        return 0
+    return 1 if findings else 0
 
 
 # ---------------------------------------------------------------------------

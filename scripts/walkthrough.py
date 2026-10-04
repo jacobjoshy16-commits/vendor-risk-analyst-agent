@@ -156,7 +156,7 @@ def main() -> int:
     notice("Every row has a denominator: population, applicable, passed, failed.",
            "CIP-002 impact ratings decide what even applies. Low-impact assets with no "
            "vendor access are NOT APPLICABLE — never 'passing'.",
-           "22 of 34 citations are verified against the standard text; the rest are "
+           "23 of 36 citations are verified against the standard text; the rest are "
            "flagged and the tool says so.")
     pause(paused)
 

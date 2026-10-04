@@ -88,6 +88,24 @@ def _load_live(vendor: dict, cfg: RunConfig) -> tuple[dict, str | None]:
     return estate.to_probe_blob(), None
 
 
+def _resource_grants(grants: list[dict]) -> list[dict]:
+    """Permissions paired with the resource they are held on, where the IdP says.
+
+    Only some providers record the resource (Entra does); the rest leave this
+    empty and their scopes stay unqualified.
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[dict] = []
+    for grant in grants:
+        for row in grant.get("resource_grants") or []:
+            key = (str(row.get("resource_id") or ""), str(row.get("permission") or ""))
+            if key in seen or not key[1]:
+                continue
+            seen.add(key)
+            out.append(dict(row))
+    return sorted(out, key=lambda r: (str(r.get("resource_id")), str(r.get("permission"))))
+
+
 def _extract_nhis(data: dict) -> list[dict]:
     """Every application + OAuth grant + API token + service account is an NHI.
 
@@ -139,6 +157,7 @@ def _extract_nhis(data: dict) -> list[dict]:
             "created": app.get("created"),
             "last_rotated": issued,
             "ai_component": bool(app.get("ai_component")),
+            "resource_grants": _resource_grants(grants),
             "source": "observed",
             "idp": provider,
             "discovered_via": app.get("discovered_via") or "tenant_applications",
@@ -174,6 +193,7 @@ def _extract_nhis(data: dict) -> list[dict]:
                 "write_scopes": sorted({s for s in scopes if _is_write_scope(s)}),
                 "last_rotated": issued,
                 "ai_component": False,
+                "resource_grants": _resource_grants(grants),
                 "source": "observed",
                 "idp": idp,
                 "discovered_via": "tenant_oauth_grants",
@@ -233,6 +253,8 @@ def _extract_nhis(data: dict) -> list[dict]:
                 "created": svc.get("created"),
                 "last_rotated": issued,
                 "ai_component": False,
+                "resource_grants": _resource_grants(svc_grants),
+                "app_owner_org": svc.get("app_owner_org"),
                 "source": "observed",
                 "idp": svc.get("idp") or idp,
                 "discovered_via": svc.get("discovered_via") or "okta_users",

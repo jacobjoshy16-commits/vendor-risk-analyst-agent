@@ -115,6 +115,9 @@ class Estate:
     deployments: list[dict] = field(default_factory=list)
     access_sessions: list[dict] = field(default_factory=list)
     personnel: list[dict] = field(default_factory=list)
+    # Third-party agents as the utility's IdP reports them. Empty until
+    # cipagents.attach() runs: they come from a directory, not the generator.
+    agents: list[dict] = field(default_factory=list)
     vendors: list[dict] = field(default_factory=list)
     packages: dict[str, dict] = field(default_factory=dict)
     registry: KeyRegistry = field(default_factory=KeyRegistry)
@@ -131,6 +134,7 @@ class Estate:
             "distinct_packages": len(self.packages),
             "vendor_access_sessions": len(self.access_sessions),
             "vendor_personnel": len(self.personnel),
+            "vendor_agents": len(self.agents),
             "vendors": len(self.vendors),
             "trusted_signing_keys": len(self.registry),
             "substations_by_impact": by_impact,

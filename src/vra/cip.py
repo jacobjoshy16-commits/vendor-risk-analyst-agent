@@ -10,12 +10,14 @@ cryptographic operation recorded in the evidence.
 
 The model is not involved at any point in this file.
 
-Four subjects
+Five subjects
 -------------
     firmware_deployment   one per device running a vendor firmware package
     procurement           one per vendor (CIP-013 R1/R2/R3 contract layer)
     vendor_access         one per vendor remote access session into an ESP
     vendor_personnel      one per vendor representative holding ESP access
+    vendor_agent          one per third-party software identity the IdP shows
+                          holding a role on an ESP-facing system (cipagents.py)
 
 Each control names its subject in cip_controls.yaml. Nothing here maps control
 ids to collections; adding a control is a YAML edit.
@@ -40,7 +42,8 @@ from .config import CIP_CONTROLS_FILE
 from .evaluate import Assessment, Control, evaluate_condition, load_controls, to_record
 from .grid import Estate
 
-SUBJECTS = ("firmware_deployment", "procurement", "vendor_access", "vendor_personnel")
+SUBJECTS = ("firmware_deployment", "procurement", "vendor_access", "vendor_personnel",
+            "vendor_agent")
 
 
 def cip_citation(control: Control) -> str:
@@ -189,17 +192,35 @@ def personnel_subjects(estate: Estate) -> Iterable[tuple[dict, dict, None]]:
         yield dict(person), {}, None
 
 
+def agent_subjects(estate: Estate) -> Iterable[tuple[dict, dict, None]]:
+    for agent in estate.agents:
+        yield dict(agent), {}, None
+
+
 SUBJECT_LABEL = {
     "firmware_deployment": ("deployment_id", "device_id"),
     "procurement": ("contract_id", "vendor_slug"),
     "vendor_access": ("session_id", "session_id"),
     "vendor_personnel": ("person_id", "person_id"),
+    # The IdP's immutable app id, never the display name: a vendor renaming
+    # its agent must not close one finding and open an identical one.
+    "vendor_agent": ("agent_id", "agent_id"),
+}
+
+# Fields copied onto every finding's observed values so an alert names the
+# thing in words. Not part of the finding id, so a rename only relabels it.
+SUBJECT_CONTEXT = {
+    "vendor_agent": ("agent",),
 }
 
 
 def _label(subject_kind: str, subject: dict) -> tuple[str, str]:
     primary, secondary = SUBJECT_LABEL[subject_kind]
     return str(subject.get(primary, "(unidentified)")), str(subject.get(secondary, ""))
+
+
+def _context(subject_kind: str, subject: dict) -> dict[str, Any]:
+    return {k: subject[k] for k in SUBJECT_CONTEXT.get(subject_kind, ()) if k in subject}
 
 
 def _observed(conds: list[dict], subject: dict, container: dict) -> dict[str, Any]:
@@ -274,6 +295,7 @@ def assess_estate(
         "procurement": lambda: procurement_subjects(estate),
         "vendor_access": lambda: access_subjects(estate),
         "vendor_personnel": lambda: personnel_subjects(estate),
+        "vendor_agent": lambda: agent_subjects(estate),
     }
 
     findings: list[Assessment] = []
@@ -316,7 +338,8 @@ def assess_estate(
                             vendor_name=str(subject.get("vendor", "")),
                             feature=feature,
                             control=control,
-                            observed=_observed(control.fails_when, subject, container),
+                            observed=_context(subject_kind, subject)
+                            | _observed(control.fails_when, subject, container),
                             reason="all failure conditions met",
                             subject=disambiguator,
                             provenance=provenance,
@@ -339,7 +362,8 @@ def assess_estate(
                             vendor_name=str(subject.get("vendor", "")),
                             feature=feature,
                             control=control,
-                            observed=_observed(conds, subject, container),
+                            observed=_context(subject_kind, subject)
+                            | _observed(conds, subject, container),
                             reason="required field is unknown; cannot evaluate control",
                             subject=disambiguator,
                             provenance=provenance,

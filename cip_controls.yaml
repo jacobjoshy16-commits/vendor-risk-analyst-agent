@@ -93,7 +93,7 @@
 #   severity:     from this file only. The model never sets it.
 #   subject:      which collection the control is evaluated against —
 #                 procurement | firmware_deployment | vendor_access |
-#                 vendor_personnel
+#                 vendor_personnel | vendor_agent
 #
 # Boolean verification fields (signature_verified, integrity_verified, ...)
 # are NOT typed into YAML. They are computed by src/vra/cipcrypto.py performing
@@ -1589,3 +1589,114 @@
   compensating_control: >
     Review vendor session logs against the approved change record after every
     maintenance window.
+
+# ===========================================================================
+# Third-party agents seen through the IdP — vendor system-to-system access
+# ===========================================================================
+#
+# A vendor's software identity holding a role on an ESP-facing API is vendor
+# remote access in CIP-005's own words: R2.4 and R2.5 name "system-to-system
+# remote access" alongside Interactive Remote Access. Whether that software is
+# an AI agent does not change the obligation, and no IdP reliably says so
+# anyway, so these controls key on what the directory can quote: who owns the
+# identity, and which resource principals it holds roles on.
+#
+# Subjects come from src/vra/cipagents.py, re-read from the IdP every cycle.
+# When the IdP cannot be read, these controls are reported unassessed and
+# their open findings are carried forward rather than resolved.
+#
+# NOT encoded: whether an agent acts without per-action human approval. NERC
+# has no requirement that says so, and this file does not invent one. NHI-01
+# in nhi_controls.yaml asks it under NIST AC-3 / AC-6.
+
+- id: CIP-35
+  subject: vendor_agent
+  question: >
+    Is this third-party identity, which the IdP shows holding a role on an
+    ESP-facing system, declared with a vendor and an owner?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-005"
+      version: "7"
+      requirement: "R2"
+      part: "2.4"
+      # The citation text is verified (same block as CIP-16). Applying it to an
+      # undeclared identity is interpretation: a method for determining active
+      # vendor system-to-system access cannot be covering an identity nobody
+      # knew was there. Confirm the reading with the compliance lead.
+      text: >
+        Have one or more methods for determining active vendor remote access
+        sessions (including Interactive Remote Access and system-to-system remote
+        access).
+      citation_verified: true
+      citation_verified_by: "CIP-005-7 R2 Parts 2.4/2.5 standard text, checked 2026-09-21"
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: status
+      equals: active
+    - field: reaches_esp
+      equals: true
+  fails_when:
+    - field: registered
+      equals: false
+    - field: esp_permissions
+      truthy: true
+  severity: high
+  remediation: >
+    Identify the vendor behind the identity from its owning tenant, confirm the
+    access is wanted, and declare it in agents.yaml with an owner and the
+    permissions approved. If nobody claims it, disable it in the IdP.
+  compensating_control: >
+    Disable the identity in the IdP until it is claimed. Disabling the principal
+    is itself a CIP-005 R2.5 method to disable vendor system-to-system access.
+
+- id: CIP-36
+  subject: vendor_agent
+  question: >
+    Does this declared vendor agent hold permissions on an ESP-facing system
+    beyond the ones the entity approved?
+  frameworks:
+    - name: "NERC CIP"
+      standard: "CIP-004"
+      version: "7"
+      # NOT VERIFIED. Same position as CIP-19: the CIP-004-7 revision and the
+      # R4 access-management framing are confirmed, the part number is not.
+      # R4 Part 4.3 is believed to be the periodic check that accounts and
+      # their privileges "are correct and are those that the Responsible Entity
+      # determines are necessary" -- which is this question asked continuously
+      # rather than every 15 months. Read the requirement table before relying
+      # on it.
+      superseded_by: "CIP-004-8"
+      enforceable_until: "2028-06-30"
+      requirement: "R4"
+      part: "4.3"
+      text: >
+        ... verify ... that all user accounts, user account groups, or user role
+        categories, and their specific, associated privileges are correct and are
+        those that the Responsible Entity determines are necessary.
+      citation_verified: false
+      citation_verified_by: ""
+  applies_when:
+    - field: impact_rating
+      in: [high, medium]
+    - field: status
+      equals: active
+    - field: reaches_esp
+      equals: true
+    - field: registered
+      equals: true
+  fails_when:
+    - field: unapproved_esp_permissions
+      truthy: true
+  gap_when:
+    - field: approved_permissions
+      is_unknown: true
+  severity: high
+  remediation: >
+    Remove the role assignment in the IdP, or record the approval in
+    agents.yaml with who approved it. A permission the vendor's agent gained
+    without an approval on file is access nobody decided to grant.
+  compensating_control: >
+    Alert on every use of the unapproved permission at the resource until the
+    assignment is removed or approved.

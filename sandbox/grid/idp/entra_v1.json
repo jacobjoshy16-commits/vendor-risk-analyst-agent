@@ -1,0 +1,221 @@
+{
+  "_comment": "SYNTHETIC. A recorded Microsoft Graph page set for the simulated utility's Entra tenant, state v1. Walked by src/vra/protocol.py exactly as live Graph responses would be. v2 differs from v1 in two ways: the Sentinel agent gained RelaySettings.Write.All, and an Ironwood agent nobody declared appeared.",
+  "provider": "entra",
+  "base_url": "https://graph.microsoft.com",
+  "pages": [
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/applications?$top=99",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "app-ems-api",
+            "appId": "e1000000-0000-4000-8000-0000000000e1",
+            "displayName": "EMS Integration API",
+            "createdDateTime": "2025-06-01T00:00:00Z"
+          },
+          {
+            "id": "app-relay-settings",
+            "appId": "4e000000-0000-4000-8000-0000000000e1",
+            "displayName": "Relay Settings Service",
+            "createdDateTime": "2025-06-01T00:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/servicePrincipals?$top=99",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "sp-graph",
+            "appId": "00000003-0000-0000-c000-000000000000",
+            "displayName": "Microsoft Graph",
+            "accountEnabled": true,
+            "servicePrincipalType": "Application",
+            "appOwnerOrganizationId": "f8cdef31-a31e-4b4a-93e4-5f571e91255a",
+            "appRoles": [
+              {
+                "id": "df021288-bdef-4463-88db-98f22de89214",
+                "value": "User.Read.All",
+                "displayName": "User.Read.All",
+                "allowedMemberTypes": [
+                  "Application"
+                ]
+              }
+            ],
+            "createdDateTime": "2026-03-02T00:00:00Z"
+          },
+          {
+            "id": "sp-ems-api",
+            "appId": "e1000000-0000-4000-8000-0000000000e1",
+            "displayName": "EMS Integration API",
+            "accountEnabled": true,
+            "servicePrincipalType": "Application",
+            "appOwnerOrganizationId": "a0000000-0000-4000-8000-000000000001",
+            "appRoles": [
+              {
+                "id": "e1e1e1e1-0000-4000-8000-000000000001",
+                "value": "EMS.Read.All",
+                "displayName": "EMS.Read.All",
+                "allowedMemberTypes": [
+                  "Application"
+                ]
+              },
+              {
+                "id": "e1e1e1e1-0000-4000-8000-000000000002",
+                "value": "EMS.Setpoint.Write",
+                "displayName": "EMS.Setpoint.Write",
+                "allowedMemberTypes": [
+                  "Application"
+                ]
+              }
+            ],
+            "createdDateTime": "2026-03-02T00:00:00Z"
+          },
+          {
+            "id": "sp-relay-settings",
+            "appId": "4e000000-0000-4000-8000-0000000000e1",
+            "displayName": "Relay Settings Service",
+            "accountEnabled": true,
+            "servicePrincipalType": "Application",
+            "appOwnerOrganizationId": "a0000000-0000-4000-8000-000000000001",
+            "appRoles": [
+              {
+                "id": "4e4e4e4e-0000-4000-8000-000000000001",
+                "value": "RelaySettings.Read.All",
+                "displayName": "RelaySettings.Read.All",
+                "allowedMemberTypes": [
+                  "Application"
+                ]
+              },
+              {
+                "id": "4e4e4e4e-0000-4000-8000-000000000002",
+                "value": "RelaySettings.Write.All",
+                "displayName": "RelaySettings.Write.All",
+                "allowedMemberTypes": [
+                  "Application"
+                ]
+              }
+            ],
+            "createdDateTime": "2026-03-02T00:00:00Z"
+          }
+        ],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/servicePrincipals?$skiptoken=agents"
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/servicePrincipals?$skiptoken=agents",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "sp-sentinel-relayops",
+            "appId": "5e000000-0000-4000-8000-0000000000a9",
+            "displayName": "Sentinel RelayOps Agent",
+            "accountEnabled": true,
+            "servicePrincipalType": "Application",
+            "appOwnerOrganizationId": "5e000000-0000-4000-8000-000000000005",
+            "appRoles": [],
+            "createdDateTime": "2026-03-02T00:00:00Z"
+          },
+          {
+            "id": "sp-cascade-assist",
+            "appId": "ca000000-0000-4000-8000-0000000000a9",
+            "displayName": "Cascade Grid Assist",
+            "accountEnabled": true,
+            "servicePrincipalType": "Application",
+            "appOwnerOrganizationId": "ca000000-0000-4000-8000-00000000000c",
+            "appRoles": [],
+            "createdDateTime": "2026-03-02T00:00:00Z"
+          },
+          {
+            "id": "sp-northgate-docs",
+            "appId": "40000000-0000-4000-8000-0000000000d0",
+            "displayName": "Northgate Docs Portal",
+            "accountEnabled": true,
+            "servicePrincipalType": "Application",
+            "appOwnerOrganizationId": "40000000-0000-4000-8000-000000000040",
+            "appRoles": [],
+            "createdDateTime": "2026-03-02T00:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/servicePrincipals/sp-sentinel-relayops/appRoleAssignments?$top=99",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "ara-1",
+            "appRoleId": "4e4e4e4e-0000-4000-8000-000000000001",
+            "principalId": "sp-sentinel-relayops",
+            "principalDisplayName": "Sentinel RelayOps Agent",
+            "resourceId": "sp-relay-settings",
+            "resourceDisplayName": "Relay Settings Service",
+            "createdDateTime": "2026-03-04T15:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/servicePrincipals/sp-cascade-assist/appRoleAssignments?$top=99",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "ara-2",
+            "appRoleId": "e1e1e1e1-0000-4000-8000-000000000001",
+            "principalId": "sp-cascade-assist",
+            "principalDisplayName": "Cascade Grid Assist",
+            "resourceId": "sp-ems-api",
+            "resourceDisplayName": "EMS Integration API",
+            "createdDateTime": "2026-02-11T10:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/servicePrincipals/sp-northgate-docs/appRoleAssignments?$top=99",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "ara-3",
+            "appRoleId": "df021288-bdef-4463-88db-98f22de89214",
+            "principalId": "sp-northgate-docs",
+            "principalDisplayName": "Northgate Docs Portal",
+            "resourceId": "sp-graph",
+            "resourceDisplayName": "Microsoft Graph",
+            "createdDateTime": "2026-01-20T00:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "url": "https://graph.microsoft.com/v1.0/oauth2PermissionGrants?$top=99",
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "grant-1",
+            "clientId": "sp-northgate-docs",
+            "consentType": "AllPrincipals",
+            "resourceId": "sp-graph",
+            "scope": "openid profile User.Read",
+            "createdDateTime": "2026-01-20T00:00:00Z"
+          }
+        ]
+      }
+    }
+  ]
+}

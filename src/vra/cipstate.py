@@ -161,14 +161,26 @@ class FindingStore:
     def get(self, finding_id: str) -> TrackedFinding | None:
         return self._by_id.get(finding_id)
 
-    def reconcile(self, records: Iterable[dict], when: date | None = None) -> ReconcileResult:
+    def reconcile(
+        self,
+        records: Iterable[dict],
+        when: date | None = None,
+        *,
+        unassessed: Iterable[str] = (),
+    ) -> ReconcileResult:
         """Fold this cycle's assessment into the stored lifecycle.
 
         `records` are the finding records produced by `evaluate.to_record`, which
         already carry a stable id derived from vendor + subject + control + kind.
         That stability is what makes cross-run tracking possible at all: a
         finding must be the same finding next cycle or every run looks new.
+
+        `unassessed` names controls whose subjects could not be examined this
+        cycle -- the IdP was unreachable, say. Their open findings are carried
+        forward, not resolved: absence of evidence is not a fix, and an
+        unreachable directory must not page the security team an all-clear.
         """
+        skipped = set(unassessed)
         when = when or date.today()
         stamp = _now()
         result = ReconcileResult()
@@ -226,9 +238,13 @@ class FindingStore:
             if existing.is_overdue(when) and not existing.alerted_overdue:
                 result.newly_overdue.append(existing)
 
-        # Anything tracked as open that this cycle did not re-see has cleared.
+        # Anything tracked as open that this cycle did not re-see has cleared --
+        # unless this cycle never looked.
         for tracked in self._by_id.values():
             if tracked.state == STATE_OPEN and tracked.id not in seen:
+                if tracked.control_id in skipped:
+                    result.still_open.append(tracked)
+                    continue
                 tracked.state = STATE_CLOSED
                 tracked.closed_on = stamp
                 tracked.last_seen = stamp

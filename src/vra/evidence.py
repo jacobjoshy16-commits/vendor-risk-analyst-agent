@@ -71,8 +71,17 @@ def build_pack(
     *,
     entity: str = "Entergy Corporation (simulated)",
     when: date | None = None,
+    unassessed: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Assemble the pack as data. Renderers below format it; neither adds facts."""
+    """Assemble the pack as data. Renderers below format it; neither adds facts.
+
+    `unassessed` maps a control id to why its subjects could not be examined
+    (the IdP was unreachable, say). Such a control is reported NOT ASSESSED,
+    never "not applicable": zero subjects because nobody looked is a different
+    statement from zero subjects because none exist, and an auditor must be
+    able to tell them apart.
+    """
+    unassessed = unassessed or {}
     when = when or date.today()
     ok, total = citations_verified(controls)
     cites = citation_status(controls, when)
@@ -115,6 +124,7 @@ def build_pack(
                         _exception_row(a) for a in exceptions[:5]
                     ],
                     "remediation": control.remediation,
+                    "not_assessed": unassessed.get(control.id),
                 }
             )
 
@@ -290,6 +300,11 @@ def render_markdown(pack: dict[str, Any]) -> str:
             add(f"### {current}")
             add("")
         c = req["coverage"]
+        if req.get("not_assessed"):
+            add(f"**{req['control_id']} — {req['citation']}** · NOT ASSESSED — "
+                f"{req['not_assessed']}")
+            add("")
+            continue
         if not c["applicable"]:
             add(
                 f"**{req['control_id']} — {req['citation']}** · not applicable to any "
@@ -388,6 +403,16 @@ def render_html(pack: dict[str, Any]) -> str:
     rows = []
     for req in pack["requirements"]:
         c = req["coverage"]
+        if req.get("not_assessed"):
+            rows.append(
+                f"<tr class='gap'>"
+                f"<td><code>{e(req['control_id'])}</code></td>"
+                f"<td class='cite'>{e(req['citation'])}</td>"
+                f"<td class='q'>{e(req['question'])} — {e(req['not_assessed'])}</td>"
+                f"<td class='n'>—</td><td class='n'>—</td><td class='n'>—</td>"
+                f"<td class='n'>—</td><td class='st'>NOT ASSESSED</td></tr>"
+            )
+            continue
         if not c["applicable"]:
             continue
         status = "fail" if c["failed"] else ("gap" if c["gapped"] else "pass")

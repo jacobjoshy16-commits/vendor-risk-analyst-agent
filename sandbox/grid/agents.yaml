@@ -1,0 +1,50 @@
+# Third-party agents, as the simulated utility's identity provider sees them.
+#
+# SYNTHETIC. The tenant, the vendors and their agents are invented.
+#
+# Read by src/vra/cipagents.py on every `cip`, `cip vendor-agents` and `cip monitor`
+# cycle. This file is what the utility knows; the IdP is what is true. The
+# monitor reports where they disagree.
+
+idp:
+  provider: entra
+  base_url: https://graph.microsoft.com
+  # The utility's own tenant. A service principal owned by any other tenant is
+  # a third party's identity holding access in this directory.
+  tenant_id: a0000000-0000-4000-8000-000000000001
+  # fixture: walk a recorded Graph page set (offline, reproducible).
+  # live:    walk Graph with the token from `python3 vra.py creds set entra`.
+  mode: fixture
+  fixture: idp/entra_v1.json
+
+# Resource principals that sit inside, or front, an Electronic Security
+# Perimeter. A role on one of these is a path to a BES Cyber System, which
+# makes the holder's access vendor system-to-system remote access (CIP-005 R2).
+# Keyed by the resource service principal's object id, never its display name.
+esp_resources:
+  - resource_id: sp-ems-api
+    system: EMS integration API
+    impact_rating: high
+  - resource_id: sp-relay-settings
+    system: Relay settings service
+    impact_rating: medium
+
+# Vendor agents the utility has agreed to. Keyed by the application (client)
+# id, which a vendor cannot rename. `ai` is a label a human supplies: no IdP
+# field reliably says an identity is an AI agent.
+agents:
+  - client_id: 5e000000-0000-4000-8000-0000000000a9
+    name: Sentinel RelayOps Agent
+    vendor: Sentinel Protective Systems
+    vendor_slug: sentinel-protective
+    ai: true
+    owner: Protection Engineering
+    approved_permissions: [RelaySettings.Read.All]
+
+  - client_id: ca000000-0000-4000-8000-0000000000a9
+    name: Cascade Grid Assist
+    vendor: Cascade Grid Controls
+    vendor_slug: cascade-grid
+    ai: true
+    owner: SCADA Operations
+    approved_permissions: [EMS.Read.All]
